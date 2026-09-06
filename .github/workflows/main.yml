@@ -30,5 +30,9 @@ jobs:
       - name: Publish
         shell: bash
         run: |
-          set -o pipefail
-          ./mcp-publisher publish 2>&1 | tee publish.log
+          set +e
+          OUTPUT=$(./mcp-publisher publish 2>&1)
+          STATUS=$?
+          echo "$OUTPUT"
+          echo "::error title=MCP Registry Publish Error::$OUTPUT"
+          exit $STATUS
