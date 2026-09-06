@@ -31,8 +31,24 @@ jobs:
         shell: bash
         run: |
           set +e
+
           OUTPUT=$(./mcp-publisher publish 2>&1)
           STATUS=$?
+
           echo "$OUTPUT"
-          echo "::error title=MCP Registry Publish Error::$OUTPUT"
-          exit $STATUS
+
+          echo "## MCP Registry Publish Output" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          echo "$OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r LINE; do
+            if [ -n "$LINE" ]; then
+              SAFE_LINE="${LINE//'%'/'%25'}"
+              SAFE_LINE="${SAFE_LINE//$'\r'/'%0D'}"
+              SAFE_LINE="${SAFE_LINE//$'\n'/'%0A'}"
+              echo "::error title=MCP Registry::$SAFE_LINE"
+            fi
+          done <<< "$OUTPUT"
+
+          exit "$STATUS"
