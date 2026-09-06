@@ -1,18 +1,31 @@
-{
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.Mike05102/anime-intelligence-mcp",
-  "title": "ANIME INTELLIGENCE",
-  "description": "MCP server for anime figure identification, market intelligence, rarity, authenticity risk, buy/wait decisions, purchase routing, and full intelligence.",
-  "websiteUrl": "https://anime-intelligence.goodmy0312.workers.dev",
-  "repository": {
-    "url": "https://github.com/Mike05102/anime-intelligence-mcp",
-    "source": "github"
-  },
-  "version": "2.9.2",
-  "remotes": [
-    {
-      "type": "streamable-http",
-      "url": "https://anime-intelligence.goodmy0312.workers.dev/mcp"
-    }
-  ]
-}
+name: Publish ANIME INTELLIGENCE to MCP Registry
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
+          tar -xzf mcp-publisher.tar.gz
+          chmod +x mcp-publisher
+
+      - name: Login to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish
