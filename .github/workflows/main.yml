@@ -1,14 +1,31 @@
-name: Test Actions
+name: Publish ANIME INTELLIGENCE to MCP Registry
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
-  test:
+  publish:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
-      - name: Test
-        run: echo "GitHub Actions works"
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" -o mcp-publisher.tar.gz
+          tar -xzf mcp-publisher.tar.gz
+          chmod +x mcp-publisher
+
+      - name: Login to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish
