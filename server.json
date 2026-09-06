@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Mike05102/anime-intelligence-mcp",
   "title": "ANIME INTELLIGENCE",
-  "description": "Paid anime figure intelligence for AI agents. Identify Japanese anime figures, check market prices, rarity, authenticity risk, BUY/WAIT decisions, purchase options, and full product intelligence via MCP and x402.",
+  "description": "Paid anime figure identification, market, rarity, authenticity and buying intelligence for AI agents.",
   "repository": {
     "url": "https://github.com/Mike05102/anime-intelligence-mcp",
     "source": "github"
