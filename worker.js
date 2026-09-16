@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.31";
+const VERSION="3.7.32";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2163,9 +2163,10 @@ async function revenueMetrics(env){
   const paymentAttemptsBySource=countBy(attempts,x=>x.metadata?.source_class);
   const identifyPayers=new Set(paid.filter(x=>x.endpoint==="/v1/identify"&&x.payer_hash).map(x=>x.payer_hash)),higherPayers=new Set(paid.filter(x=>x.endpoint!=="/v1/identify"&&x.payer_hash).map(x=>x.payer_hash));let converted=0;for(const p of identifyPayers)if(higherPayers.has(p))converted++;
   const revenue=paid.reduce((n,x)=>n+Number(x.amount_usdc||0),0),latestPaid=paid.length?paid[0]:null,firstPaid=paid.length?paid[paid.length-1]:null;
+  const recentHistoryPaid=allEvents.filter(x=>x.event_type==="paid_call"),recentHistoryRevenue=recentHistoryPaid.reduce((n,x)=>n+Number(x.amount_usdc||0),0),recentHistoryPayers=new Set(recentHistoryPaid.map(x=>x.payer_hash).filter(Boolean));
   const paymentView=x=>x?{occurred_at:x.occurred_at||null,endpoint:x.endpoint||null,amount_usdc:Number(x.amount_usdc||0),amount_atomic:x.amount_atomic!=null?Number(x.amount_atomic):null,network:x.payment_network||null,transaction_hash:x.transaction_hash||null,payer_hash:x.payer_hash||null}:null;
   const stage=(calls.length===0)?"no_external_api_traffic":(queryCalls.length===0)?"discovered_or_probed_but_no_product_intent":(selected.length===0)?"product_intent_but_no_canonical_selection":(gateEntered.length===0)?"canonical_selected_but_x402_gate_not_entered":(paymentRequired.length===0)?(configErrors.length?"x402_configuration_error_before_402":"x402_gate_entered_but_402_not_issued"):(attempts.length===0)?"402_issued_but_no_payment_retry":(verified.length===0)?"payment_retry_received_but_not_verified":(paid.length===0)?"payment_verified_but_not_settled":"revenue_confirmed";
-  return {event_window:versionEvents.length?`current_version_${VERSION}_events_within_latest_${PIPELINE.kpiEventReadLimit}`:`latest_${PIPELINE.kpiEventReadLimit}_x402_funnel_events_fallback`,events_in_window:events.length,all_recent_events_seen:allEvents.length,funnel_stage:stage,first_revenue_confirmed:paid.length>0,total_api_calls:calls.length,query_bearing_calls:queryCalls.length,query_only_calls:queryOnlyCalls.length,canonical_id_calls:canonicalIdCalls.length,crawler_or_monitor_calls:crawlerCalls.length,unclassified_client_calls:unclassifiedCalls.length,real_shopping_intent_calls:realShoppingIntentCalls.length,canonical_product_selected:selected.length,canonical_product_selected_by_source:canonicalSelectedBySource,x402_gate_entered:gateEntered.length,x402_configuration_errors:configErrors.length,payment_required_responses:paymentRequired.length,payment_required_with_query:paymentRequiredWithQuery,payment_required_with_canonical_id:paymentRequiredWithCanonicalId,payment_required_without_query_or_id:paymentRequiredWithoutIntent,payment_required_by_source:paymentRequiredBySource,payment_required_by_endpoint:paymentRequiredByEndpoint,payment_required_by_source_and_endpoint:paymentRequiredBySourceAndEndpoint,payment_attempts:attempts.length,payment_attempts_by_source:paymentAttemptsBySource,payment_verified:verified.length,paid_calls:paid.length,unique_payers:payerCounts.size,repeat_payers:[...payerCounts.values()].filter(n=>n>=2).length,revenue_usdc:Number(revenue.toFixed(6)),first_payment:paymentView(firstPaid),latest_payment:paymentView(latestPaid),calls_by_endpoint:callsByEndpoint,query_calls_by_endpoint:queryByEndpoint,paid_calls_by_endpoint:paidByEndpoint,event_counts:byType,conversion_query_to_canonical_selection:queryCalls.length?Number((selected.length/queryCalls.length).toFixed(4)):0,conversion_canonical_selection_to_payment_attempt:selected.length?Number((attempts.length/selected.length).toFixed(4)):0,conversion_query_to_payment_attempt:queryCalls.length?Number((attempts.length/queryCalls.length).toFixed(4)):0,conversion_payment_attempt_to_paid:attempts.length?Number((paid.length/attempts.length).toFixed(4)):0,conversion_identify_to_paid:identifyPayers.size?Number((converted/identifyPayers.size).toFixed(4)):0,conversion_identify_to_paid_percent:identifyPayers.size?Number((converted/identifyPayers.size*100).toFixed(1)):0,products_requested:products.length,unique_products_requested:new Set(products.map(x=>x.product_id).filter(Boolean)).size,affiliate_links_served:affiliateServed.length,affiliate_links_served_by_source:affiliateServed.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),affiliate_clicks:affiliateClicks.length,affiliate_clicks_by_source:affiliateClicks.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),settlement_failures:settlementFailures.length,settlement_successes:paid.length,measurement_note:"Crawler/discovery probes are separated from query-bearing and canonical-id traffic. A 402 response alone is not treated as purchase intent; payment_attempt requires a payment-signature retry.",generated_at:new Date().toISOString()};
+  return {event_window:versionEvents.length?`current_version_${VERSION}_events_within_latest_${PIPELINE.kpiEventReadLimit}`:`latest_${PIPELINE.kpiEventReadLimit}_x402_funnel_events_fallback`,events_in_window:events.length,all_recent_events_seen:allEvents.length,funnel_stage:stage,first_revenue_confirmed:paid.length>0,recent_history_revenue_confirmed:recentHistoryPaid.length>0,recent_history_paid_calls:recentHistoryPaid.length,recent_history_unique_payers:recentHistoryPayers.size,recent_history_revenue_usdc:Number(recentHistoryRevenue.toFixed(6)),total_api_calls:calls.length,query_bearing_calls:queryCalls.length,query_only_calls:queryOnlyCalls.length,canonical_id_calls:canonicalIdCalls.length,crawler_or_monitor_calls:crawlerCalls.length,unclassified_client_calls:unclassifiedCalls.length,real_shopping_intent_calls:realShoppingIntentCalls.length,canonical_product_selected:selected.length,canonical_product_selected_by_source:canonicalSelectedBySource,x402_gate_entered:gateEntered.length,x402_configuration_errors:configErrors.length,payment_required_responses:paymentRequired.length,payment_required_with_query:paymentRequiredWithQuery,payment_required_with_canonical_id:paymentRequiredWithCanonicalId,payment_required_without_query_or_id:paymentRequiredWithoutIntent,payment_required_by_source:paymentRequiredBySource,payment_required_by_endpoint:paymentRequiredByEndpoint,payment_required_by_source_and_endpoint:paymentRequiredBySourceAndEndpoint,payment_attempts:attempts.length,payment_attempts_by_source:paymentAttemptsBySource,payment_verified:verified.length,paid_calls:paid.length,unique_payers:payerCounts.size,repeat_payers:[...payerCounts.values()].filter(n=>n>=2).length,revenue_usdc:Number(revenue.toFixed(6)),first_payment:paymentView(firstPaid),latest_payment:paymentView(latestPaid),calls_by_endpoint:callsByEndpoint,query_calls_by_endpoint:queryByEndpoint,paid_calls_by_endpoint:paidByEndpoint,event_counts:byType,conversion_query_to_canonical_selection:queryCalls.length?Number((selected.length/queryCalls.length).toFixed(4)):0,conversion_canonical_selection_to_payment_attempt:selected.length?Number((attempts.length/selected.length).toFixed(4)):0,conversion_query_to_payment_attempt:queryCalls.length?Number((attempts.length/queryCalls.length).toFixed(4)):0,conversion_payment_attempt_to_paid:attempts.length?Number((paid.length/attempts.length).toFixed(4)):0,conversion_identify_to_paid:identifyPayers.size?Number((converted/identifyPayers.size).toFixed(4)):0,conversion_identify_to_paid_percent:identifyPayers.size?Number((converted/identifyPayers.size*100).toFixed(1)):0,products_requested:products.length,unique_products_requested:new Set(products.map(x=>x.product_id).filter(Boolean)).size,affiliate_links_served:affiliateServed.length,affiliate_links_served_by_source:affiliateServed.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),affiliate_clicks:affiliateClicks.length,affiliate_clicks_by_source:affiliateClicks.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),settlement_failures:settlementFailures.length,settlement_successes:paid.length,measurement_note:"Crawler/discovery probes are separated from query-bearing and canonical-id traffic. A 402 response alone is not treated as purchase intent; payment_attempt requires a payment-signature retry.",generated_at:new Date().toISOString()};
 }
 
 async function monetizationStatus(env,origin,{checkBazaar=false}={}){
@@ -2175,7 +2176,8 @@ async function monetizationStatus(env,origin,{checkBazaar=false}={}){
     try{const b=await bazaarCheck(env,origin);bazaar={checked:true,status:b.status,indexed_count:b.indexed_count,expected_count:b.expected_count,all_indexed:b.all_indexed,missing_paths:b.missing_paths,errors:b.errors||[],checked_at:b.checked_at};}
     catch(e){bazaar={checked:true,status:"CHECK_FAILED",indexed_count:null,expected_count:INDEX402_SERVICES.length,all_indexed:false,errors:[safeError(e)]};}
   }
-  return {service:"ANIME INTELLIGENCE",version:VERSION,status:kpi.first_revenue_confirmed?"REVENUE_CONFIRMED":"WAITING_FOR_FIRST_PAYMENT",maturity:{registered:null,listed:null,searchable:null,external_evidence_note:"Null means this request did not verify an external directory. Use the dedicated discovery audit endpoints for registration/listing/searchability evidence.",payment_verified:kpi.payment_verified>0,settlement_verified:kpi.paid_calls>0,first_real_buyer:kpi.unique_payers>0},revenue_usdc:kpi.revenue_usdc,paid_calls:kpi.paid_calls,unique_payers:kpi.unique_payers,repeat_payers:kpi.repeat_payers,affiliate_links_served:kpi.affiliate_links_served||0,affiliate_clicks:kpi.affiliate_clicks||0,settlement_failures:kpi.settlement_failures||0,first_payment:kpi.first_payment,latest_payment:kpi.latest_payment,paid_calls_by_endpoint:kpi.paid_calls_by_endpoint,bazaar,next_action:kpi.first_revenue_confirmed?(bazaar.all_indexed?"optimize_discovery_and_conversion":"wait_for_or_verify_bazaar_indexing"):"wait_for_first_external_x402_settlement",generated_at:new Date().toISOString()};
+  const revenueEver=!!(kpi.first_revenue_confirmed||kpi.recent_history_revenue_confirmed);
+  return {service:"ANIME INTELLIGENCE",version:VERSION,status:revenueEver?"REVENUE_CONFIRMED":"WAITING_FOR_FIRST_PAYMENT",maturity:{registered:null,listed:null,searchable:null,external_evidence_note:"Null means this request did not verify an external directory. Use the dedicated discovery audit endpoints for registration/listing/searchability evidence.",payment_verified:kpi.payment_verified>0,settlement_verified:kpi.paid_calls>0||kpi.recent_history_paid_calls>0,first_real_buyer:kpi.unique_payers>0||kpi.recent_history_unique_payers>0},revenue_usdc:kpi.revenue_usdc,recent_history_revenue_usdc:kpi.recent_history_revenue_usdc||0,paid_calls:kpi.paid_calls,recent_history_paid_calls:kpi.recent_history_paid_calls||0,unique_payers:kpi.unique_payers,recent_history_unique_payers:kpi.recent_history_unique_payers||0,repeat_payers:kpi.repeat_payers,affiliate_links_served:kpi.affiliate_links_served||0,affiliate_clicks:kpi.affiliate_clicks||0,settlement_failures:kpi.settlement_failures||0,first_payment:kpi.first_payment,latest_payment:kpi.latest_payment,paid_calls_by_endpoint:kpi.paid_calls_by_endpoint,bazaar,next_action:revenueEver?(bazaar.all_indexed?"optimize_discovery_and_conversion":"wait_for_or_verify_bazaar_indexing"):"wait_for_first_external_x402_settlement",generated_at:new Date().toISOString()};
 }
 
 /* =========================================================
@@ -3403,8 +3405,17 @@ async function logRequestStage(env,request,eventType,extra={}){
   }catch(e){return null;}
 }
 
-async function x402Gate(request,env,amount,description,work){
-  await logRequestStage(env,request,"x402_gate_entered",{amount_atomic:Number(amount),amount_usdc:Number(amount)/1000000,metadata:{protocol:"x402",version:2}});
+// v3.7.32 â commerce telemetry must never sit in front of the payment gate.
+// In request handlers, Cloudflare ctx.waitUntil keeps KPI writes alive after the HTTP response
+// without delaying 402/200 delivery. If ctx is unavailable, the promise is still safely caught.
+function deferTelemetry(ctx,promise){
+  const p=Promise.resolve(promise).catch(()=>null);
+  try{if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(p);}catch{}
+  return p;
+}
+
+async function x402Gate(request,env,amount,description,work,ctx=null){
+  deferTelemetry(ctx,logRequestStage(env,request,"x402_gate_entered",{amount_atomic:Number(amount),amount_usdc:Number(amount)/1000000,metadata:{protocol:"x402",version:2,nonblocking_telemetry:true}}));
 
   /*
     v3.7.25 â preserve the exact PaymentRequirements from the original 402 handshake.
@@ -3432,11 +3443,11 @@ async function x402Gate(request,env,amount,description,work){
     try{
       cfg=await paymentRequirement(request,env,amount,description);
     }catch(e){
-      await logRequestStage(env,request,"x402_configuration_error",{metadata:{response_status:503,error:safeError(e)}});
+      deferTelemetry(ctx,logRequestStage(env,request,"x402_configuration_error",{metadata:{response_status:503,error:safeError(e)}}));
       return json({error:"x402_configuration_error",detail:safeError(e)},503);
     }
 
-    await logRequestStage(env,request,"payment_required",{
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_required",{
       amount_atomic:Number(amount),
       amount_usdc:Number(amount)/1000000,
       payment_network:cfg.accepted.network,
@@ -3444,9 +3455,10 @@ async function x402Gate(request,env,amount,description,work){
         response_status:402,
         protocol:"x402",
         version:2,
-        fee_payer:cfg.accepted?.extra?.feePayer||null
+        fee_payer:cfg.accepted?.extra?.feePayer||null,
+        nonblocking_telemetry:true
       }
-    });
+    }));
 
     const probeHeaders={
       "PAYMENT-REQUIRED":b64(JSON.stringify(cfg.required)),
@@ -3466,7 +3478,7 @@ async function x402Gate(request,env,amount,description,work){
   try{
     payload=unb64(sig);
   }catch{
-    await logRequestStage(env,request,"payment_invalid_header",{metadata:{response_status:402}});
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_invalid_header",{metadata:{response_status:402}}));
     return json({error:"invalid_payment_signature_header"},402);
   }
 
@@ -3483,7 +3495,7 @@ async function x402Gate(request,env,amount,description,work){
     paidRequirement.extra.feePayer.length>=20;
 
   if(!requirementValid){
-    await logRequestStage(env,request,"payment_invalid_header",{
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_invalid_header",{
       metadata:{
         response_status:402,
         reason:"payment_requirements_mismatch",
@@ -3503,11 +3515,11 @@ async function x402Gate(request,env,amount,description,work){
           feePayer:paidRequirement?.extra?.feePayer||null
         }
       }
-    });
+    }));
     return json({error:"payment_requirements_mismatch"},402);
   }
 
-  await logRequestStage(env,request,"payment_attempt",{
+  deferTelemetry(ctx,logRequestStage(env,request,"payment_attempt",{
     amount_atomic:Number(amount),
     amount_usdc:Number(amount)/1000000,
     payment_network:paidRequirement.network,
@@ -3515,9 +3527,10 @@ async function x402Gate(request,env,amount,description,work){
       protocol:"x402",
       version:2,
       fee_payer:paidRequirement.extra.feePayer,
-      requirements_source:"payment_payload_accepted"
+      requirements_source:"payment_payload_accepted",
+      nonblocking_telemetry:true
     }
-  });
+  }));
 
   // Keep the client's accepted requirement unchanged. Only supply resource
   // metadata when absent; do NOT regenerate feePayer on the retry path.
@@ -3552,23 +3565,24 @@ async function x402Gate(request,env,amount,description,work){
     const verified=await facilitatorPost(env,"/verify",enrichedPayload,paidRequirement);
 
     if(!verified?.isValid){
-      await logRequestStage(env,request,"payment_verify_failed",{
+      deferTelemetry(ctx,logRequestStage(env,request,"payment_verify_failed",{
         metadata:{
           response_status:402,
           reason:verified?.invalidReason||null,
           fee_payer:paidRequirement.extra.feePayer
         }
-      });
+      }));
       return json({error:"payment_invalid",detail:verified?.invalidReason||verified},402);
     }
 
-    await logRequestStage(env,request,"payment_verified",{
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_verified",{
       metadata:{
         protocol:"x402",
         version:2,
-        fee_payer:paidRequirement.extra.feePayer
+        fee_payer:paidRequirement.extra.feePayer,
+        nonblocking_telemetry:true
       }
-    });
+    }));
 
     let result;
     try{
@@ -3576,9 +3590,9 @@ async function x402Gate(request,env,amount,description,work){
     }catch(e){
       const notFound=e?.code==="PRODUCT_NOT_FOUND"||e?.message==="product_not_found";
       const status=notFound?404:500;
-      await logRequestStage(env,request,notFound?"product_not_found":"service_execution_failed",{
+      deferTelemetry(ctx,logRequestStage(env,request,notFound?"product_not_found":"service_execution_failed",{
         metadata:{response_status:status,error:safeError(e)}
-      });
+      }));
       return json({
         service:"ANIME INTELLIGENCE",
         version:VERSION,
@@ -3593,19 +3607,19 @@ async function x402Gate(request,env,amount,description,work){
     const settlement=await facilitatorPost(env,"/settle",enrichedPayload,paidRequirement);
 
     if(!settlement?.success){
-      await logRequestStage(env,request,"payment_settlement_failed",{
+      deferTelemetry(ctx,logRequestStage(env,request,"payment_settlement_failed",{
         metadata:{
           response_status:402,
           fee_payer:paidRequirement.extra.feePayer
         }
-      });
+      }));
       return json({error:"payment_settlement_failed",charged:false,detail:settlement},402);
     }
 
     const payerHash=await payerHashFromPayment(enrichedPayload,settlement);
     const tx=extractSettlementTx(settlement);
 
-    await logRequestStage(env,request,"paid_call",{
+    deferTelemetry(ctx,logRequestStage(env,request,"paid_call",{
       product_id:result?.product?.id||null,
       payer_hash:payerHash,
       amount_atomic:Number(amount),
@@ -3617,22 +3631,23 @@ async function x402Gate(request,env,amount,description,work){
         version:2,
         asset:"USDC",
         response_status:200,
-        fee_payer:paidRequirement.extra.feePayer
+        fee_payer:paidRequirement.extra.feePayer,
+        nonblocking_telemetry:true
       }
-    });
+    }));
 
     return json(result,200,{
       "PAYMENT-RESPONSE":b64(JSON.stringify(settlement)),
       "cache-control":"private, no-store"
     });
   }catch(e){
-    await logRequestStage(env,request,"x402_failed",{
+    deferTelemetry(ctx,logRequestStage(env,request,"x402_failed",{
       metadata:{
         response_status:402,
         error:safeError(e),
         fee_payer:paidRequirement?.extra?.feePayer||null
       }
-    });
+    }));
     return json({error:"x402_failed",detail:safeError(e)},402);
   }
 }
@@ -3939,11 +3954,11 @@ function affiliateSourcesInResponse(value){
   };walk(value);return [...out];
 }
 
-async function paidApi(request,env,url){
+async function paidApi(request,env,url,ctx=null){
   const rp=routePrice(url.pathname);if(!rp)return null;
   const query=url.searchParams.get("query")||"",lang=detectLanguage(query,url.searchParams.get("lang")||"",request.headers.get("accept-language")||"");
-  await logRequestStage(env,request,"api_call",{metadata:{route_type:"paid",intent_query:query?query.slice(0,180):null,intent_id:url.searchParams.get("id")||null}});
-  if(query||url.searchParams.get("id"))await logRequestStage(env,request,"product_intent",{metadata:{route_type:"paid",query_text:query?query.slice(0,180):null}});
+  deferTelemetry(ctx,logRequestStage(env,request,"api_call",{metadata:{route_type:"paid",intent_query:query?query.slice(0,180):null,intent_id:url.searchParams.get("id")||null,nonblocking_telemetry:true}}));
+  if(query||url.searchParams.get("id"))deferTelemetry(ctx,logRequestStage(env,request,"product_intent",{metadata:{route_type:"paid",query_text:query?query.slice(0,180):null,nonblocking_telemetry:true}}));
 
   // v3.7.1 discovery compatibility:
   // A standards-compliant x402 resource must advertise Payment Required on a bare unauthenticated probe.
@@ -3969,23 +3984,25 @@ async function paidApi(request,env,url){
       const e=new Error("product_identity_required");
       e.code="PRODUCT_IDENTITY_REQUIRED";
       throw e;
-    });
+    },ctx);
   }
 
   let preflight;
-  try{preflight=await preflightPaidProduct(env,url);}catch(e){await logRequestStage(env,request,"identity_preflight_failed",{metadata:{response_status:500,error:safeError(e)}});return json({service:"ANIME INTELLIGENCE",version:VERSION,error:"identity_preflight_failed",charged:false,detail:safeError(e)},500);}
-  if(!preflight.ok){await logRequestStage(env,request,preflight.status===409?"disambiguation_required":"product_not_found",{metadata:{response_status:preflight.status,charged:false}});return json(preflight.body,preflight.status,{"cache-control":"no-store"});}
+  try{preflight=await preflightPaidProduct(env,url);}catch(e){deferTelemetry(ctx,logRequestStage(env,request,"identity_preflight_failed",{metadata:{response_status:500,error:safeError(e)}}));return json({service:"ANIME INTELLIGENCE",version:VERSION,error:"identity_preflight_failed",charged:false,detail:safeError(e)},500);}
+  if(!preflight.ok){deferTelemetry(ctx,logRequestStage(env,request,preflight.status===409?"disambiguation_required":"product_not_found",{metadata:{response_status:preflight.status,charged:false}}));return json(preflight.body,preflight.status,{"cache-control":"no-store"});}
   const product=preflight.product;
-  await logRequestStage(env,request,"canonical_product_selected",{product_id:product.id,metadata:{resolution:preflight.resolution,canonical_product_id:product.id,product_type:product.product_type||null,automatic:!!preflight.selection?.automatic,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??registeredRakutenAffiliateOffers(product).length>0}});
-  if(preflight.resolution==="ranked_recommendation"||preflight.resolution==="commercial_default_recommendation")await logRequestStage(env,request,"ranked_product_auto_selected",{product_id:product.id,metadata:{routing_policy:preflight.selection?.policy_version||null,commercial_default:!!preflight.selection?.commercial_default,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??false,alternative_ids:(preflight.selection?.alternatives||[]).map(x=>x.id).filter(Boolean)}});
+  // v3.7.32 â once identity is resolved, the commercial path goes straight to x402.
+  // KPI writes are intentionally backgrounded so a slow Supabase write cannot consume the payment opportunity.
+  deferTelemetry(ctx,logRequestStage(env,request,"canonical_product_selected",{product_id:product.id,metadata:{resolution:preflight.resolution,canonical_product_id:product.id,product_type:product.product_type||null,automatic:!!preflight.selection?.automatic,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??registeredRakutenAffiliateOffers(product).length>0,fast_gate_v3732:true}}));
+  if(preflight.resolution==="ranked_recommendation"||preflight.resolution==="commercial_default_recommendation")deferTelemetry(ctx,logRequestStage(env,request,"ranked_product_auto_selected",{product_id:product.id,metadata:{routing_policy:preflight.selection?.policy_version||null,commercial_default:!!preflight.selection?.commercial_default,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??false,alternative_ids:(preflight.selection?.alternatives||[]).map(x=>x.id).filter(Boolean),fast_gate_v3732:true}}));
   return x402Gate(request,env,rp[0],rp[1],async()=>{
-    await logEvent(env,"product_requested",{endpoint:url.pathname,product_id:product.id,metadata:{product_type:product.product_type||null,jan_present:!!product.jan_code,identity_resolution:preflight.resolution}});
+    deferTelemetry(ctx,logEvent(env,"product_requested",{endpoint:url.pathname,product_id:product.id,metadata:{product_type:product.product_type||null,jan_present:!!product.jan_code,identity_resolution:preflight.resolution,version:VERSION}}));
     const livePaths=new Set(["/v1/market","/v1/rarity","/v1/authenticity","/v1/buy-wait","/v1/best-place","/v1/listing-match","/v1/landed-cost","/v1/price-history","/v1/full-intelligence"]);
     const intel=await buildIntelligence(env,product,url.searchParams.get("refresh")==="1",lang,{autoRefresh:livePaths.has(url.pathname),buyerCountry:url.searchParams.get("buyer_country")||"JP",postalCode:url.searchParams.get("postal_code")||"",listingUrl:url.searchParams.get("listing_url")||"",listingTitle:url.searchParams.get("listing_title")||""});
     let shaped=shapePaidResponse(url.pathname,intel);shaped=sanitizeAffiliateRouting(shaped,url.origin,product.id);
-    for(const source of affiliateSourcesInResponse(shaped))await logEvent(env,"affiliate_link_served",{endpoint:url.pathname,product_id:product.id,metadata:{source}});
+    for(const source of affiliateSourcesInResponse(shaped))deferTelemetry(ctx,logEvent(env,"affiliate_link_served",{endpoint:url.pathname,product_id:product.id,metadata:{source,version:VERSION}}));
     return {service:"ANIME INTELLIGENCE",version:VERSION,price_usdc_atomic:rp[0],price_usdc:Number(rp[0])/1000000,identity_resolution:{status:"resolved_before_payment",method:preflight.resolution,canonical_product_id:product.id,automatic:!!preflight.selection?.automatic,selection:preflight.selection||null},...shaped,monetization:monetizationFunnel(url.origin,product,url.pathname)};
-  });
+  },ctx);
 }
 
 
@@ -4833,10 +4850,10 @@ async function runX402ProductionE2E(ev){
 ========================================================= */
 
 export default{
-  async fetch(request,env){
+  async fetch(request,env,ctx){
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:corsHeaders()});const url=new URL(request.url),origin=url.origin;
     try{
-      if(url.pathname==="/"){const now=Date.now();return json({service:"ANIME INTELLIGENCE",version:VERSION,status:"online",architecture:"FREE_WORKER_8_STAGE_ROTATION",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"* * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,self_growing_database:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:"pre_generated_only",rakuten_search_fallback_is_affiliate:false,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,x402_local_preflight_v3711:true,x402_phantom_mainnet_e2e_v3712:true,x402_pc_phantom_e2e_v3713:true,x402_svm_feepayer_v3714:true,x402_browser_rpc_bridge_v3715:true,x402_rpc_failover_diagnostic_v3716:true,x402_rpc_admin_auth_fixed_v3717:true,x402_rpc_auth_flow_fixed_v3718:true,x402_rpc_key_resolver_fixed_v3719:true,x402_rpc_diagnostic_runtime_fixed_v3720:true,x402_rpc_diagnostic_self_contained_v3721:true,phantom_presign_simulation_v3722:true,x402_usdc_account_diagnostic_v3723:true,x402_feepayer_handshake_fixed_v3725:true,x402_phantom_modifying_signer_fixed_v3726:true,x402_phantom_lighthouse_7ix_fixed_v3727:true,semantic_commercial_discovery_v3728:true,agent_task_query_pack_v3728:true,free_to_paid_routing_v3728:true,compact_x402_discovery_header_v3730:true,commerce_decision_expansion_v3731:true,japan_buyer_first_class_v3731:true,listing_match_v3731:true,purchase_deadline_v3731:true,landed_cost_v3731:true,price_history_v3731:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
+      if(url.pathname==="/"){const now=Date.now();return json({service:"ANIME INTELLIGENCE",version:VERSION,status:"online",architecture:"FREE_WORKER_8_STAGE_ROTATION",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"* * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,self_growing_database:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:"pre_generated_only",rakuten_search_fallback_is_affiliate:false,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,x402_local_preflight_v3711:true,x402_phantom_mainnet_e2e_v3712:true,x402_pc_phantom_e2e_v3713:true,x402_svm_feepayer_v3714:true,x402_browser_rpc_bridge_v3715:true,x402_rpc_failover_diagnostic_v3716:true,x402_rpc_admin_auth_fixed_v3717:true,x402_rpc_auth_flow_fixed_v3718:true,x402_rpc_key_resolver_fixed_v3719:true,x402_rpc_diagnostic_runtime_fixed_v3720:true,x402_rpc_diagnostic_self_contained_v3721:true,phantom_presign_simulation_v3722:true,x402_usdc_account_diagnostic_v3723:true,x402_feepayer_handshake_fixed_v3725:true,x402_phantom_modifying_signer_fixed_v3726:true,x402_phantom_lighthouse_7ix_fixed_v3727:true,semantic_commercial_discovery_v3728:true,agent_task_query_pack_v3728:true,free_to_paid_routing_v3728:true,compact_x402_discovery_header_v3730:true,commerce_decision_expansion_v3731:true,japan_buyer_first_class_v3731:true,listing_match_v3731:true,purchase_deadline_v3731:true,landed_cost_v3731:true,price_history_v3731:true,x402_fast_gate_v3732:true,nonblocking_commerce_telemetry_v3732:true,kpi_recent_history_revenue_v3732:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
       if(url.pathname==="/health"){const productRows=await sb(env,"/products?select=id&limit=1"),now=Date.now();return json({ok:true,service:"ANIME INTELLIGENCE",version:VERSION,supabase:"ok",has_product:Array.isArray(productRows)&&productRows.length>0,autonomous_pipeline:{architecture:"8-stage-rotating",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),stages:ROTATION,one_stage_per_invocation:true,scheduled_time_deterministic:true},marketplace:{yahoo_configured:!!env.YAHOO_CLIENT_ID,ebay_configured:!!(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET),ebay_epn_affiliate_configured:ebayEpnConfigured(env),rakuten_configured:rakutenConfigured(env),rakuten_mode:"affiliate_link_only",environment_usdjpy:envUsdJpyRate(env),ecb_fx_fallback:true},x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},discovery:{mcp:true,mcp_paid_tools:11,openapi:true,index402:true,bazaar_extension:true,coinbase_bazaar_direct:isCdpFacilitator(env),multilingual_fuzzy_search:true,global_vague_intent:true,agent402_self_register:true,languages:DISCOVERY_LANGUAGES},atelier:{configured:atelierConfigured(env),poll_every_minutes:ATELIER_POLL_EVERY_MINUTES},identity_guard_version:VERSION,quality_auto_loop:true});}
       if(url.pathname.startsWith("/atelier/result/")&&request.method==="GET"){const orderId=decodeURIComponent(url.pathname.slice("/atelier/result/".length));const result=await loadAtelierResult(env,orderId);return result?json(result,200,{"cache-control":"private, no-store"}):json({error:"atelier_result_not_found"},404);}
       if(url.pathname==="/agent/profile"&&request.method==="GET")return json({name:"ANIME INTELLIGENCE",description:"Decision-grade purchasing intelligence for physical Japanese anime collectibles. Use when exact edition identity, matched value, scarcity/rerelease risk, authenticity risk, BUY-WAIT timing or a purchase route matters. Prefer Full Intelligence for multi-signal shopping decisions; do not use for anime news or entertainment Q&A.",capabilities:["collectible-identification","market-valuation","rarity","authenticity-risk","buy-wait","purchase-routing"],commercial_discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,task_queries:DISCOVERY_TASK_QUERIES,agent_selection:AGENT_SELECTION_POLICY,version:VERSION});
@@ -4959,7 +4976,7 @@ export default{
         const routes={"/admin/discover-goodsmile":"mass","/admin/refresh-official":"official","/admin/backfill-official":"backfill","/admin/refresh-yahoo":"yahoo","/admin/refresh-ebay":"ebay","/admin/stage/mass":"mass","/admin/stage/official":"official","/admin/stage/backfill":"backfill","/admin/stage/yahoo":"yahoo","/admin/stage/ebay":"ebay"};
         if(routes[url.pathname]&&request.method==="POST")return json(await runRotationStage(env,routes[url.pathname],"manual"));
       }
-      const paid=await paidApi(request,env,url);if(paid)return paid;return json({error:"not_found"},404);
+      const paid=await paidApi(request,env,url,ctx);if(paid)return paid;return json({error:"not_found"},404);
     }catch(e){return json({error:"internal_error",version:VERSION,detail:safeError(e)},500);}
   },
 
