@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.2";
+const VERSION="3.7.27";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2629,7 +2629,7 @@ async function catalogAutoStatus(env){
     version:VERSION,
     autonomous:true,
     browser_required:false,
-    scheduled_batches_per_run:"static_5_plus_dynamic_2_per_minute_except_hour_boundary_static_3_dynamic_1",catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_count:CATALOG_IP_UNIVERSE.length,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,dynamic_catalog_pool:await loadDynamicCatalogPool(env),dynamic_catalog_progress:await dynamicCatalogProgress(env),
+    scheduled_batches_per_run:"static_5_plus_dynamic_2_per_minute_except_hour_boundary_static_3_dynamic_1",catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_count:CATALOG_IP_UNIVERSE.length,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,rakuten_affiliate_candidates_v373:true,rakuten_fixed_batches_v375:true,rakuten_registered_registry_v376:true,rakuten_series_grouping_v376:true,rakuten_ui_ascii_safe_v377:true,rakuten_series_inference_v377:true,rakuten_affiliate_scale_target:"10000_plus",dynamic_catalog_pool:await loadDynamicCatalogPool(env),dynamic_catalog_progress:await dynamicCatalogProgress(env),
     yahoo_catalog_cooldown:await yahooCatalogCooldownState(env),
     catalog_progress:progress,
     last_scheduled_growth:last?{occurred_at:last.occurred_at||null,catalog:last.metadata?.catalog||null,dynamic_catalog:last.metadata?.dynamic_catalog||null,fallback_growth:last.metadata?.fallback_growth||null,errors:last.metadata?.errors||[]}:null,
@@ -2966,15 +2966,42 @@ async function cdpBazaarValidateResource(origin,path){
   const raw=await r.text();let body;try{body=raw?JSON.parse(raw):null;}catch{body={raw:raw.slice(0,6000)};}
   return {path,resource,http_status:r.status,ok:r.ok,valid:body?.valid??null,simulation_outcome:body?.simulation?.outcome??null,body};
 }
-async function bazaarComplianceAudit(origin){
-  const results=[];
-  for(const x of INDEX402_SERVICES)results.push(await cdpBazaarValidateResource(origin,x.path));
-  const requiredFailures=[];
-  for(const r of results){
-    const checks=Array.isArray(r.body?.checks)?r.body.checks:Array.isArray(r.body?.validation?.checks)?r.body.validation.checks:[];
-    for(const c of checks)if(c?.severity==="required"&&c?.passed===false)requiredFailures.push({path:r.path,check:c.check||c.name||null,detail:c.detail||c.message||null});
-  }
-  return {service:"ANIME INTELLIGENCE",version:VERSION,checked_at:new Date().toISOString(),expected_count:INDEX402_SERVICES.length,accepted_count:results.filter(r=>r.valid===true||r.simulation_outcome==="accepted").length,all_accepted:results.every(r=>r.valid===true||r.simulation_outcome==="accepted"),required_failures:requiredFailures,results};
+async function bazaarComplianceAudit(origin,env){
+  // v3.7.11: Do not use Coinbase /validate as the primary readiness gate.
+  // That endpoint can return a uniform HTTP 429 because of Coinbase-side
+  // validation throttling even when our seven paid resources are healthy.
+  // Build the exact x402 v2 requirements locally from the same production
+  // paymentRequirement() path used by the paid endpoints. This requires only
+  // one facilitator /supported request for the entire seven-endpoint audit.
+  const preflight=await x402DiscoveryPreflight(origin,env);
+  const results=(preflight.results||[]).map(r=>({
+    path:r.path,
+    resource:`${origin}${r.path}`,
+    http_status:r.ok?402:null,
+    ok:!!r.ok,
+    payment_required_header:!!r.payment_required_header,
+    encoded_header_bytes:r.encoded_header_bytes??null,
+    amount:r.amount??null,
+    network:r.network??null,
+    fee_payer_present:!!r.fee_payer_present,
+    bazaar:!!r.bazaar,
+    error:r.error||null
+  }));
+  const accepted=results.filter(r=>r.ok&&r.http_status===402&&r.payment_required_header&&r.bazaar);
+  return {
+    service:"ANIME INTELLIGENCE",
+    version:VERSION,
+    checked_at:new Date().toISOString(),
+    audit_mode:"local_production_x402_requirement_preflight",
+    external_coinbase_validate_called:false,
+    external_validate_note:"Coinbase /validate is intentionally not used as the readiness gate because external validator throttling can return HTTP 429 independently of merchant endpoint health.",
+    expected_count:INDEX402_SERVICES.length,
+    accepted_count:accepted.length,
+    all_accepted:accepted.length===INDEX402_SERVICES.length,
+    required_failures:results.filter(r=>!r.ok).map(r=>({path:r.path,detail:r.error||"x402_requirement_preflight_failed"})),
+    facilitator_error:preflight.error||null,
+    results
+  };
 }
 async function bazaarMerchantAudit(env,origin){
   if(!env.X402_WALLET_ADDRESS)throw new Error("X402_WALLET_ADDRESS is missing");
@@ -3114,15 +3141,58 @@ function bazaarDiscoveryExtension(path){
 
 async function paymentRequirement(request,env,amount,description,supportOverride=null){
   if(!env.X402_WALLET_ADDRESS)throw new Error("X402_WALLET_ADDRESS is missing");
-  // v3.6.13: issuing a 402 must not depend on a live /supported probe.
-  // Solana mainnet exact-v2 support is a deployment prerequisite and is checked by /x402/status/admin audits.
-  // If an explicit support object is supplied by an audit, still validate it.
-  let kind={extra:null};
-  if(supportOverride){kind=findSolanaMainnetKind(supportOverride);if(!kind)throw new Error("Facilitator does not advertise Solana mainnet");}
-  const path=new URL(request.url).pathname,discovery=DISCOVERY_CONFIG[path]||{};
+  const support=supportOverride||await facilitatorSupport(env);
+  const kind=findSolanaMainnetKind(support);
+  if(!kind)throw new Error("Facilitator does not advertise exact Solana mainnet");
+  if(!kind.extra||!kind.extra.feePayer)throw new Error("Facilitator exact-SVM support is missing extra.feePayer");
+
+  const path=new URL(request.url).pathname;
+  const discovery=DISCOVERY_CONFIG[path]||{};
   const selector=agentSelectionMetadata(path);
-  const resourceDescription=[discovery.description||description,`WHEN TO USE: ${discovery.when_to_use||""}`,`WHY PAY: ${selector.why_pay||""}`,`BUYER OUTCOME: ${selector.buyer_outcome||""}`].filter(Boolean).join(" ");
-  const resource={url:request.url,description:resourceDescription,mimeType:"application/json",serviceName:discovery.service_name||"ANIME INTELLIGENCE",tags:[...(discovery.tags||[]),...(discovery.selection_triggers||[])]};const accepted={scheme:"exact",network:SOLANA_MAINNET,amount,asset:SOLANA_USDC,payTo:env.X402_WALLET_ADDRESS,maxTimeoutSeconds:300,...(kind.extra?{extra:kind.extra}:{})};return {required:{x402Version:2,error:"PAYMENT-SIGNATURE header is required",resource,accepts:[accepted],extensions:{bazaar:bazaarDiscoveryExtension(path)}},accepted};
+
+  // Coinbase CDP x402 v2 rejects ResourceInfo.description when it is too long
+  // and reports the misleading generic error that paymentPayload is invalid.
+  // Keep the paid-response ResourceInfo compact; full discovery metadata stays
+  // available through Bazaar extensions, OpenAPI, MCP and /.well-known/x402.
+  const rawResourceDescription=[
+    discovery.description||description,
+    `WHEN TO USE: ${discovery.when_to_use||""}`,
+    `WHY PAY: ${selector.why_pay||""}`,
+    `BUYER OUTCOME: ${selector.buyer_outcome||""}`
+  ].filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+
+  const resourceDescription=rawResourceDescription.length>480
+    ? rawResourceDescription.slice(0,477)+"..."
+    : rawResourceDescription;
+
+  const resource={
+    url:request.url,
+    description:resourceDescription,
+    mimeType:"application/json",
+    serviceName:discovery.service_name||"ANIME INTELLIGENCE",
+    tags:[...(discovery.tags||[]),...(discovery.selection_triggers||[])]
+  };
+
+  const accepted={
+    scheme:"exact",
+    network:SOLANA_MAINNET,
+    amount:String(amount),
+    asset:SOLANA_USDC,
+    payTo:String(env.X402_WALLET_ADDRESS),
+    maxTimeoutSeconds:300,
+    extra:{...kind.extra}
+  };
+
+  return {
+    required:{
+      x402Version:2,
+      error:"PAYMENT-SIGNATURE header is required",
+      resource,
+      accepts:[accepted],
+      extensions:{bazaar:bazaarDiscoveryExtension(path)}
+    },
+    accepted
+  };
 }
 
 async function facilitatorPost(env,path,paymentPayload,accepted){const base=facilitatorUrl(env),u=new URL(`${base}${path}`),requestPath=u.pathname+u.search,auth=await facilitatorHeaders(env,"POST",requestPath);const r=await fetch(u.toString(),{method:"POST",headers:{...auth,"content-type":"application/json"},body:JSON.stringify({x402Version:2,paymentPayload,paymentRequirements:accepted})});const raw=await r.text();let body=null;try{body=raw?JSON.parse(raw):null;}catch{body={raw};}if(!r.ok)throw new Error(`Facilitator ${path} ${r.status}: ${JSON.stringify(body)}`);return body;}
@@ -3150,10 +3220,49 @@ async function logRequestStage(env,request,eventType,extra={}){
 
 async function x402Gate(request,env,amount,description,work){
   await logRequestStage(env,request,"x402_gate_entered",{amount_atomic:Number(amount),amount_usdc:Number(amount)/1000000,metadata:{protocol:"x402",version:2}});
-  let cfg;try{cfg=await paymentRequirement(request,env,amount,description);}catch(e){await logRequestStage(env,request,"x402_configuration_error",{metadata:{response_status:503,error:safeError(e)}});return json({error:"x402_configuration_error",detail:safeError(e)},503);}
+
+  /*
+    v3.7.25 â preserve the exact PaymentRequirements from the original 402 handshake.
+
+    Coinbase CDP may advertise a different SVM sponsor/feePayer on a later
+    /supported call. The browser builds and partially signs the Solana
+    transaction against the feePayer contained in the ORIGINAL 402 response.
+
+    Previous behavior rebuilt payment requirements on the retry request,
+    causing:
+      invalid_exact_solana_fee_payer_mismatch
+
+    For payment retries, use payload.accepted (the requirement the client
+    actually paid against), while independently validating all merchant-owned
+    immutable fields: scheme, network, amount, asset and payTo.
+    Coinbase /verify remains the authority for validating the sponsor feePayer
+    and the signed transaction.
+  */
+
   const sig=request.headers.get("payment-signature")||request.headers.get("x-payment");
+
+  // First request: generate and advertise a fresh requirement.
   if(!sig){
-    await logRequestStage(env,request,"payment_required",{amount_atomic:Number(amount),amount_usdc:Number(amount)/1000000,payment_network:cfg.accepted.network,metadata:{response_status:402,protocol:"x402",version:2}});
+    let cfg;
+    try{
+      cfg=await paymentRequirement(request,env,amount,description);
+    }catch(e){
+      await logRequestStage(env,request,"x402_configuration_error",{metadata:{response_status:503,error:safeError(e)}});
+      return json({error:"x402_configuration_error",detail:safeError(e)},503);
+    }
+
+    await logRequestStage(env,request,"payment_required",{
+      amount_atomic:Number(amount),
+      amount_usdc:Number(amount)/1000000,
+      payment_network:cfg.accepted.network,
+      metadata:{
+        response_status:402,
+        protocol:"x402",
+        version:2,
+        fee_payer:cfg.accepted?.extra?.feePayer||null
+      }
+    });
+
     const probeHeaders={
       "PAYMENT-REQUIRED":b64(JSON.stringify(cfg.required)),
       "WWW-Authenticate":"x402",
@@ -3165,25 +3274,182 @@ async function x402Gate(request,env,amount,description,work){
     };
     return json(cfg.required,402,probeHeaders);
   }
-  await logRequestStage(env,request,"payment_attempt",{amount_atomic:Number(amount),amount_usdc:Number(amount)/1000000,payment_network:cfg.accepted.network,metadata:{protocol:"x402",version:2}});
-  let payload;try{payload=unb64(sig);}catch{await logRequestStage(env,request,"payment_invalid_header",{metadata:{response_status:402}});return json({error:"invalid_payment_signature_header"},402);}
-  const enrichedPayload={...payload,resource:payload?.resource||cfg.required.resource,extensions:{...(cfg.required.extensions||{}),...(payload?.extensions||{})}};
+
+  // Retry with PAYMENT-SIGNATURE: decode the exact accepted requirement
+  // that the client used to construct/sign the Solana transaction.
+  let payload;
   try{
-    const verified=await facilitatorPost(env,"/verify",enrichedPayload,cfg.accepted);
-    if(!verified?.isValid){await logRequestStage(env,request,"payment_verify_failed",{metadata:{response_status:402,reason:verified?.invalidReason||null}});return json({error:"payment_invalid",detail:verified?.invalidReason||verified},402);}
-    await logRequestStage(env,request,"payment_verified",{metadata:{protocol:"x402",version:2}});
-    let result;try{result=await work();}catch(e){
+    payload=unb64(sig);
+  }catch{
+    await logRequestStage(env,request,"payment_invalid_header",{metadata:{response_status:402}});
+    return json({error:"invalid_payment_signature_header"},402);
+  }
+
+  const paidRequirement=payload?.accepted;
+  const expectedPayTo=String(env.X402_WALLET_ADDRESS||"");
+  const requirementValid=
+    paidRequirement &&
+    paidRequirement.scheme==="exact" &&
+    paidRequirement.network===SOLANA_MAINNET &&
+    String(paidRequirement.amount)===String(amount) &&
+    paidRequirement.asset===SOLANA_USDC &&
+    String(paidRequirement.payTo)===expectedPayTo &&
+    typeof paidRequirement?.extra?.feePayer==="string" &&
+    paidRequirement.extra.feePayer.length>=20;
+
+  if(!requirementValid){
+    await logRequestStage(env,request,"payment_invalid_header",{
+      metadata:{
+        response_status:402,
+        reason:"payment_requirements_mismatch",
+        expected:{
+          scheme:"exact",
+          network:SOLANA_MAINNET,
+          amount:String(amount),
+          asset:SOLANA_USDC,
+          payTo:expectedPayTo
+        },
+        received:{
+          scheme:paidRequirement?.scheme||null,
+          network:paidRequirement?.network||null,
+          amount:paidRequirement?.amount??null,
+          asset:paidRequirement?.asset||null,
+          payTo:paidRequirement?.payTo||null,
+          feePayer:paidRequirement?.extra?.feePayer||null
+        }
+      }
+    });
+    return json({error:"payment_requirements_mismatch"},402);
+  }
+
+  await logRequestStage(env,request,"payment_attempt",{
+    amount_atomic:Number(amount),
+    amount_usdc:Number(amount)/1000000,
+    payment_network:paidRequirement.network,
+    metadata:{
+      protocol:"x402",
+      version:2,
+      fee_payer:paidRequirement.extra.feePayer,
+      requirements_source:"payment_payload_accepted"
+    }
+  });
+
+  // Keep the client's accepted requirement unchanged. Only supply resource
+  // metadata when absent; do NOT regenerate feePayer on the retry path.
+  const path=new URL(request.url).pathname;
+  const discovery=DISCOVERY_CONFIG[path]||{};
+  const fallbackDescription=String(discovery.description||description||"ANIME INTELLIGENCE paid collectible intelligence")
+    .replace(/\s+/g," ").trim();
+  const safeDescription=fallbackDescription.length>480
+    ? fallbackDescription.slice(0,477)+"..."
+    : fallbackDescription;
+
+  const fallbackResource={
+    url:request.url,
+    description:safeDescription,
+    mimeType:"application/json",
+    serviceName:discovery.service_name||"ANIME INTELLIGENCE",
+    tags:[...(discovery.tags||[]),...(discovery.selection_triggers||[])]
+  };
+
+  const enrichedPayload={
+    ...payload,
+    x402Version:2,
+    resource:payload?.resource||fallbackResource,
+    accepted:paidRequirement,
+    extensions:{
+      bazaar:bazaarDiscoveryExtension(path),
+      ...(payload?.extensions||{})
+    }
+  };
+
+  try{
+    const verified=await facilitatorPost(env,"/verify",enrichedPayload,paidRequirement);
+
+    if(!verified?.isValid){
+      await logRequestStage(env,request,"payment_verify_failed",{
+        metadata:{
+          response_status:402,
+          reason:verified?.invalidReason||null,
+          fee_payer:paidRequirement.extra.feePayer
+        }
+      });
+      return json({error:"payment_invalid",detail:verified?.invalidReason||verified},402);
+    }
+
+    await logRequestStage(env,request,"payment_verified",{
+      metadata:{
+        protocol:"x402",
+        version:2,
+        fee_payer:paidRequirement.extra.feePayer
+      }
+    });
+
+    let result;
+    try{
+      result=await work();
+    }catch(e){
       const notFound=e?.code==="PRODUCT_NOT_FOUND"||e?.message==="product_not_found";
       const status=notFound?404:500;
-      await logRequestStage(env,request,notFound?"product_not_found":"service_execution_failed",{metadata:{response_status:status,error:safeError(e)}});
-      return json({service:"ANIME INTELLIGENCE",version:VERSION,error:notFound?"product_not_found":"service_execution_failed",charged:false,detail:notFound?"Try an exact JAN/EAN-13 code, model/style code or a more specific official product name.":safeError(e)},status);
+      await logRequestStage(env,request,notFound?"product_not_found":"service_execution_failed",{
+        metadata:{response_status:status,error:safeError(e)}
+      });
+      return json({
+        service:"ANIME INTELLIGENCE",
+        version:VERSION,
+        error:notFound?"product_not_found":"service_execution_failed",
+        charged:false,
+        detail:notFound
+          ?"Try an exact JAN/EAN-13 code, model/style code or a more specific official product name."
+          :safeError(e)
+      },status);
     }
-    const settlement=await facilitatorPost(env,"/settle",enrichedPayload,cfg.accepted);
-    if(!settlement?.success){await logRequestStage(env,request,"payment_settlement_failed",{metadata:{response_status:402}});return json({error:"payment_settlement_failed",charged:false,detail:settlement},402);}
-    const payerHash=await payerHashFromPayment(enrichedPayload,settlement),tx=extractSettlementTx(settlement);
-    await logRequestStage(env,request,"paid_call",{product_id:result?.product?.id||null,payer_hash:payerHash,amount_atomic:Number(amount),amount_usdc:Number(amount)/1000000,payment_network:cfg.accepted.network,transaction_hash:tx,metadata:{protocol:"x402",version:2,asset:"USDC",response_status:200}});
-    return json(result,200,{"PAYMENT-RESPONSE":b64(JSON.stringify(settlement)),"cache-control":"private, no-store"});
-  }catch(e){await logRequestStage(env,request,"x402_failed",{metadata:{response_status:402,error:safeError(e)}});return json({error:"x402_failed",detail:safeError(e)},402);}
+
+    const settlement=await facilitatorPost(env,"/settle",enrichedPayload,paidRequirement);
+
+    if(!settlement?.success){
+      await logRequestStage(env,request,"payment_settlement_failed",{
+        metadata:{
+          response_status:402,
+          fee_payer:paidRequirement.extra.feePayer
+        }
+      });
+      return json({error:"payment_settlement_failed",charged:false,detail:settlement},402);
+    }
+
+    const payerHash=await payerHashFromPayment(enrichedPayload,settlement);
+    const tx=extractSettlementTx(settlement);
+
+    await logRequestStage(env,request,"paid_call",{
+      product_id:result?.product?.id||null,
+      payer_hash:payerHash,
+      amount_atomic:Number(amount),
+      amount_usdc:Number(amount)/1000000,
+      payment_network:paidRequirement.network,
+      transaction_hash:tx,
+      metadata:{
+        protocol:"x402",
+        version:2,
+        asset:"USDC",
+        response_status:200,
+        fee_payer:paidRequirement.extra.feePayer
+      }
+    });
+
+    return json(result,200,{
+      "PAYMENT-RESPONSE":b64(JSON.stringify(settlement)),
+      "cache-control":"private, no-store"
+    });
+  }catch(e){
+    await logRequestStage(env,request,"x402_failed",{
+      metadata:{
+        response_status:402,
+        error:safeError(e),
+        fee_payer:paidRequirement?.extra?.feePayer||null
+      }
+    });
+    return json({error:"x402_failed",detail:safeError(e)},402);
+  }
 }
 
 function routePrice(path){const p={"/v1/identify":PRICES.identify,"/v1/market":PRICES.market,"/v1/rarity":PRICES.rarity,"/v1/authenticity":PRICES.authenticity,"/v1/buy-wait":PRICES.buyWait,"/v1/best-place":PRICES.bestPlace,"/v1/full-intelligence":PRICES.full}[path];return p?[p,DISCOVERY_CONFIG[path]?.description||"ANIME INTELLIGENCE paid collectible intelligence"]:null;}
@@ -3763,14 +4029,88 @@ async function x402DiscoveryPreflight(origin,env){
       const cfg=await paymentRequirement(req,env,amount,svc.description,support);
       const encoded=b64(JSON.stringify(cfg.required));
       const accepted=cfg?.accepted;
-      const ok=!!accepted&&accepted.scheme==="exact"&&accepted.network===SOLANA_MAINNET&&!!encoded&&encoded.length<12000;
-      results.push({path:svc.path,ok,status:402,payment_required_header:true,encoded_header_bytes:encoded.length,amount:accepted?.amount||null,network:accepted?.network||null,bazaar:!!cfg?.required?.extensions?.bazaar});
+      const feePayer=accepted?.extra?.feePayer||null;
+      const ok=!!accepted&&accepted.scheme==="exact"&&accepted.network===SOLANA_MAINNET&&!!feePayer&&!!encoded&&encoded.length<12000;
+      results.push({path:svc.path,ok,status:402,payment_required_header:true,encoded_header_bytes:encoded.length,amount:accepted?.amount||null,network:accepted?.network||null,fee_payer_present:!!feePayer,bazaar:!!cfg?.required?.extensions?.bazaar});
     }catch(e){results.push({path:svc.path,ok:false,status:null,payment_required_header:false,error:safeError(e)});}
   }
   return {ok:results.every(x=>x.ok),results};
 }
 
 async function register402Index(origin){const results=[];for(const s of INDEX402_SERVICES){const r=await index402Post("/register",{url:`${origin}${s.path}`,name:s.name,protocol:"x402",http_method:"GET",description:s.description,price_usd:s.price_usd,payment_asset:"USDC",payment_network:"Solana",category:"commerce/collectibles/anime",provider:"ANIME INTELLIGENCE",tags:DISCOVERY_CONFIG[s.path]?.tags||[],intent:DISCOVERY_CONFIG[s.path]?.intent||null,openapi_url:`${origin}/openapi.json`,mcp_url:`${origin}/mcp`,example_query:DISCOVERY_CONFIG[s.path]?.examples?.[0]||"Nendoroid Hatsune Miku"});results.push({service:s.name,path:s.path,...r});}return results;}
+
+
+/* =========================================================
+   X402 BROWSER SVM RPC BRIDGE - v3.7.15
+   Narrow same-origin bridge for the official x402 SVM browser client.
+   It prevents browser-side Solana public-RPC transport/CORS failures.
+   Only the two read methods needed to construct an Exact SVM payment
+   are accepted. No sendTransaction, signatures, secrets, or writes.
+========================================================= */
+async function x402RpcCall(endpoint,body){
+  const t0=Date.now();
+  try{
+    const r=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/json","accept":"application/json"},body:JSON.stringify(body)});
+    const text=await r.text();
+    let data=null;try{data=text?JSON.parse(text):null}catch{}
+    const rpcErr=data?.error||null;
+    return {endpoint,http_status:r.status,ok:r.ok&&!rpcErr,rpc_error:rpcErr,body:data,raw:data?null:text.slice(0,300),ms:Date.now()-t0};
+  }catch(e){return {endpoint,http_status:0,ok:false,transport_error:safeError(e),ms:Date.now()-t0};}
+}
+
+async function x402SolanaRpcBridge(request){
+  const cors={"access-control-allow-origin":"*","access-control-allow-methods":"POST,OPTIONS","access-control-allow-headers":"content-type","cache-control":"no-store"};
+  if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
+  if(request.method!=="POST")return json({error:"method_not_allowed"},405,cors);
+  let body;try{body=await request.json();}catch{return json({error:"invalid_json"},400,cors);}
+  if(!body||body.jsonrpc!=="2.0"||!["getAccountInfo","getLatestBlockhash","getMultipleAccounts","simulateTransaction"].includes(body.method)){
+    return json({jsonrpc:"2.0",id:body?.id??null,error:{code:-32601,message:"RPC method not allowed"}},400,cors);
+  }
+  // v3.7.16: fail over between no-key mainnet RPCs. PublicNode has been
+  // observed working from Cloudflare Workers; NodeFlare is the secondary.
+  // The Solana Foundation endpoint remains last-resort only because public
+  // production traffic may be blocked with HTTP 403.
+  const providers=[
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.nodeflare.app/solana/public",
+    "https://api.mainnet.solana.com"
+  ];
+  const attempts=[];
+  for(const endpoint of providers){
+    const r=await x402RpcCall(endpoint,{jsonrpc:"2.0",id:body.id??1,method:body.method,params:Array.isArray(body.params)?body.params:[]});
+    attempts.push({endpoint,http_status:r.http_status,ok:r.ok,rpc_error:r.rpc_error||null,transport_error:r.transport_error||null,ms:r.ms});
+    if(r.ok)return new Response(JSON.stringify(r.body),{status:200,headers:{"content-type":"application/json; charset=utf-8","x-ai-rpc-provider":endpoint,...cors}});
+  }
+  return json({jsonrpc:"2.0",id:body?.id??null,error:{code:-32002,message:"All Solana RPC providers failed",data:{method:body.method,attempts}}},502,cors);
+}
+async function x402RpcDiagnostic(){
+  const providers=[
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.nodeflare.app/solana/public",
+    "https://api.mainnet.solana.com"
+  ];
+  const results=[];
+  for(const endpoint of providers){
+    const block=await x402RpcCall(endpoint,{jsonrpc:"2.0",id:1,method:"getLatestBlockhash",params:[{commitment:"processed"}]});
+    const acct=await x402RpcCall(endpoint,{jsonrpc:"2.0",id:2,method:"getAccountInfo",params:[SOLANA_USDC,{encoding:"base64",commitment:"confirmed"}]});
+    results.push({
+      endpoint,
+      getLatestBlockhash:{ok:!!block.ok,http_status:Number(block.http_status||0),rpc_error:block.rpc_error||null,transport_error:block.transport_error||null,ms:Number(block.ms||0)},
+      getAccountInfo:{ok:!!acct.ok,http_status:Number(acct.http_status||0),rpc_error:acct.rpc_error||null,transport_error:acct.transport_error||null,ms:Number(acct.ms||0)},
+      all_ok:!!(block.ok&&acct.ok)
+    });
+  }
+  return {
+    service:"ANIME INTELLIGENCE",
+    version:VERSION,
+    checked_at:new Date().toISOString(),
+    test:"x402_solana_rpc_preflight",
+    methods:["getLatestBlockhash","getAccountInfo"],
+    usdc_mint:SOLANA_USDC,
+    pass:results.some(x=>x.all_ok),
+    results
+  };
+}
 
 /* =========================================================
    FINAL CHECK
@@ -3784,13 +4124,114 @@ async function registerRakutenAffiliateForProduct(env,payload={}){
   if(!isOfficialRakutenAffiliateUrl(affiliateUrl))return {ok:false,status:400,error:"invalid_rakuten_affiliate_url",detail:"Use the official pre-generated https://hb.afl.rakuten.co.jp/... affiliate URL without rewriting it."};
   const rows=await sbOptional(env,`/products?select=*&id=eq.${encodeURIComponent(productId)}&limit=1`),product=Array.isArray(rows)?rows[0]:null;
   if(!product)return {ok:false,status:404,error:"product_not_found"};
-  const current=registeredRakutenAffiliateOffers(product),offer={affiliate_url:affiliateUrl,seller:String(payload.seller||payload.shop_name||"Rakuten Ichiba").trim()||"Rakuten Ichiba",title:String(payload.title||product.canonical_name_ja||product.canonical_name_en||"").trim()||null,item_code:String(payload.item_code||"").trim()||null,price_jpy:Number(payload.price_jpy)>0?Number(payload.price_jpy):null,total_price_jpy:Number(payload.total_price_jpy)>0?Number(payload.total_price_jpy):(Number(payload.price_jpy)>0?Number(payload.price_jpy):null),shipping_jpy:Number.isFinite(Number(payload.shipping_jpy))?Number(payload.shipping_jpy):null,image_url:String(payload.image_url||"").trim()||null,match_score:100,registered_at:new Date().toISOString(),link_source:"official_pre_generated_affiliate_link"};
+  const linkType=["price_navi","product_page","shop_page"].includes(String(payload.link_type||""))?String(payload.link_type):"product_page";const current=registeredRakutenAffiliateOffers(product),offer={affiliate_url:affiliateUrl,seller:String(payload.seller||payload.shop_name||"Rakuten Ichiba").trim()||"Rakuten Ichiba",title:String(payload.title||product.canonical_name_ja||product.canonical_name_en||"").trim()||null,item_code:String(payload.item_code||"").trim()||null,price_jpy:Number(payload.price_jpy)>0?Number(payload.price_jpy):null,total_price_jpy:Number(payload.total_price_jpy)>0?Number(payload.total_price_jpy):(Number(payload.price_jpy)>0?Number(payload.price_jpy):null),shipping_jpy:Number.isFinite(Number(payload.shipping_jpy))?Number(payload.shipping_jpy):null,image_url:String(payload.image_url||"").trim()||null,match_score:100,registered_at:new Date().toISOString(),link_type:linkType,durable_link:linkType==="price_navi",link_source:"official_pre_generated_affiliate_link"};
   const merged=[offer,...current.filter(x=>x.affiliate_url!==affiliateUrl)].slice(0,20),metadata={...(product.metadata||{}),rakuten_affiliate_links:merged,rakuten_affiliate_updated_at:new Date().toISOString()};
   await sb(env,`/products?id=eq.${encodeURIComponent(productId)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({metadata})});
-  await logEvent(env,"affiliate_link_registered",{endpoint:"/admin/rakuten-affiliate/register",product_id:productId,metadata:{source:"rakuten",seller:offer.seller,offer_count:merged.length}});
+  await logEvent(env,"affiliate_link_registered",{endpoint:"/admin/rakuten-affiliate/register",product_id:productId,metadata:{source:"rakuten",seller:offer.seller,offer_count:merged.length,link_type:offer.link_type,durable_link:offer.durable_link}});
   return {ok:true,status:200,product:paidCandidateView(product),affiliate:{source:"rakuten",registered:true,offer_count:merged.length,url_host:"hb.afl.rakuten.co.jp"},note:"Stored on the canonical product metadata. Paid responses can now route eligible buyers through this official pre-generated Rakuten affiliate URL."};
 }
 
+
+
+const RAKUTEN_AFFILIATE_PRIORITY_IPS=["Pokemon","ONE PIECE","Dragon Ball","Gundam","Sanrio","Chiikawa","Demon Slayer","Jujutsu Kaisen","Hatsune Miku","NARUTO","My Hero Academia","Evangelion","Hololive","Blue Archive","Genshin Impact","Frieren","Spy x Family","Chainsaw Man","Sailor Moon","Disney"];
+const RAKUTEN_AFFILIATE_PRIORITY_TYPES=["figure","nendoroid","figma","plush","model_kit","trading_card","sneaker","apparel","acrylic_goods","keychain","badge","lottery_prize"];
+function rakutenAvailabilitySignal(product){const now=Date.now(),name=String(product?.canonical_name_ja||product?.canonical_name_en||""),raw=product?.release_date?Date.parse(product.release_date):NaN;let score=0,label="catalog";if(Number.isFinite(raw)){const days=(raw-now)/86400000;if(days>=-30&&days<=240){score+=55;label=days>=0?"reservation_or_upcoming":"recent_release";}else if(days>-365&&days< -30){score+=25;label="recent_catalog";}else if(days>240&&days<=730){score+=15;label="future_release";}else if(days<-1095){score-=25;label="older_release";}}if(/(?:\u518d\u8ca9|\u518d\u8ca9\u4e88\u5b9a|reissue|rerelease|restock)/i.test(name)){score+=45;label="reissue";}if(/(?:\u4e88\u7d04|pre-?order)/i.test(name)){score+=35;label="reservation";}if(/(?:\u5728\u5eab\u5207|\u58f2\u308a\u5207|sold\s*out|discontinued)/i.test(name)){score-=70;label="stale_or_sold_out_text";}return {score,label,release_date:cleanNullishValue(product?.release_date)};}
+function rakutenAffiliatePriority(product){const type=discoveryEffectiveType(product),fr=String(discoverySafeFranchise(product)||""),name=`${product?.canonical_name_ja||""} ${product?.canonical_name_en||""}`;let score=0;const ti=RAKUTEN_AFFILIATE_PRIORITY_TYPES.indexOf(type);if(ti>=0)score+=Math.max(5,36-ti*2);const ii=RAKUTEN_AFFILIATE_PRIORITY_IPS.findIndex(x=>fr.toLowerCase().includes(x.toLowerCase())||name.toLowerCase().includes(x.toLowerCase()));if(ii>=0)score+=Math.max(10,50-ii*2);if(product?.jan_code)score+=22;if(product?.official_image_url)score+=8;if(product?.canonical_name_en)score+=4;if(product?.manufacturer)score+=3;score+=rakutenAvailabilitySignal(product).score;return score;}
+function inferRakutenSeries(product){
+  const explicit=cleanNullishValue(product?.series),brand=cleanNullishValue(product?.brand),manufacturer=cleanNullishValue(product?.manufacturer),name=String(product?.canonical_name_ja||product?.canonical_name_en||"").trim();
+  const sameAsMaker=v=>v&&manufacturer&&normalize(v)===normalize(manufacturer);
+  if(explicit&&!sameAsMaker(explicit))return explicit;
+  const patterns=[
+    [/G\.?E\.?M\.?\s*(?:\u30b7\u30ea\u30fc\u30ba|Series)?/i,"G.E.M.\u30b7\u30ea\u30fc\u30ba"],
+    [/Precious\s+G\.?E\.?M\.?/i,"Precious G.E.M.\u30b7\u30ea\u30fc\u30ba"],
+    [/NARUTO\s*\u30ae\u30e3\u30eb\u30ba/i,"NARUTO\u30ae\u30e3\u30eb\u30ba"],
+    [/\u308b\u304b\u3063\u3077/i,"\u308b\u304b\u3063\u3077"],
+    [/\u3066\u306e\u3072\u3089/i,"G.E.M. \u3066\u306e\u3072\u3089\u30b7\u30ea\u30fc\u30ba"],
+    [/\u306d\u3093\u3069\u308d\u3044\u3069/i,"\u306d\u3093\u3069\u308d\u3044\u3069"],
+    [/POP\s*UP\s*PARADE/i,"POP UP PARADE"],
+    [/S\.?H\.?Figuarts/i,"S.H.Figuarts"],
+    [/FiguartsZERO/i,"FiguartsZERO"],
+    [/\u30d5\u30a3\u30ae\u30e5\u30a2\u30fc\u30c4ZERO/i,"\u30d5\u30a3\u30ae\u30e5\u30a2\u30fc\u30c4ZERO"],
+    [/figma/i,"figma"],
+    [/Q\s*posket/i,"Q posket"],
+    [/\u4e00\u756a\u304f\u3058/i,"\u4e00\u756a\u304f\u3058"],
+    [/Grandista/i,"Grandista"],
+    [/MAXIMATIC/i,"MAXIMATIC"],
+    [/\u30ef\u30fc\u30eb\u30c9\u30b3\u30ec\u30af\u30bf\u30d6\u30eb|WCF/i,"\u30ef\u30fc\u30eb\u30c9\u30b3\u30ec\u30af\u30bf\u30d6\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2"]
+  ];
+  for(const [re,label] of patterns)if(re.test(name))return label;
+  if(brand&&!sameAsMaker(brand))return brand;
+  return null;
+}
+function rakutenCandidateView(product){const offers=registeredRakutenAffiliateOffers(product),series=inferRakutenSeries(product),availability=rakutenAvailabilitySignal(product);return {product_id:product.id,name_ja:cleanNullableTitle(product.canonical_name_ja),name_en:cleanNullableTitle(product.canonical_name_en),jan_code:cleanNullishValue(product.jan_code),product_type:discoveryEffectiveType(product),franchise:discoverySafeFranchise(product),series,manufacturer:cleanNullishValue(product.manufacturer),image_url:cleanNullishValue(product.official_image_url),release_date:availability.release_date,purchase_likelihood:availability.label,affiliate_registered:offers.length>0,affiliate_offer_count:offers.length,affiliate_offers:offers.map(x=>({seller:x.seller||null,title:x.title||null,price_jpy:x.price_jpy||null,registered_at:x.registered_at||null,link_type:x.link_type||"product_page",url_host:isOfficialRakutenAffiliateUrl(x.affiliate_url)?"hb.afl.rakuten.co.jp":null})),priority_score:rakutenAffiliatePriority(product),rakuten_search_query:rakutenSearchQuery(product),rakuten_search_url:rakutenPublicSearchUrl(product)};}
+async function rakutenBatchSnapshot(env,page){
+  const endpoint=`rakuten_v378_batch_${page}`;
+  const rows=await sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.rakuten_affiliate_batch_snapshot&endpoint=eq.${encodeURIComponent(endpoint)}&order=occurred_at.desc&limit=1`);
+  const m=Array.isArray(rows)&&rows[0]?.metadata?rows[0].metadata:null;
+  return m&&Array.isArray(m.product_ids)&&m.product_ids.length?m:null;
+}
+async function createRakutenBatchSnapshot(env,page,limit=100){
+  const scanSize=500,offset=(page-1)*scanSize;
+  const rows=await sb(env,`/products?select=*&order=id.asc&offset=${offset}&limit=${scanSize}`);
+  const ranked=(Array.isArray(rows)?rows:[]).map(rakutenCandidateView).sort((a,b)=>b.priority_score-a.priority_score||String(a.name_ja||a.name_en||"").localeCompare(String(b.name_ja||b.name_en||""),"ja")||String(a.product_id).localeCompare(String(b.product_id))).slice(0,limit);
+  const snapshot={version:"rakuten-durable-link-batch-v3.7.8",page,scan_offset:offset,scan_size:scanSize,product_ids:ranked.map(x=>x.product_id),created_at:new Date().toISOString()};
+  await logEvent(env,"rakuten_affiliate_batch_snapshot",{endpoint:`rakuten_v378_batch_${page}`,metadata:snapshot});
+  return snapshot;
+}
+async function rakutenProductsForSnapshot(env,snapshot){
+  const ids=(snapshot?.product_ids||[]).filter(Boolean).slice(0,100);if(!ids.length)return [];
+  const rows=await sb(env,`/products?select=*&id=in.(${ids.map(x=>`"${String(x).replace(/"/g,"")}"`).join(",")})&limit=100`);
+  const byId=new Map((Array.isArray(rows)?rows:[]).map(x=>[String(x.id),x]));
+  return ids.map(id=>byId.get(String(id))).filter(Boolean);
+}
+async function rakutenAffiliateCandidates(env,{page=1,limit=100}={}){
+  page=Math.max(1,Math.min(1000,Number(page)||1));limit=Math.max(1,Math.min(100,Number(limit)||100));
+  let snapshot=await rakutenBatchSnapshot(env,page);if(!snapshot)snapshot=await createRakutenBatchSnapshot(env,page,limit);
+  const products=await rakutenProductsForSnapshot(env,snapshot),candidates=products.map((p,i)=>({...rakutenCandidateView(p),fixed_number:(page-1)*100+i+1,batch_page:page,batch_position:i+1}));
+  return {service:"ANIME INTELLIGENCE",version:VERSION,mode:"fixed_persistent_100_item_batches",batch_version:snapshot.version,page,limit,scan_offset:snapshot.scan_offset,scanned:snapshot.scan_size,returned:candidates.length,registered_in_batch:candidates.filter(x=>x.affiliate_registered).length,candidates,next_page:candidates.length?page+1:null,previous_page:page>1?page-1:null,snapshot_created_at:snapshot.created_at,note:"This 100-item batch is persisted. Registering an affiliate link changes only that item's registered status; item numbers and the other 99 products do not move or re-rank."};
+}
+
+function rakutenSeriesTerms(product){return {franchise:cleanNullishValue(discoverySafeFranchise(product)),series:inferRakutenSeries(product),manufacturer:cleanNullishValue(product?.manufacturer)};}
+function rakutenSeriesMatchScore(base,p){const a=rakutenSeriesTerms(base),b=rakutenSeriesTerms(p);let score=0;if(a.franchise&&b.franchise&&normalize(a.franchise)===normalize(b.franchise))score+=60;if(a.series&&b.series&&normalize(a.series)===normalize(b.series))score+=80;if(a.manufacturer&&b.manufacturer&&normalize(a.manufacturer)===normalize(b.manufacturer))score+=20;if(discoveryEffectiveType(base)===discoveryEffectiveType(p))score+=8;return score;}
+async function rakutenAffiliateSeries(env,productId,limit=100){
+  productId=String(productId||"").trim();
+  limit=Math.max(1,Math.min(100,Number(limit)||100));
+  if(!productId)return {ok:false,status:400,error:"product_id_required"};
+  const baseRows=await sb(env,`/products?select=*&id=eq.${encodeURIComponent(productId)}&limit=1`),base=Array.isArray(baseRows)?baseRows[0]:null;
+  if(!base)return {ok:false,status:404,error:"product_not_found"};
+  const terms=rakutenSeriesTerms(base);
+  const queries=[];
+  if(terms.franchise)queries.push(`/products?select=*&franchise=eq.${encodeURIComponent(terms.franchise)}&limit=500`);
+  if(terms.series)queries.push(`/products?select=*&series=eq.${encodeURIComponent(terms.series)}&limit=300`);
+  if(terms.manufacturer)queries.push(`/products?select=*&manufacturer=eq.${encodeURIComponent(terms.manufacturer)}&limit=300`);
+  const merged=new Map([[String(base.id),base]]);
+  for(const q of queries){
+    const part=await sbOptional(env,q);
+    for(const row of Array.isArray(part)?part:[])if(row?.id)merged.set(String(row.id),row);
+  }
+  let pool=[...merged.values()];
+  if(pool.length<=1&&terms.franchise){
+    const fallback=await findProducts(env,terms.franchise,100);
+    for(const row of Array.isArray(fallback)?fallback:[])if(row?.id)merged.set(String(row.id),row);
+    pool=[...merged.values()];
+  }
+  const exactSeries=terms.series?normalize(terms.series):"";
+  const ranked=pool.map(p=>{
+    let score=rakutenSeriesMatchScore(base,p);
+    const inferred=normalize(inferRakutenSeries(p)||"");
+    if(exactSeries&&inferred===exactSeries)score+=100;
+    return {p,score};
+  }).filter(x=>x.score>=60).sort((a,b)=>b.score-a.score||rakutenAffiliatePriority(b.p)-rakutenAffiliatePriority(a.p)).slice(0,limit).map((x,i)=>({...rakutenCandidateView(x.p),series_match_score:x.score,series_position:i+1}));
+  return {ok:true,status:200,base:rakutenCandidateView(base),series:terms,returned:ranked.length,candidates:ranked,note:"Series expansion uses simple indexed Supabase filters and local ranking. Complex PostgREST OR expressions are intentionally avoided for Safari/admin stability."};
+}
+async function rakutenAffiliateRegistry(env,{limit=200}={}){
+  limit=Math.max(1,Math.min(1000,Number(limit)||200));const events=await sbOptional(env,`/api_events?select=occurred_at,product_id,metadata&event_type=eq.affiliate_link_registered&order=occurred_at.desc&limit=${limit*3}`),latest=new Map();
+  for(const e of Array.isArray(events)?events:[]){const id=String(e.product_id||"");if(id&&!latest.has(id))latest.set(id,e);if(latest.size>=limit)break;}
+  const ids=[...latest.keys()];if(!ids.length)return {service:"ANIME INTELLIGENCE",version:VERSION,registered_products:0,items:[]};
+  const rows=await sb(env,`/products?select=*&id=in.(${ids.map(x=>`"${String(x).replace(/"/g,"")}"`).join(",")})&limit=${ids.length}`),byId=new Map((Array.isArray(rows)?rows:[]).map(x=>[String(x.id),x]));
+  const items=ids.map((id,i)=>{const p=byId.get(id),e=latest.get(id);if(!p)return null;const v=rakutenCandidateView(p);return {...v,registry_number:i+1,last_registered_at:e?.occurred_at||p?.metadata?.rakuten_affiliate_updated_at||null};}).filter(Boolean);
+  return {service:"ANIME INTELLIGENCE",version:VERSION,registered_products:items.length,items,note:"Persistent view of products with recorded Rakuten affiliate registration events. Use this to verify earlier registrations even after candidate batches change."};
+}
 async function readonlyRakutenProbe(env){const configured=rakutenConfigured(env);return {ok:configured,configured,mode:"affiliate_link_only",web_service_api:false,affiliate_id_present:configured,application_id_used:false,access_key_used:false};}
 
 async function finalCheck(env,origin){
@@ -3922,9 +4363,22 @@ async function worldDiscoveryAudit(env,mode="all",origin="https://anime-intellig
   return out;
 }
 
-function adminPage(env){const bazaarPayTo=String(env?.X402_WALLET_ADDRESS||'');return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>ANIME INTELLIGENCE ${VERSION}</title><style>body{background:#080808;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:20px}main{max-width:720px;margin:auto}h1{font-size:26px}h2{font-size:18px;margin-top:28px}input,button{width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px}input{background:#161616;color:#fff;border:1px solid #444}button{font-weight:800;border:0;background:#fff;color:#000}.go{background:#35e27a}.market{background:#f5c242}.backfill{background:#63b3ff}.quality{background:#36d9c5}.final{background:#c995ff}.index{background:#ff8b55}.bazaar{background:#4f7cff;color:#fff}.bazaarLink{display:block;width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;font-weight:800;background:#4f7cff;color:#fff;text-align:center;text-decoration:none}pre{white-space:pre-wrap;word-break:break-word;background:#111;padding:15px;border-radius:10px;min-height:140px}.small{color:#aaa;font-size:13px;line-height:1.5}.badge{display:inline-block;padding:6px 10px;background:#18251d;border:1px solid #35e27a;border-radius:999px;font-size:12px;color:#8dffb5}.danger{background:#7f1d1d!important;color:#fff!important;border-color:#991b1b!important}</style></head><body><main><h1>ANIME INTELLIGENCE ${VERSION}</h1><div class="badge">v${VERSION} / MONETIZATION INTEGRATED</div><input id="k" type="password" placeholder="REFRESH_KEY"><h2>\u5b89\u5168\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3</h2><button class="go" onclick="run('/admin/expand','POST')">\u5b89\u51681\u30b5\u30a4\u30af\u30eb\uff08\u73fe\u5728\u306e\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3\uff09</button><button class="go" onclick="runDbExpand()">DB\u62e1\u5f35\uff1a\u4e3b\u8981\u30e1\u30fc\u30ab\u30fc\u3092\u81ea\u52d5\u62e1\u5f35</button><button class="go" onclick="runArchiveExpand()">CATALOG\uff1aYahoo JAN\u4ed8\u304d\u30b3\u30ec\u30af\u30c6\u30a3\u30d6\u30eb\u3092\u81ea\u52d5\u3067\u6700\u5f8c\u307e\u3067\u62e1\u5f35</button><select id="catalogCategory" style="width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;background:#161616;color:#fff;border:1px solid #444"><option value="plush">\u306c\u3044\u3050\u308b\u307f</option><option value="acrylic_goods">\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9</option><option value="lottery_prize">\u4e00\u756a\u304f\u3058\u666f\u54c1</option><option value="model_kit">\u30d7\u30e9\u30e2\u30c7\u30eb</option><option value="badge">\u7f36\u30d0\u30c3\u30b8</option><option value="keychain">\u30ad\u30fc\u30db\u30eb\u30c0\u30fc</option><option value="limited_goods">\u9650\u5b9a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba</option><option value="trading_card">\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9</option><option value="sneaker">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30b9\u30cb\u30fc\u30ab\u30fc</option><option value="apparel">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30a2\u30d1\u30ec\u30eb</option><option value="figure">\u30d5\u30a3\u30ae\u30e5\u30a2</option></select><button onclick="runCatalogCategoryTest()">CATALOG CATEGORY TEST\uff1a\u9078\u629e\u30ab\u30c6\u30b4\u30ea\u30921\u30d0\u30c3\u30c1\u691c\u67fb</button><button onclick="run('/admin/catalog-run?batches=1','POST')">CATALOG CONTINUE\uff1a\u901a\u5e38\u30ab\u30fc\u30bd\u30eb\u30921\u30d0\u30c3\u30c1\u9032\u3081\u308b</button><button onclick="run('/admin/catalog-progress','GET')">CATALOG PROGRESS</button><button onclick="run('/admin/catalog-auto-status','GET')">CATALOG AUTO STATUS\uff1a\u30d0\u30c3\u30af\u30b0\u30e9\u30a6\u30f3\u30c9\u81ea\u52d5\u62e1\u5f35\u3092\u78ba\u8a8d</button><button onclick="run('/admin/official-mass-patrol','POST')">OFFICIAL MASS PATROL\uff1a\u30e1\u30fc\u30ab\u30fc\u516c\u5f0f\u5546\u54c1\u3092\u5de1\u56de</button><p class="small">MASS \u2192 OFFICIAL \u2192 YAHOO \u2192 EBAY \u2192 MASS \u2192 BACKFILL \u2192 YAHOO \u2192 EBAY</p><h2>\u500b\u5225\u5b9f\u884c</h2><button onclick="run('/admin/expand?stage=mass','POST')">MASS\uff1aGood Smile\u5546\u54c1\u8ffd\u52a0</button><button onclick="run('/admin/expand?stage=official','POST')">OFFICIAL\uff1a\u516c\u5f0f\u5546\u54c1\u30da\u30fc\u30b8\u88dc\u5b8c</button><button class="backfill" onclick="run('/admin/expand?stage=backfill','POST')">BACKFILL\uff1a\u65e2\u5b58JAN\u5546\u54c1\u88dc\u5b8c</button><button class="market" onclick="run('/admin/expand?stage=yahoo','POST')">YAHOO\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><button class="market" onclick="run('/admin/expand?stage=ebay','POST')">EBAY\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><h2>\u54c1\u8cea\u4fee\u5fa9</h2><button class="quality" onclick="runQuality()">QUALITY\uff1a\u5168\u4ef6\u81ea\u52d5\u54c1\u8cea\u4fee\u5fa9</button><button class="quality" onclick="run('/admin/catalog-cleanup','GET')">DB CLEANUP CHECK\uff1a\u524a\u9664\u5019\u88dc\u3060\u3051\u78ba\u8a8d</button><button class="danger" onclick="runCatalogCleanupApply()">DB CLEANUP APPLY\uff1a\u78ba\u5b9a\u5019\u88dc\u3092\u524a\u9664</button><button class="danger" onclick="runFinalizeV3()">FINALIZE V3\uff1a\u30af\u30ea\u30fc\u30f3\u30a2\u30c3\u30d7\u2192\u5168\u6a5f\u80fd\u691c\u67fb\u2192\u5b8c\u4e86</button><h2>\u53ce\u76ca\u30fbKPI</h2><button class="go" onclick="run('/admin/revenue-status','GET')">FIRST REVENUE CHECK\uff1a\u58f2\u4e0a\u30fb\u521d\u56de\u6c7a\u6e08\u30fbBazaar</button><button class="go" onclick="run(\'/admin/kpi\',\'GET\')">KPI\uff1aAPI\u58f2\u4e0a\u30fbpayer\u30fbconversion</button><h2>Rakuten Affiliate</h2><input id="rap" placeholder="Canonical product ID"><input id="rau" placeholder="Official Rakuten affiliate URL (https://hb.afl.rakuten.co.jp/...)"><input id="ras" placeholder="Shop name (optional)"><input id="raprice" inputmode="numeric" placeholder="Price JPY (optional)"><button class="market" onclick="registerRakutenAffiliate()">RAKUTEN AFFILIATE LINK\uff1a\u5546\u54c1\u306b\u767b\u9332</button><p class="small">\u697d\u5929\u30a2\u30d5\u30a3\u30ea\u30a8\u30a4\u30c8\u3067\u6b63\u5f0f\u767a\u884c\u3057\u305f hb.afl.rakuten.co.jp \u30ea\u30f3\u30af\u3060\u3051\u767b\u9332\u3057\u307e\u3059\u3002\u901a\u5e38\u306e\u697d\u5929\u691c\u7d22URL\u306f\u30a2\u30d5\u30a3\u30ea\u30a8\u30a4\u30c8\u6271\u3044\u3057\u307e\u305b\u3093\u3002</p><h2>SEARCH DIAGNOSTIC</h2><input id="sdq" value="One Piece figure" placeholder="Search diagnostic query"><button class="quality" onclick="run('/admin/search-diagnostic?query='+encodeURIComponent(document.getElementById('sdq').value),'GET')">SEARCH DIAGNOSTIC: Supabase\u691c\u7d22\u539f\u56e0\u7279\u5b9a</button><p class="small">\u79d8\u5bc6\u9375\u306f\u8fd4\u3055\u305a\u3001Supabase\u306eHTTP status\u30fb\u5b9f\u884c\u6761\u4ef6\u30fb\u4ef6\u6570\u30fb\u30a8\u30e9\u30fc\u30921\u56de\u3067\u78ba\u8a8d\u3057\u307e\u3059\u3002</p><h2>\u691c\u67fb</h2><button onclick="run('/admin/expand?stage=metrics','POST')">DB\u6210\u9577\u72b6\u6cc1</button><button class="final" onclick="run('/admin/final-check','GET')">FINAL CHECK</button><h2>Atelier</h2><button class="go" onclick="run('/admin/atelier-status','GET')">ATELIER STATUS</button><button class="go" onclick="run('/admin/atelier-poll','POST')">ATELIER POLL NOW</button><h2>Discovery</h2><button class="go" onclick="run('/admin/world-discovery-audit?mode=all','GET')">WORLD DISCOVERY AUDIT: MULTILINGUAL + AGENT402</button><button onclick="run('/admin/world-discovery-audit?mode=internal','GET')">WORLD INTERNAL SEARCH AUDIT</button><button onclick="run('/admin/world-discovery-audit?mode=agent402','GET')">AGENT402 REGISTER + LIVE DISCOVERY AUDIT</button><button class="index" onclick="run('/admin/agent402-register','POST')">AGENT402 REGISTER ORIGIN</button><button class="bazaar" onclick="run('/admin/bazaar-compliance-audit','GET')">COINBASE BAZAAR VALIDATE: 7 API</button><button class="bazaar" onclick="run('/admin/bazaar-merchant-audit','GET')">COINBASE BAZAAR STATUS: 7 API LISTING</button><input id="bq" value="anime collectibles" placeholder="Bazaar semantic search query"><button class="bazaar" onclick="run('/admin/bazaar-semantic-audit?query='+encodeURIComponent(document.getElementById('bq').value),'GET')">COINBASE BAZAAR SEARCH RANK</button><button class="index" onclick="run('/admin/discovery-v3-update','POST')">DISCOVERY V3 UPDATE\uff1a\u516c\u958b\u30e1\u30bf\u30c7\u30fc\u30bf\uff0b402 Index\u4e00\u62ec\u66f4\u65b0</button><button class="index" onclick="run('/admin/402index/register','POST')">402 Index\u30787\u30b5\u30fc\u30d3\u30b9\u767b\u9332</button><a class="bazaarLink" href="https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?payTo=9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT&amp;limit=20" target="_blank" rel="noopener noreferrer">Coinbase Bazaar\uff1a7 API\u63b2\u8f09\u78ba\u8a8d\uff08Coinbase\u3092\u76f4\u63a5\u958b\u304f\uff09</a><pre id="o">\u5f85\u6a5f\u4e2d</pre><script>async function run(p,m){const o=document.getElementById('o'),k=document.getElementById('k').value.trim();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}o.textContent='\u5b9f\u884c\u4e2d\u2026';try{const r=await fetch(p,{method:m,headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),t=await r.text();try{o.textContent=JSON.stringify(JSON.parse(t),null,2)}catch{o.textContent=t}}catch(e){o.textContent=String(e)}}async function registerRakutenAffiliate(){const o=document.getElementById('o'),k=document.getElementById('k').value.trim(),product_id=document.getElementById('rap').value.trim(),affiliate_url=document.getElementById('rau').value.trim(),seller=document.getElementById('ras').value.trim(),price_jpy=Number(document.getElementById('raprice').value||0)||null;if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}if(!product_id||!affiliate_url){o.textContent='Canonical product ID \u3068 Rakuten affiliate URL \u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}o.textContent='\u767b\u9332\u4e2d...';try{const r=await fetch('/admin/rakuten-affiliate/register',{method:'POST',headers:{'x-refresh-key':k,'content-type':'application/json','cache-control':'no-cache'},body:JSON.stringify({product_id,affiliate_url,seller,price_jpy})}),t=await r.text();try{o.textContent=JSON.stringify(JSON.parse(t),null,2)}catch{o.textContent=t}}catch(e){o.textContent=String(e)}}
+function adminPage(env){const bazaarPayTo=String(env?.X402_WALLET_ADDRESS||'');return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>ANIME INTELLIGENCE ${VERSION}</title><style>body{background:#080808;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:20px}main{max-width:720px;margin:auto}h1{font-size:26px}h2{font-size:18px;margin-top:28px}input,button{width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px}input{background:#161616;color:#fff;border:1px solid #444}button{font-weight:800;border:0;background:#fff;color:#000}.go{background:#35e27a}.market{background:#f5c242}.backfill{background:#63b3ff}.quality{background:#36d9c5}.final{background:#c995ff}.index{background:#ff8b55}.bazaar{background:#4f7cff;color:#fff}.bazaarLink{display:block;width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;font-weight:800;background:#4f7cff;color:#fff;text-align:center;text-decoration:none}pre{white-space:pre-wrap;word-break:break-word;background:#111;padding:15px;border-radius:10px;min-height:140px}.small{color:#aaa;font-size:13px;line-height:1.5}.badge{display:inline-block;padding:6px 10px;background:#18251d;border:1px solid #35e27a;border-radius:999px;font-size:12px;color:#8dffb5}.danger{background:#7f1d1d!important;color:#fff!important;border-color:#991b1b!important}.rcard{background:#141414;border:1px solid #333;border-radius:12px;padding:12px;margin:12px 0}.rcard img{width:88px;height:88px;object-fit:contain;background:#fff;border-radius:8px;float:right;margin-left:10px}.rcard a{display:inline-block;padding:10px 12px;background:#f5c242;color:#000;border-radius:8px;font-weight:800;text-decoration:none;margin:6px 0}.rcard input{margin:5px 0}.rmeta{font-size:12px;color:#aaa}.pager{display:flex;gap:8px}.pager button{width:50%}</style></head><body><main><h1>ANIME INTELLIGENCE ${VERSION}</h1><div class="badge">v${VERSION} / MONETIZATION INTEGRATED</div><input id="k" type="password" placeholder="REFRESH_KEY"><h2>\u5b89\u5168\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3</h2><button class="go" onclick="run('/admin/expand','POST')">\u5b89\u51681\u30b5\u30a4\u30af\u30eb\uff08\u73fe\u5728\u306e\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3\uff09</button><button class="go" onclick="runDbExpand()">DB\u62e1\u5f35\uff1a\u4e3b\u8981\u30e1\u30fc\u30ab\u30fc\u3092\u81ea\u52d5\u62e1\u5f35</button><button class="go" onclick="runArchiveExpand()">CATALOG\uff1aYahoo JAN\u4ed8\u304d\u30b3\u30ec\u30af\u30c6\u30a3\u30d6\u30eb\u3092\u81ea\u52d5\u3067\u6700\u5f8c\u307e\u3067\u62e1\u5f35</button><select id="catalogCategory" style="width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;background:#161616;color:#fff;border:1px solid #444"><option value="plush">\u306c\u3044\u3050\u308b\u307f</option><option value="acrylic_goods">\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9</option><option value="lottery_prize">\u4e00\u756a\u304f\u3058\u666f\u54c1</option><option value="model_kit">\u30d7\u30e9\u30e2\u30c7\u30eb</option><option value="badge">\u7f36\u30d0\u30c3\u30b8</option><option value="keychain">\u30ad\u30fc\u30db\u30eb\u30c0\u30fc</option><option value="limited_goods">\u9650\u5b9a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba</option><option value="trading_card">\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9</option><option value="sneaker">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30b9\u30cb\u30fc\u30ab\u30fc</option><option value="apparel">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30a2\u30d1\u30ec\u30eb</option><option value="figure">\u30d5\u30a3\u30ae\u30e5\u30a2</option></select><button onclick="runCatalogCategoryTest()">CATALOG CATEGORY TEST\uff1a\u9078\u629e\u30ab\u30c6\u30b4\u30ea\u30921\u30d0\u30c3\u30c1\u691c\u67fb</button><button onclick="run('/admin/catalog-run?batches=1','POST')">CATALOG CONTINUE\uff1a\u901a\u5e38\u30ab\u30fc\u30bd\u30eb\u30921\u30d0\u30c3\u30c1\u9032\u3081\u308b</button><button onclick="run('/admin/catalog-progress','GET')">CATALOG PROGRESS</button><button onclick="run('/admin/catalog-auto-status','GET')">CATALOG AUTO STATUS\uff1a\u30d0\u30c3\u30af\u30b0\u30e9\u30a6\u30f3\u30c9\u81ea\u52d5\u62e1\u5f35\u3092\u78ba\u8a8d</button><button onclick="run('/admin/official-mass-patrol','POST')">OFFICIAL MASS PATROL\uff1a\u30e1\u30fc\u30ab\u30fc\u516c\u5f0f\u5546\u54c1\u3092\u5de1\u56de</button><p class="small">MASS \u2192 OFFICIAL \u2192 YAHOO \u2192 EBAY \u2192 MASS \u2192 BACKFILL \u2192 YAHOO \u2192 EBAY</p><h2>\u500b\u5225\u5b9f\u884c</h2><button onclick="run('/admin/expand?stage=mass','POST')">MASS\uff1aGood Smile\u5546\u54c1\u8ffd\u52a0</button><button onclick="run('/admin/expand?stage=official','POST')">OFFICIAL\uff1a\u516c\u5f0f\u5546\u54c1\u30da\u30fc\u30b8\u88dc\u5b8c</button><button class="backfill" onclick="run('/admin/expand?stage=backfill','POST')">BACKFILL\uff1a\u65e2\u5b58JAN\u5546\u54c1\u88dc\u5b8c</button><button class="market" onclick="run('/admin/expand?stage=yahoo','POST')">YAHOO\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><button class="market" onclick="run('/admin/expand?stage=ebay','POST')">EBAY\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><h2>\u54c1\u8cea\u4fee\u5fa9</h2><button class="quality" onclick="runQuality()">QUALITY\uff1a\u5168\u4ef6\u81ea\u52d5\u54c1\u8cea\u4fee\u5fa9</button><button class="quality" onclick="run('/admin/catalog-cleanup','GET')">DB CLEANUP CHECK\uff1a\u524a\u9664\u5019\u88dc\u3060\u3051\u78ba\u8a8d</button><button class="danger" onclick="runCatalogCleanupApply()">DB CLEANUP APPLY\uff1a\u78ba\u5b9a\u5019\u88dc\u3092\u524a\u9664</button><button class="danger" onclick="runFinalizeV3()">FINALIZE V3\uff1a\u30af\u30ea\u30fc\u30f3\u30a2\u30c3\u30d7\u2192\u5168\u6a5f\u80fd\u691c\u67fb\u2192\u5b8c\u4e86</button><h2>\u53ce\u76ca\u30fbKPI</h2><button class="go" onclick="run('/admin/revenue-status','GET')">FIRST REVENUE CHECK\uff1a\u58f2\u4e0a\u30fb\u521d\u56de\u6c7a\u6e08\u30fbBazaar</button><button class="go" onclick="run(\'/admin/kpi\',\'GET\')">KPI\uff1aAPI\u58f2\u4e0a\u30fbpayer\u30fbconversion</button><h2>Rakuten Affiliate 10,000+</h2><p class="small">\u8cfc\u5165\u53ef\u80fd\u6027\u30fb\u518d\u8ca9\u30fb\u4e88\u7d04\u30fbJAN\u30fb\u4eba\u6c17\u5ea6\u3067\u5019\u88dc100\u4ef6\u3092\u512a\u5148\u8868\u793a\u3002\u697d\u5929\u3067\u5546\u54c1\u4fa1\u683c\u30ca\u30d3\uff08\u4fa1\u683c\u6bd4\u8f03\uff09\u30ea\u30f3\u30af\u3092\u4f5c\u308c\u308b\u5834\u5408\u306f\u6700\u512a\u5148\u3067\u767b\u9332\u3057\u307e\u3059\u3002Canonical product ID\u306f\u81ea\u52d5\u3067\u3059\u3002</p><button class="market" onclick="loadRakutenCandidates(1)">RAKUTEN\u5019\u88dc100\u4ef6\u3092\u8868\u793a</button><button class="go" onclick="loadRakutenRegistered()">RAKUTEN\u767b\u9332\u6e08\u4e00\u89a7\uff1a\u904e\u53bb\u306e\u767b\u9332\u3092\u78ba\u8a8d</button><div id="rakutenRegistered"></div><div id="rakutenPager"></div><div id="rakutenCandidates"></div><div id="rakutenSeries"></div><details><summary class="small">\u500b\u5225ID\u3067\u767b\u9332</summary><input id="rap" placeholder="Canonical product ID"><input id="rau" placeholder="Official Rakuten affiliate URL"><input id="ras" placeholder="Shop name (optional)"><input id="raprice" inputmode="numeric" placeholder="Price JPY (optional)"><button class="market" onclick="registerRakutenAffiliate()">RAKUTEN AFFILIATE LINK\uff1a\u5546\u54c1\u306b\u767b\u9332</button></details><h2>SEARCH DIAGNOSTIC</h2><input id="sdq" value="One Piece figure" placeholder="Search diagnostic query"><button class="quality" onclick="run('/admin/search-diagnostic?query='+encodeURIComponent(document.getElementById('sdq').value),'GET')">SEARCH DIAGNOSTIC: Supabase\u691c\u7d22\u539f\u56e0\u7279\u5b9a</button><p class="small">\u79d8\u5bc6\u9375\u306f\u8fd4\u3055\u305a\u3001Supabase\u306eHTTP status\u30fb\u5b9f\u884c\u6761\u4ef6\u30fb\u4ef6\u6570\u30fb\u30a8\u30e9\u30fc\u30921\u56de\u3067\u78ba\u8a8d\u3057\u307e\u3059\u3002</p><h2>\u691c\u67fb</h2><button onclick="run('/admin/expand?stage=metrics','POST')">DB\u6210\u9577\u72b6\u6cc1</button><button class="final" onclick="run('/admin/final-check','GET')">FINAL CHECK</button><h2>Atelier</h2><button class="go" onclick="run('/admin/atelier-status','GET')">ATELIER STATUS</button><button class="go" onclick="run('/admin/atelier-poll','POST')">ATELIER POLL NOW</button><h2>Discovery</h2><button class="go" onclick="run('/admin/world-discovery-audit?mode=all','GET')">WORLD DISCOVERY AUDIT: MULTILINGUAL + AGENT402</button><button onclick="run('/admin/world-discovery-audit?mode=internal','GET')">WORLD INTERNAL SEARCH AUDIT</button><button onclick="run('/admin/world-discovery-audit?mode=agent402','GET')">AGENT402 REGISTER + LIVE DISCOVERY AUDIT</button><button class="index" onclick="run('/admin/agent402-register','POST')">AGENT402 REGISTER ORIGIN</button><button class="bazaar" onclick="run('/admin/bazaar-compliance-audit','GET')">COINBASE BAZAAR VALIDATE: 7 API</button><button class="bazaar" onclick="run('/admin/bazaar-merchant-audit','GET')">COINBASE BAZAAR STATUS: 7 API LISTING</button><input id="bq" value="anime collectibles" placeholder="Bazaar semantic search query"><button class="bazaar" onclick="run('/admin/bazaar-semantic-audit?query='+encodeURIComponent(document.getElementById('bq').value),'GET')">COINBASE BAZAAR SEARCH RANK</button><button class="index" onclick="run('/admin/discovery-v3-update','POST')">DISCOVERY V3 UPDATE\uff1a\u516c\u958b\u30e1\u30bf\u30c7\u30fc\u30bf\uff0b402 Index\u4e00\u62ec\u66f4\u65b0</button><button class="index" onclick="run('/admin/402index/register','POST')">402 Index\u30787\u30b5\u30fc\u30d3\u30b9\u767b\u9332</button><a class="bazaarLink" href="https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?payTo=9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT&amp;limit=20" target="_blank" rel="noopener noreferrer">Coinbase Bazaar\uff1a7 API\u63b2\u8f09\u78ba\u8a8d\uff08Coinbase\u3092\u76f4\u63a5\u958b\u304f\uff09</a><h2>x402 RPC PREFLIGHT</h2><p class="small">Run this on iPhone before using PC/Phantom. It verifies that the Worker can read Solana mainnet blockhash + USDC mint data.</p><button class="bazaar" onclick="x402RpcCheck()">x402 RPC CHECK</button><pre id="x402rpc">READY - no RPC check yet.</pre><script>
+function x402AdminKey(){
+  const selectors=[
+    '#refreshKey','#key','input[name="refresh_key"]','input[name="refreshKey"]',
+    'input[placeholder*="REFRESH_KEY" i]','input[type="password"]'
+  ];
+  for(const q of selectors){const el=document.querySelector(q);if(el&&String(el.value||'').trim())return String(el.value).trim();}
+  for(const k of ['refreshKey','REFRESH_KEY','ai_refresh_key','anime_refresh_key']){
+    const v=sessionStorage.getItem(k);if(v&&v.trim())return v.trim();
+  }
+  return '';
+}
+async function x402RpcCheck(){const el=document.getElementById('x402rpc');try{el.textContent='CHECKING...';const k=x402AdminKey();if(!k){el.textContent=JSON.stringify({error:'REFRESH_KEY_REQUIRED',message:'The admin key field could not be resolved. Reload the admin page and enter REFRESH_KEY once.'},null,2);return;}const r=await fetch('/admin/x402-rpc-check',{headers:{'x-refresh-key':k}});const t=await r.text();try{el.textContent=JSON.stringify(JSON.parse(t),null,2)}catch{el.textContent=t}}catch(e){el.textContent=String(e?.message||e)}}
+</script><h2>x402 PRODUCTION E2E - PC CHROME</h2><p class="small">PC Chrome + Phantom extension only. Mainnet real-payment test. IDENTIFY only, exactly $0.005 USDC. Never enter a seed phrase or private key.</p><button class="bazaar" onclick="connectX402Phantom()">PHANTOM\u63a5\u7d9a\u30c1\u30a7\u30c3\u30af</button><button class="danger" onclick="runX402ProductionE2E(event)">x402\u672c\u756aE2E\uff1aIDENTIFY $0.005 \u30921\u56de\u6c7a\u6e08</button><pre id="x402e2e">READY - no payment has been sent.</pre><pre id="o">\u5f85\u6a5f\u4e2d</pre><script>const ADMIN_KEY_SESSION='anime_intelligence_refresh_key_v3710';function adminKey(){const el=document.getElementById('k');let k=String(el?.value||'').trim();if(k){try{sessionStorage.setItem(ADMIN_KEY_SESSION,k)}catch{}return k;}try{k=String(sessionStorage.getItem(ADMIN_KEY_SESSION)||'').trim()}catch{}if(k&&el)el.value=k;return k;}function initAdminKey(){const el=document.getElementById('k');if(!el)return;try{const saved=String(sessionStorage.getItem(ADMIN_KEY_SESSION)||'').trim();if(saved&&!el.value)el.value=saved}catch{}el.addEventListener('input',()=>{const v=String(el.value||'').trim();try{if(v)sessionStorage.setItem(ADMIN_KEY_SESSION,v);else sessionStorage.removeItem(ADMIN_KEY_SESSION)}catch{}});}window.addEventListener('pageshow',initAdminKey);document.addEventListener('DOMContentLoaded',initAdminKey);async function run(p,m){const o=document.getElementById('o'),k=adminKey();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}o.textContent='\u5b9f\u884c\u4e2d\u2026';try{const r=await fetch(p,{method:m,headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),t=await r.text();try{o.textContent=JSON.stringify(JSON.parse(t),null,2)}catch{o.textContent=t}}catch(e){o.textContent=String(e)}}let rakutenPage=1;function escR(v){return String(v||'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]||c))}function rakutenCard(x,i,prefix){prefix=prefix||'r';const reg=x.affiliate_registered?'<div class="rmeta">REGISTERED &#10003; / '+x.affiliate_offer_count+' link(s)</div>':'';const series=x.series?'<div class="rmeta">Series: '+escR(x.series)+'</div>':'';const avail='<div class="rmeta">\u8cfc\u5165\u512a\u5148: '+escR(x.purchase_likelihood||'catalog')+(x.release_date?' / '+escR(x.release_date):'')+'</div>';return '<div class="rcard">'+(x.image_url?'<img src="'+escR(x.image_url)+'" loading="lazy">':'')+'<b>'+escR(x.fixed_number||x.series_position||x.registry_number||'')+'. '+escR(x.name_ja||x.name_en)+'</b>'+reg+'<div class="rmeta">'+escR(x.product_type)+' / '+escR(x.franchise)+' / JAN '+escR(x.jan_code||'\u306a\u3057')+' / priority '+escR(x.priority_score)+'</div>'+series+avail+'<div class="rmeta">\u691c\u7d22\u8a9e: '+escR(x.rakuten_search_query)+'</div><a href="'+escR(x.rakuten_search_url)+'" target="_blank" rel="noopener noreferrer">\u697d\u5929\u3067\u691c\u7d22</a><button class="backfill" data-pid="'+escR(x.product_id)+'" onclick="loadRakutenSeries(this.dataset.pid)">\u540c\u30b7\u30ea\u30fc\u30ba\u3092\u8868\u793a</button><select id="'+prefix+'t_'+i+'" style="width:100%;padding:14px;margin:5px 0;background:#161616;color:#fff;border:1px solid #444;border-radius:10px"><option value="price_navi">\u5546\u54c1\u4fa1\u683c\u30ca\u30d3\uff08\u4fa1\u683c\u6bd4\u8f03\uff09\u30fb\u6700\u512a\u5148</option><option value="product_page">\u500b\u5225\u5546\u54c1\u30da\u30fc\u30b8</option><option value="shop_page">\u30b7\u30e7\u30c3\u30d7\u30da\u30fc\u30b8</option></select><input id="'+prefix+'u_'+i+'" placeholder="\u697d\u5929\u3067\u767a\u884c\u3057\u305f hb.afl.rakuten.co.jp URL"><input id="'+prefix+'s_'+i+'" placeholder="\u30b7\u30e7\u30c3\u30d7\u540d\uff08\u4efb\u610f\uff09"><input id="'+prefix+'p_'+i+'" inputmode="numeric" placeholder="\u4fa1\u683c \u5186\uff08\u4efb\u610f\uff09"><button id="'+prefix+'b_'+i+'" class="market" data-i="'+i+'" data-pid="'+escR(x.product_id)+'" data-prefix="'+prefix+'" onclick="registerRakutenCandidate(this.dataset.i,this.dataset.pid,this.dataset.prefix)" '+(x.affiliate_registered?'disabled':'')+'>'+(x.affiliate_registered?'\u767b\u9332\u6e08 &#10003;':'\u3053\u306e\u5546\u54c1\u306b\u767b\u9332')+'</button><div id="'+prefix+'r_'+i+'" class="small"></div><div style="clear:both"></div></div>';}async function loadRakutenCandidates(page){const o=document.getElementById('o'),k=adminKey(),box=document.getElementById('rakutenCandidates'),pager=document.getElementById('rakutenPager');if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}rakutenPage=Math.max(1,Number(page)||1);box.innerHTML='<p>\u5019\u88dc\u3092\u53d6\u5f97\u4e2d...</p>';try{const r=await fetch('/admin/rakuten-affiliate/candidates?page='+rakutenPage+'&limit=100',{headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),d=await r.json();if(!r.ok)throw new Error(JSON.stringify(d));box.innerHTML=(d.candidates||[]).map((x,i)=>rakutenCard(x,i,'r')).join('')||'<p>\u3053\u306e\u30d0\u30c3\u30c1\u306b\u5019\u88dc\u304c\u3042\u308a\u307e\u305b\u3093\u3002</p>';pager.innerHTML='<div class="pager"><button onclick="loadRakutenCandidates('+(d.previous_page||1)+')" '+(d.previous_page?'':'disabled')+'>\u2190 \u524d\u3078</button><button onclick="loadRakutenCandidates('+(d.next_page||rakutenPage)+')" '+(d.next_page?'':'disabled')+'>\u6b21\u3078 \u2192</button></div><p class="small">Batch '+d.page+' / returned '+d.returned+' / \u767b\u9332\u6e08 '+d.registered_in_batch+'</p>';o.textContent=JSON.stringify({version:d.version,page:d.page,returned:d.returned,registered_in_batch:d.registered_in_batch},null,2);}catch(e){box.innerHTML='';o.textContent=String(e)}}async function loadRakutenRegistered(){const o=document.getElementById('o'),k=adminKey(),box=document.getElementById('rakutenRegistered');if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}box.innerHTML='<p>\u767b\u9332\u6e08\u307f\u3092\u53d6\u5f97\u4e2d...</p>';try{const r=await fetch('/admin/rakuten-affiliate/registered?limit=500',{headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),d=await r.json();if(!r.ok)throw new Error(JSON.stringify(d));box.innerHTML='<h3>\u697d\u5929\u767b\u9332\u6e08\u307f '+d.registered_products+'\u4ef6</h3>'+(d.items||[]).map((x,i)=>rakutenCard(x,i,'g')).join('');o.textContent=JSON.stringify({version:d.version,registered_products:d.registered_products},null,2);}catch(e){box.innerHTML='';o.textContent=String(e)}}async function loadRakutenSeries(product_id){const o=document.getElementById('o'),k=adminKey(),box=document.getElementById('rakutenSeries');if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}box.innerHTML='<p>\u540c\u30b7\u30ea\u30fc\u30ba\u3092\u691c\u7d22\u4e2d...</p>';try{const r=await fetch('/admin/rakuten-affiliate/series?product_id='+encodeURIComponent(String(product_id||''))+'&limit=100',{headers:{'x-refresh-key':k,'cache-control':'no-cache'}});const t=await r.text();let d;try{d=JSON.parse(t)}catch{throw new Error('series_response_not_json: '+t.slice(0,300))}if(!r.ok||!d.ok)throw new Error(JSON.stringify(d));box.innerHTML='<h3>\u540c\u30b7\u30ea\u30fc\u30ba\u5019\u88dc '+d.returned+'\u4ef6</h3><p class="small">'+escR((d.series&&d.series.franchise)||'')+' / '+escR((d.series&&d.series.series)||'')+' / '+escR((d.series&&d.series.manufacturer)||'')+'</p>'+(d.candidates||[]).map((x,i)=>rakutenCard(x,i,'s')).join('');o.textContent=JSON.stringify({version:d.version,series:d.series,returned:d.returned},null,2);}catch(e){const msg=String(e);box.innerHTML='<div class="rcard"><b>\u540c\u30b7\u30ea\u30fc\u30ba\u53d6\u5f97\u30a8\u30e9\u30fc</b><div class="small">'+escR(msg)+'</div></div>';o.textContent=msg}}async function registerRakutenCandidate(i,product_id,prefix){prefix=prefix||'r';const k=adminKey(),affiliate_url=document.getElementById(prefix+'u_'+i).value.trim(),seller=document.getElementById(prefix+'s_'+i).value.trim(),price_jpy=Number(document.getElementById(prefix+'p_'+i).value||0)||null,link_type=document.getElementById(prefix+'t_'+i).value,out=document.getElementById(prefix+'r_'+i);if(!k){out.textContent='REFRESH_KEY\u3092\u6700\u521d\u306b1\u56de\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';document.getElementById('k')?.focus();return;}if(!affiliate_url){out.textContent='\u697d\u5929\u30a2\u30d5\u30a3\u30ea\u30a8\u30a4\u30c8URL\u3092\u8cbc\u3063\u3066\u304f\u3060\u3055\u3044';return;}out.textContent='\u767b\u9332\u4e2d...';try{const r=await fetch('/admin/rakuten-affiliate/register',{method:'POST',headers:{'x-refresh-key':k,'content-type':'application/json','cache-control':'no-cache'},body:JSON.stringify({product_id,affiliate_url,seller,price_jpy,link_type})}),d=await r.json();if(r.status===401){out.textContent='\u8a8d\u8a3c\u304c\u5207\u308c\u307e\u3057\u305f\u3002REFRESH_KEY\u30921\u56de\u5165\u529b\u3057\u76f4\u3057\u3066\u304f\u3060\u3055\u3044';try{sessionStorage.removeItem(ADMIN_KEY_SESSION)}catch{}document.getElementById('k').value='';document.getElementById('k')?.focus();return;}out.textContent=d.ok?'\u767b\u9332\u5b8c\u4e86 \u2713':JSON.stringify(d);if(d.ok){const b=document.getElementById(prefix+'b_'+i);if(b){b.disabled=true;b.textContent='\u767b\u9332\u6e08 \u2713';}}}catch(e){out.textContent=String(e)}}async function registerRakutenAffiliate(){const o=document.getElementById('o'),k=adminKey(),product_id=document.getElementById('rap').value.trim(),affiliate_url=document.getElementById('rau').value.trim(),seller=document.getElementById('ras').value.trim(),price_jpy=Number(document.getElementById('raprice').value||0)||null;if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}if(!product_id||!affiliate_url){o.textContent='Canonical product ID \u3068 Rakuten affiliate URL \u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}o.textContent='\u767b\u9332\u4e2d...';try{const r=await fetch('/admin/rakuten-affiliate/register',{method:'POST',headers:{'x-refresh-key':k,'content-type':'application/json','cache-control':'no-cache'},body:JSON.stringify({product_id,affiliate_url,seller,price_jpy})}),t=await r.text();try{o.textContent=JSON.stringify(JSON.parse(t),null,2)}catch{o.textContent=t}}catch(e){o.textContent=String(e)}}
 async function runFinalizeV3(){
-  const o=document.getElementById('o'),k=document.getElementById('k').value.trim();
+  const o=document.getElementById('o'),k=adminKey();
   if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}
   const ok=confirm('FINALIZE V3\u3092\u5b9f\u884c\u3057\u307e\u3059\u3002\u524a\u9664\u5019\u88dc\u3092\u518d\u691c\u67fb\u3057\u3001\u60f3\u5b9a\u3057\u305f\u7406\u7531\u306e\u307f\u30fb100\u4ef6\u4ee5\u4e0b\u306e\u5834\u5408\u3060\u3051\u524a\u9664\u3057\u3001\u305d\u306e\u5f8c\u3082\u3046\u4e00\u5ea6\u5168DB\u3092\u691c\u67fb\u3057\u307e\u3059\u3002\u5b9f\u884c\u3057\u307e\u3059\u304b\uff1f');
   if(!ok)return;
@@ -3943,7 +4397,7 @@ async function runFinalizeV3(){
   }catch(e){o.textContent=String(e)}
 }
 async function runCatalogCleanupApply(){
-  const o=document.getElementById('o'),k=document.getElementById('k').value.trim();
+  const o=document.getElementById('o'),k=adminKey();
   if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}
   const ok=confirm('DB CLEANUP: dry-run\u3067\u691c\u51fa\u3055\u308c\u305f\u8aa4\u767b\u9332\u30fb\u65e7identity\u91cd\u8907\u306e\u307f\u3092\u524a\u9664\u3057\u307e\u3059\u3002\u5b9f\u884c\u3057\u307e\u3059\u304b\uff1f');
   if(!ok)return;
@@ -3961,7 +4415,164 @@ async function runCatalogCleanupApply(){
     try{o.textContent=JSON.stringify(JSON.parse(t),null,2)}catch{o.textContent=t}
   }catch(e){o.textContent=String(e)}
 }
-async function runCatalogCategoryTest(){const c=document.getElementById('catalogCategory')?.value||'plush';return run('/admin/catalog-test?category='+encodeURIComponent(c)+'&page=1','POST')}async function runDbExpand(){const o=document.getElementById('o'),k=document.getElementById('k').value.trim();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}const stages=['mass','mass','mass','mass','mass','official'];const results=[];try{const c=await fetch('/admin/db-cleanup',{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}});results.push({stage:'cleanup',ok:c.ok,result:await c.json()});}catch(e){results.push({stage:'cleanup',ok:false,error:String(e)});}for(let round=1;round<=4;round++){for(const stage of stages){o.textContent=JSON.stringify({status:'running',round,stage,completed:results.length},null,2);try{const r=await fetch('/admin/expand?stage='+stage,{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),j=await r.json();results.push({round,stage,ok:r.ok,status:j.status||null,result:j.result||null});}catch(e){results.push({round,stage,ok:false,error:String(e)});}await new Promise(x=>setTimeout(x,350));}}o.textContent=JSON.stringify({status:'complete',version:'${VERSION}',requests:results.length,results},null,2)}async function runArchiveExpand(){const o=document.getElementById('o'),k=document.getElementById('k').value.trim();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}o.textContent=JSON.stringify({status:'starting_safe_batch',note:'3 batches will run now. After this, Cloudflare scheduled growth continues with the browser closed.'},null,2);try{const r=await fetch('/admin/catalog-run?batches=3',{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),j=await r.json();if(!r.ok)throw new Error(JSON.stringify(j));const last=j.catalog_run||j;o.textContent=JSON.stringify({status:last.complete?'complete':'background_continues',version:'${VERSION}',batch_requests:last.batch_requests||0,batch_inserted:last.batch_inserted||0,queryIndex:last.queryIndex,page:last.page,totalInserted:last.totalInserted,totalRequests:last.totalRequests,complete:!!last.complete,updatedAt:last.updatedAt||null,browser_can_close:true,note:last.complete?'Catalog expansion is complete.':'Safe batch completed. Cloudflare scheduled growth will continue from the saved cursor; this page does not need to stay open.'},null,2)}catch(e){o.textContent=JSON.stringify({status:'kick_error',error:String(e),browser_can_close:true,note:'Saved progress is retained. Scheduled growth can continue from the last completed page.'},null,2)}}async function runQuality(){const o=document.getElementById('o'),k=document.getElementById('k').value.trim();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}let total=0,reclassified=0,failed=0,last=null,round=0;for(round=1;round<=50;round++){const r=await fetch('/admin/quality-repair?auto=1&round='+round,{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),j=await r.json();if(!r.ok)throw new Error(JSON.stringify(j));last=j;const q=j.quality_repair||{};total+=Number(q.updated||0);reclassified+=Number(q.reclassified||0);failed+=Number(q.failed||0);o.textContent=JSON.stringify({status:'running',round,total_updated:total,total_reclassified:reclassified,total_failed:failed,last_batch:q},null,2);if(Number(q.selected||0)===0)break;await new Promise(x=>setTimeout(x,500));}o.textContent=JSON.stringify({status:'complete',version:'${VERSION}',all_products_processed:Number(last?.quality_repair?.selected||0)===0,rounds:round,total_updated:total,total_reclassified:reclassified,total_failed:failed,final:last?.quality_repair||null},null,2)}</script></main></body></html>`;}
+async function runCatalogCategoryTest(){const c=document.getElementById('catalogCategory')?.value||'plush';return run('/admin/catalog-test?category='+encodeURIComponent(c)+'&page=1','POST')}async function runDbExpand(){const o=document.getElementById('o'),k=adminKey();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}const stages=['mass','mass','mass','mass','mass','official'];const results=[];try{const c=await fetch('/admin/db-cleanup',{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}});results.push({stage:'cleanup',ok:c.ok,result:await c.json()});}catch(e){results.push({stage:'cleanup',ok:false,error:String(e)});}for(let round=1;round<=4;round++){for(const stage of stages){o.textContent=JSON.stringify({status:'running',round,stage,completed:results.length},null,2);try{const r=await fetch('/admin/expand?stage='+stage,{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),j=await r.json();results.push({round,stage,ok:r.ok,status:j.status||null,result:j.result||null});}catch(e){results.push({round,stage,ok:false,error:String(e)});}await new Promise(x=>setTimeout(x,350));}}o.textContent=JSON.stringify({status:'complete',version:'${VERSION}',requests:results.length,results},null,2)}async function runArchiveExpand(){const o=document.getElementById('o'),k=adminKey();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}o.textContent=JSON.stringify({status:'starting_safe_batch',note:'3 batches will run now. After this, Cloudflare scheduled growth continues with the browser closed.'},null,2);try{const r=await fetch('/admin/catalog-run?batches=3',{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),j=await r.json();if(!r.ok)throw new Error(JSON.stringify(j));const last=j.catalog_run||j;o.textContent=JSON.stringify({status:last.complete?'complete':'background_continues',version:'${VERSION}',batch_requests:last.batch_requests||0,batch_inserted:last.batch_inserted||0,queryIndex:last.queryIndex,page:last.page,totalInserted:last.totalInserted,totalRequests:last.totalRequests,complete:!!last.complete,updatedAt:last.updatedAt||null,browser_can_close:true,note:last.complete?'Catalog expansion is complete.':'Safe batch completed. Cloudflare scheduled growth will continue from the saved cursor; this page does not need to stay open.'},null,2)}catch(e){o.textContent=JSON.stringify({status:'kick_error',error:String(e),browser_can_close:true,note:'Saved progress is retained. Scheduled growth can continue from the last completed page.'},null,2)}}async function runQuality(){const o=document.getElementById('o'),k=adminKey();if(!k){o.textContent='REFRESH_KEY\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044';return;}let total=0,reclassified=0,failed=0,last=null,round=0;for(round=1;round<=50;round++){const r=await fetch('/admin/quality-repair?auto=1&round='+round,{method:'POST',headers:{'x-refresh-key':k,'cache-control':'no-cache'}}),j=await r.json();if(!r.ok)throw new Error(JSON.stringify(j));last=j;const q=j.quality_repair||{};total+=Number(q.updated||0);reclassified+=Number(q.reclassified||0);failed+=Number(q.failed||0);o.textContent=JSON.stringify({status:'running',round,total_updated:total,total_reclassified:reclassified,total_failed:failed,last_batch:q},null,2);if(Number(q.selected||0)===0)break;await new Promise(x=>setTimeout(x,500));}o.textContent=JSON.stringify({status:'complete',version:'${VERSION}',all_products_processed:Number(last?.quality_repair?.selected||0)===0,rounds:round,total_updated:total,total_reclassified:reclassified,total_failed:failed,final:last?.quality_repair||null},null,2)}
+
+const X402_E2E_URL='/v1/identify?query=4535123851988';
+const X402_E2E_USD=0.005;
+const X402_SOLANA_CHAIN='solana:mainnet';
+const SOLANA_USDC='EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const X402_CDN_VERSION='2.25.0';
+let X402_WALLET_CTX=null;
+function x402Out(v){const el=document.getElementById('x402e2e');if(el)el.textContent=typeof v==='string'?v:JSON.stringify(v,null,2);}
+async function x402Import(label,url){
+  try{return await import(url)}
+  catch(e){throw new Error(label+' module load failed: '+String(e?.message||e)+' | '+url)}
+}
+async function x402LoadKit(){
+  if(window.__AI_X402_KIT)return window.__AI_X402_KIT;
+  x402Out({status:'loading_official_x402_modules',version:X402_CDN_VERSION,cdn:'jsDelivr'});
+  // v3.7.13: use the current stable x402 SDK line and jsDelivr ESM endpoints.
+  // The previous browser module path failed before Phantom was reached.
+  const base='https://cdn.jsdelivr.net/npm/';
+  const core=await x402Import('x402 core',base+'@x402/core@'+X402_CDN_VERSION+'/client/+esm');
+  const svm=await x402Import('x402 svm',base+'@x402/svm@'+X402_CDN_VERSION+'/exact/client/+esm');
+  const xfetch=await x402Import('x402 fetch',base+'@x402/fetch@'+X402_CDN_VERSION+'/+esm');
+  const kit=await x402Import('Solana kit',base+'@solana/kit@5.1.0/+esm');
+  const web3=await x402Import('Solana web3',base+'@solana/web3.js@1.98.4/+esm');
+  if(typeof core.x402Client!=='function')throw new Error('x402Client export missing');
+  if(typeof svm.ExactSvmScheme!=='function')throw new Error('ExactSvmScheme export missing');
+  if(typeof xfetch.wrapFetchWithPayment!=='function')throw new Error('wrapFetchWithPayment export missing');
+  return window.__AI_X402_KIT={core,svm,xfetch,kit,web3};
+}
+async function connectX402Phantom(){
+  try{
+    if(!window.phantom?.solana?.isPhantom&&!window.solana?.isPhantom)throw new Error('Phantom Chrome extension was not detected. Open/unlock the Phantom extension in this Chrome profile and reload this page.');
+    const L=await x402LoadKit();
+    const provider=window.phantom?.solana?.isPhantom?window.phantom.solana:window.solana;
+    const c=await provider.connect();
+    const address=String(c?.publicKey||provider.publicKey||'');
+    if(!address)throw new Error('Phantom returned no Solana address');
+    // v3.7.26: Phantom is a transaction-modifying signer, not a partial signer.
+    // @solana/kit TransactionPartialSigner.signTransactions() must return
+    // SignatureDictionary[], while Phantom signTransaction() returns a potentially
+    // modified and signed VersionedTransaction. Returning that object from
+    // signTransactions() caused the SDK to merge it as if it were signatures,
+    // producing invalid_exact_solana_payload_signature_invalid at Coinbase /verify.
+    // Using modifyAndSignTransactions() lets @solana/kit preserve the signed
+    // transaction (including any wallet-injected instructions) correctly.
+    const signer={address,async modifyAndSignTransactions(txs){
+      const out=[];
+      for(const tx of txs){
+        const originalBytes=new Uint8Array(L.kit.getTransactionEncoder().encode(tx));
+        let vtx=L.web3.VersionedTransaction.deserialize(originalBytes);
+
+        // v3.7.27 â Phantom Lighthouse compatibility.
+        // Stock x402 ExactSvmScheme builds 4 instructions:
+        //   ComputeBudget price + ComputeBudget limit + TransferChecked + Memo.
+        // Phantom may inject Lighthouse safety assertions at signing time.
+        // Coinbase/CDP exact-SVM currently rejects >7 instructions.
+        // x402 issue #2097 documents this exact wallet incompatibility and
+        // recommends a 3-instruction builder (no optional random memo).
+        //
+        // Our server does not require extra.memo for this E2E route, so remove
+        // only the optional Memo instruction BEFORE Phantom signs. If a future
+        // requirement explicitly needs a seller memo, this admin bridge must
+        // not be used without revisiting that requirement.
+        const MEMO_PROGRAM='MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+        const originalMsg=vtx.message;
+        const originalStaticKeys=(originalMsg.staticAccountKeys||[]).map(k=>k.toBase58());
+        const originalCompiled=(originalMsg.compiledInstructions||[]);
+        const strippedCompiled=originalCompiled.filter(ix=>originalStaticKeys[ix.programIdIndex]!==MEMO_PROGRAM);
+
+        if(strippedCompiled.length!==originalCompiled.length){
+          const strippedMsg=new L.web3.MessageV0({
+            header:originalMsg.header,
+            staticAccountKeys:originalMsg.staticAccountKeys,
+            recentBlockhash:originalMsg.recentBlockhash,
+            compiledInstructions:strippedCompiled,
+            addressTableLookups:originalMsg.addressTableLookups||[]
+          });
+          vtx=new L.web3.VersionedTransaction(strippedMsg);
+        }
+
+        const msg=vtx.message;
+        const staticKeys=(msg.staticAccountKeys||[]).map(k=>k.toBase58());
+        const compiled=(msg.compiledInstructions||[]);
+        window.__animeX402InstructionDiagnostic={
+          before_count:originalCompiled.length,
+          before_programs:originalCompiled.map(ix=>originalStaticKeys[ix.programIdIndex]||null),
+          memo_removed:originalCompiled.length!==compiled.length,
+          presign_count:compiled.length,
+          presign_programs:compiled.map(ix=>staticKeys[ix.programIdIndex]||null)
+        };
+        const ix2=compiled[2]||null;
+        const ix2Idx=ix2?Array.from(ix2.accountKeyIndexes||[]):[];
+        const ix2Accounts=ix2Idx.map(n=>staticKeys[n]||null);
+        const inspectKeys=[...new Set([SOLANA_USDC,...ix2Accounts].filter(Boolean))];
+        const aiRes=await fetch(location.origin+'/x402/solana-rpc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:2,method:'getMultipleAccounts',params:[inspectKeys,{encoding:'base64',commitment:'confirmed'}]})});
+        const aiJson=await aiRes.json().catch(()=>null);
+        const vals=Array.isArray(aiJson?.result?.value)?aiJson.result.value:[];
+        const accountInfo=inspectKeys.map((address,n)=>{const a=vals[n]||null;let dataLen=null;try{dataLen=Array.isArray(a?.data)&&typeof a.data[0]==='string'?atob(a.data[0]).length:null}catch{}return {address,exists:!!a,owner:a?.owner||null,lamports:a?.lamports??null,data_length:dataLen,executable:a?.executable??null};});
+        window.__animeX402AccountDiagnostic={checked_at:new Date().toISOString(),wallet:address,mint:SOLANA_USDC,static_account_keys:staticKeys,instruction_2:{program_id_index:ix2?.programIdIndex??null,program:ix2?staticKeys[ix2.programIdIndex]||null:null,account_key_indexes:ix2Idx,accounts:ix2Accounts,data_base64:ix2?btoa(String.fromCharCode(...Array.from(ix2.data||[]))):null},account_info:accountInfo};
+        const presignBytes=vtx.serialize();
+        const txB64=btoa(Array.from(presignBytes,b=>String.fromCharCode(b)).join(''));
+        const simRes=await fetch(location.origin+'/x402/solana-rpc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'simulateTransaction',params:[txB64,{encoding:'base64',sigVerify:false,replaceRecentBlockhash:false,commitment:'processed'}]})});
+        const simJson=await simRes.json().catch(()=>null);
+        const sim=simJson?.result?.value||null;
+        window.__animeX402LastSimulation={ok:!!(simRes.ok&&!simJson?.error&&sim&&!sim.err),checked_at:new Date().toISOString(),http_status:simRes.status,rpc_error:simJson?.error||null,simulation_error:sim?.err||null,units_consumed:sim?.unitsConsumed??null,logs:Array.isArray(sim?.logs)?sim.logs.slice(-20):null};
+        if(!window.__animeX402LastSimulation.ok)throw new Error('PHANTOM_PRESIGN_SIMULATION_FAILED '+JSON.stringify(window.__animeX402LastSimulation));
+        const signed=await provider.signTransaction(vtx);
+        const signedBytes=signed.serialize();
+        if(!signedBytes?.length)throw new Error('Phantom did not return a signed transaction');
+
+        try{
+          const signedKeys=(signed.message.staticAccountKeys||[]).map(k=>k.toBase58());
+          const signedCompiled=(signed.message.compiledInstructions||[]);
+          window.__animeX402InstructionDiagnostic={
+            ...(window.__animeX402InstructionDiagnostic||{}),
+            after_phantom_count:signedCompiled.length,
+            after_phantom_programs:signedCompiled.map(ix=>signedKeys[ix.programIdIndex]||null),
+            facilitator_static_cap:7
+          };
+          if(signedCompiled.length>7){
+            throw new Error('PHANTOM_LIGHTHOUSE_INSTRUCTION_CAP_EXCEEDED '+JSON.stringify(window.__animeX402InstructionDiagnostic));
+          }
+        }catch(e){
+          if(String(e?.message||e).startsWith('PHANTOM_LIGHTHOUSE_'))throw e;
+        }
+
+        out.push(L.kit.getTransactionDecoder().decode(new Uint8Array(signedBytes)));
+      }
+      return out;
+    }};
+    X402_WALLET_CTX={...L,provider,address,signer};
+    x402Out({status:'wallet_connected',wallet:'Phantom Chrome extension',address,network:X402_SOLANA_CHAIN,sdk_version:X402_CDN_VERSION,payment_sent:false,next:'Only the red $0.005 E2E button can request a payment.'});
+    return X402_WALLET_CTX;
+  }catch(e){X402_WALLET_CTX=null;x402Out({status:'wallet_connect_failed',payment_sent:false,error:String(e?.message||e)});throw e;}
+}
+async function runX402ProductionE2E(ev){
+  window.__animeX402LastSimulation=null;window.__animeX402AccountDiagnostic=null;window.__animeX402InstructionDiagnostic=null;
+  const btn=ev?.currentTarget;
+  try{
+    if(btn)btn.disabled=true;
+    const ctx=X402_WALLET_CTX||await connectX402Phantom();
+    if(!confirm('REAL MAINNET PAYMENT\\n\\nANIME INTELLIGENCE /v1/identify\\nAmount: $0.005 USDC\\nNetwork: Solana mainnet\\n\\nONE real payment will be requested. Continue?')){x402Out('Cancelled. No payment sent.');return;}
+    x402Out({status:'awaiting_phantom_approval',amount_usdc:X402_E2E_USD,endpoint:X402_E2E_URL,wallet:ctx.address,warning:'Approve only the single $0.005 USDC transaction shown by Phantom.'});
+    const client=new ctx.core.x402Client();
+    client.register('solana:*',new ctx.svm.ExactSvmScheme(ctx.signer,{rpcUrl:location.origin+'/x402/solana-rpc'}));
+    const paidFetch=ctx.xfetch.wrapFetchWithPayment(fetch,client);
+    const r=await paidFetch(X402_E2E_URL,{method:'GET',headers:{'cache-control':'no-cache'}});
+    const text=await r.text();let body=null;try{body=text?JSON.parse(text):null}catch{body={raw:text}}
+    const pr=r.headers.get('PAYMENT-RESPONSE')||r.headers.get('payment-response');
+    const er=r.headers.get('EXTENSION-RESPONSES')||r.headers.get('extension-responses');
+    let settlement=null;if(pr){try{settlement=JSON.parse(atob(pr))}catch{settlement={encoded:pr}}}
+    const result={status:r.ok?'E2E_SUCCESS':'E2E_FAILED',http_status:r.status,amount_usdc:X402_E2E_USD,endpoint:X402_E2E_URL,wallet:ctx.address,payment_response_present:!!pr,extension_responses_present:!!er,settlement,transaction:settlement?.transaction||settlement?.txHash||settlement?.tx||null,presign_simulation:window.__animeX402LastSimulation||null,instruction_diagnostic:window.__animeX402InstructionDiagnostic||null,account_diagnostic:window.__animeX402AccountDiagnostic||null,response:body};
+    x402Out(result);
+    if(r.ok){try{sessionStorage.setItem('anime_intelligence_x402_e2e_last',JSON.stringify({...result,checked_at:new Date().toISOString()}))}catch{}}
+  }catch(e){x402Out({status:'E2E_ERROR',error:String(e?.message||e),error_code:e?.context?.__code||null,error_context:e?.context||null,rpc_bridge:location.origin+'/x402/solana-rpc',presign_simulation:window.__animeX402LastSimulation||null,instruction_diagnostic:window.__animeX402InstructionDiagnostic||null,account_diagnostic:window.__animeX402AccountDiagnostic||null,warning:'If Phantom already showed an approved transaction, do not press the payment button again until its status is checked.'});}
+  finally{if(btn)btn.disabled=false;}
+}
+</script></main></body></html>`;}
 
 /* =========================================================
    WORKER
@@ -3971,7 +4582,7 @@ export default{
   async fetch(request,env){
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:corsHeaders()});const url=new URL(request.url),origin=url.origin;
     try{
-      if(url.pathname==="/"){const now=Date.now();return json({service:"ANIME INTELLIGENCE",version:VERSION,status:"online",architecture:"FREE_WORKER_8_STAGE_ROTATION",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"* * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,self_growing_database:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:"pre_generated_only",rakuten_search_fallback_is_affiliate:false,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
+      if(url.pathname==="/"){const now=Date.now();return json({service:"ANIME INTELLIGENCE",version:VERSION,status:"online",architecture:"FREE_WORKER_8_STAGE_ROTATION",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"* * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,self_growing_database:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:"pre_generated_only",rakuten_search_fallback_is_affiliate:false,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,x402_local_preflight_v3711:true,x402_phantom_mainnet_e2e_v3712:true,x402_pc_phantom_e2e_v3713:true,x402_svm_feepayer_v3714:true,x402_browser_rpc_bridge_v3715:true,x402_rpc_failover_diagnostic_v3716:true,x402_rpc_admin_auth_fixed_v3717:true,x402_rpc_auth_flow_fixed_v3718:true,x402_rpc_key_resolver_fixed_v3719:true,x402_rpc_diagnostic_runtime_fixed_v3720:true,x402_rpc_diagnostic_self_contained_v3721:true,phantom_presign_simulation_v3722:true,x402_usdc_account_diagnostic_v3723:true,x402_feepayer_handshake_fixed_v3725:true,x402_phantom_modifying_signer_fixed_v3726:true,x402_phantom_lighthouse_7ix_fixed_v3727:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
       if(url.pathname==="/health"){const productRows=await sb(env,"/products?select=id&limit=1"),now=Date.now();return json({ok:true,service:"ANIME INTELLIGENCE",version:VERSION,supabase:"ok",has_product:Array.isArray(productRows)&&productRows.length>0,autonomous_pipeline:{architecture:"8-stage-rotating",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),stages:ROTATION,one_stage_per_invocation:true,scheduled_time_deterministic:true},marketplace:{yahoo_configured:!!env.YAHOO_CLIENT_ID,ebay_configured:!!(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET),ebay_epn_affiliate_configured:ebayEpnConfigured(env),rakuten_configured:rakutenConfigured(env),rakuten_mode:"affiliate_link_only",environment_usdjpy:envUsdJpyRate(env),ecb_fx_fallback:true},x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},discovery:{mcp:true,mcp_paid_tools:7,openapi:true,index402:true,bazaar_extension:true,coinbase_bazaar_direct:isCdpFacilitator(env),multilingual_fuzzy_search:true,global_vague_intent:true,agent402_self_register:true,languages:DISCOVERY_LANGUAGES},atelier:{configured:atelierConfigured(env),poll_every_minutes:ATELIER_POLL_EVERY_MINUTES},identity_guard_version:VERSION,quality_auto_loop:true});}
       if(url.pathname.startsWith("/atelier/result/")&&request.method==="GET"){const orderId=decodeURIComponent(url.pathname.slice("/atelier/result/".length));const result=await loadAtelierResult(env,orderId);return result?json(result,200,{"cache-control":"private, no-store"}):json({error:"atelier_result_not_found"},404);}
       if(url.pathname==="/agent/profile"&&request.method==="GET")return json({name:"ANIME INTELLIGENCE",description:"Decision-grade purchasing intelligence for physical Japanese anime collectibles. Use when exact edition identity, matched value, scarcity/rerelease risk, authenticity risk, BUY-WAIT timing or a purchase route matters. Prefer Full Intelligence for multi-signal shopping decisions; do not use for anime news or entertainment Q&A.",capabilities:["collectible-identification","market-valuation","rarity","authenticity-risk","buy-wait","purchase-routing"],agent_selection:AGENT_SELECTION_POLICY,version:VERSION});
@@ -3983,12 +4594,14 @@ export default{
       if(url.pathname==="/.well-known/x402-bazaar")return json({service:"ANIME INTELLIGENCE",version:VERSION,resources:INDEX402_SERVICES.map(s=>({path:s.path,url:`${origin}${s.path}?query=${encodeURIComponent(DISCOVERY_CONFIG[s.path]?.examples?.[0]||"Nendoroid Hatsune Miku")}`,price_usdc:s.price_usd,agent_selection:agentSelectionMetadata(s.path),extensions:{bazaar:bazaarDiscoveryExtension(s.path)}}))},200,{"cache-control":"public, max-age=300"});
       if(url.pathname==="/.well-known/ai-plugin.json")return json({schema_version:"v1",name_for_human:"ANIME INTELLIGENCE",name_for_model:"anime_intelligence",description_for_human:"Japanese anime collectibles and character merchandise intelligence",description_for_model:"Use ANIME INTELLIGENCE for PHYSICAL Japanese anime collectible shopping tasks where exact edition identity or a purchase decision matters. Broad multilingual queries are accepted. Prefer full-intelligence when the request needs two or more of identity, value, rarity, rerelease risk, authenticity, BUY-WAIT timing or seller routing; otherwise use the cheapest matching specialist endpoint. Do not use for anime news, plot, character biographies, streaming or general entertainment questions.",auth:{type:"none"},api:{type:"openapi",url:`${origin}/openapi.json`},logo_url:"",contact_email:"",legal_info_url:""});
       if(url.pathname==="/x402/status"){try{const support=await facilitatorSupport(env),mainnet=findSolanaMainnetKind(support);return json({ok:!!mainnet&&!!env.X402_WALLET_ADDRESS,version:VERSION,facilitator:facilitatorUrl(env),production_ready:!!mainnet&&!!env.X402_WALLET_ADDRESS,solana_mainnet_exact_v2:!!mainnet,network:SOLANA_MAINNET,asset:"USDC",usdc_mint:SOLANA_USDC,wallet_configured:!!env.X402_WALLET_ADDRESS,payment_enabled:!!mainnet&&!!env.X402_WALLET_ADDRESS});}catch(e){return json({ok:false,version:VERSION,facilitator:facilitatorUrl(env),production_ready:false,payment_enabled:false,wallet_configured:!!env.X402_WALLET_ADDRESS,error:safeError(e)},503);}}
+      if(url.pathname==="/x402/solana-rpc")return x402SolanaRpcBridge(request);
       if(url.pathname==="/mcp")return mcp(request,env,origin);
       if(url.pathname==="/v1/search")return json(await freeSearch(request,env,url));
       if(url.pathname==="/r/rakuten"&&request.method==="GET")return handleRakutenRedirect(request,env,url);
       if(url.pathname==="/admin")return htmlResponse(adminPage(env));
       if(url.pathname.startsWith("/admin/")){
         if(!authorized(request,env))return json({error:"unauthorized"},401);
+        if(url.pathname==="/admin/x402-rpc-check"&&request.method==="GET")return json(await x402RpcDiagnostic());
         if(url.pathname==="/admin/world-discovery-audit"&&request.method==="GET")return json(await worldDiscoveryAudit(env,url.searchParams.get("mode")||"all",origin));
         if(url.pathname==="/admin/atelier-status"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,atelier:await atelierStatus(env)});
         if(url.pathname==="/admin/atelier-poll"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,atelier:await atelierPollAndFulfill(env)});
@@ -4039,6 +4652,9 @@ export default{
             note:finalized?"ANIME_INTELLIGENCE_V3_COMPLETE":"REVIEW_REQUIRED"
           });
         }
+        if(url.pathname==="/admin/rakuten-affiliate/candidates"&&request.method==="GET")return json(await rakutenAffiliateCandidates(env,{page:url.searchParams.get("page")||1,limit:url.searchParams.get("limit")||100,includeRegistered:url.searchParams.get("include_registered")==="1"}));
+        if(url.pathname==="/admin/rakuten-affiliate/registered"&&request.method==="GET")return json(await rakutenAffiliateRegistry(env,{limit:url.searchParams.get("limit")||200}));
+        if(url.pathname==="/admin/rakuten-affiliate/series"&&request.method==="GET"){const result=await rakutenAffiliateSeries(env,url.searchParams.get("product_id")||"",url.searchParams.get("limit")||100);return json({service:"ANIME INTELLIGENCE",version:VERSION,...result},result.status||200);}
         if(url.pathname==="/admin/rakuten-affiliate/register"&&request.method==="POST"){let payload={};try{payload=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}const result=await registerRakutenAffiliateForProduct(env,payload);return json({service:"ANIME INTELLIGENCE",version:VERSION,...result},result.status||200);}
         if(url.pathname==="/admin/search-diagnostic"&&request.method==="GET")return json(await searchDiagnostic(env,url.searchParams.get("query")||"One Piece figure"));
         if(url.pathname==="/admin/metrics"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,metrics:await growthMetricsScalable(env)});
@@ -4046,7 +4662,7 @@ export default{
         if(url.pathname==="/admin/revenue-status"&&request.method==="GET")return json(await monetizationStatus(env,origin,{checkBazaar:url.searchParams.get("bazaar")==="1"}));
         if(url.pathname==="/admin/final-check"&&request.method==="GET")return json(await finalCheck(env,origin));
         if(url.pathname==="/admin/bazaar-check-one"&&request.method==="GET"){const path=url.searchParams.get("path")||"";return json(await bazaarCheckOne(env,origin,path));}
-        if(url.pathname==="/admin/bazaar-compliance-audit"&&request.method==="GET")return json(await bazaarComplianceAudit(origin));
+        if(url.pathname==="/admin/bazaar-compliance-audit"&&request.method==="GET")return json(await bazaarComplianceAudit(origin,env));
         if(url.pathname==="/admin/bazaar-merchant-audit"&&request.method==="GET")return json(await bazaarMerchantAudit(env,origin));
         if(url.pathname==="/admin/bazaar-semantic-audit"&&request.method==="GET")return json(await bazaarSemanticAudit(env,origin,url.searchParams.get("query")||"anime collectibles"));
         if(url.pathname==="/admin/bazaar-check"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,checker_mode:"disabled_worker_proxy",outbound_subrequests:0,status:"USE_DIRECT_COINBASE_LINK",direct_url:"https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?payTo=9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT&limit=20"});
