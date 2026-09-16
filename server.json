@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Mike05102/anime-intelligence-mcp",
   "title": "ANIME INTELLIGENCE",
-  "description": "Paid anime collectible intelligence for exact identity, value, risk, BUY/WAIT and purchase routing.",
+  "description": "AI-native Japanese anime collectible purchase intelligence: exact product identity, market value, rarity, authenticity risk, BUY/WAIT timing, listing match, deadlines, landed cost, price history and purchase routing for Japan and global buyers.",
   "websiteUrl": "https://anime-intelligence.goodmy0312.workers.dev",
   "repository": {
     "url": "https://github.com/Mike05102/anime-intelligence-mcp",
     "source": "github"
   },
-  "version": "3.7.27",
+  "version": "3.7.33",
   "remotes": [
     {
       "type": "streamable-http",
