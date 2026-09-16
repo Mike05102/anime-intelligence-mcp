@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.32";
+const VERSION="3.7.33";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -3079,6 +3079,41 @@ function discoveryTaskQueries(path){return DISCOVERY_TASK_QUERIES[path]||[];}
 function combinedDiscoveryKeywords(){return [...new Set([...GLOBAL_DISCOVERY_KEYWORDS,...COMMERCIAL_DISCOVERY_KEYWORDS])];}
 
 
+
+// v3.7.33 - Coinbase Bazaar / Agentic Market exposure hardening.
+// Follow the official Bazaar metadata limits: serviceName <= 32 printable ASCII
+// chars and no more than 5 short printable-ASCII tags. Use a canonical resource
+// URL without query parameters so different buyer queries do not fragment the
+// same endpoint into separate catalog identities.
+const BAZAAR_SERVICE_NAME="ANIME INTELLIGENCE";
+const BAZAAR_TAGS={
+  "/v1/identify":["anime","collectibles","product-id","japan","shopping"],
+  "/v1/market":["anime","collectibles","market-price","japan","shopping"],
+  "/v1/rarity":["anime","collectibles","rarity","rerelease","shopping"],
+  "/v1/authenticity":["anime","collectibles","authenticity","bootleg-risk","shopping"],
+  "/v1/buy-wait":["anime","collectibles","buy-or-wait","timing","shopping"],
+  "/v1/best-place":["anime","collectibles","where-to-buy","japan","shopping"],
+  "/v1/listing-match":["anime","collectibles","listing-match","edition","shopping"],
+  "/v1/deadline":["anime","collectibles","preorder","deadline","shopping"],
+  "/v1/landed-cost":["anime","collectibles","landed-cost","shipping","shopping"],
+  "/v1/price-history":["anime","collectibles","price-history","valuation","shopping"],
+  "/v1/full-intelligence":["anime","collectibles","purchase-decision","japan","shopping"]
+};
+function bazaarTags(path){
+  return (BAZAAR_TAGS[path]||["anime","collectibles","japan","shopping"]).slice(0,5);
+}
+function canonicalPaidResourceUrl(request,path){
+  const u=new URL(request.url);
+  return `${u.origin}${path}`;
+}
+function bazaarExampleQueryParams(path){
+  const d=DISCOVERY_CONFIG[path]||{};
+  const base={query:d.examples?.[0]||"Nendoroid Hatsune Miku",lang:"en"};
+  if(path==="/v1/landed-cost")return {...base,buyer_country:"JP"};
+  if(path==="/v1/listing-match")return {...base,listing_title:"Official Japanese listing title"};
+  return base;
+}
+
 const INDEX402_SERVICES=[
   ["/v1/identify","ANIME INTELLIGENCE - Identify Exact Anime Figure or Japanese Collectible",.005],
   ["/v1/market","ANIME INTELLIGENCE - Anime Figure Market Value & Price Comparison",.01],
@@ -3248,7 +3283,11 @@ function bazaarInfoSchema(){
               query:{type:"string",description:"Product name, JAN/EAN-13, model number or identifying description."},
               id:{type:"string",description:"ANIME INTELLIGENCE canonical product UUID."},
               lang:{type:"string",enum:DISCOVERY_LANGUAGES},
-              refresh:{type:"string",enum:["0","1"]}
+              refresh:{type:"string",enum:["0","1"]},
+              buyer_country:{type:"string",description:"ISO alpha-2 buyer destination; defaults to JP for Japan buyers."},
+              postal_code:{type:"string",description:"Optional destination postal code for landed-cost context."},
+              listing_url:{type:"string",description:"Optional listing URL for listing-match."},
+              listing_title:{type:"string",description:"Optional listing title for listing-match when URL is unavailable."}
             },
             additionalProperties:false
           }
@@ -3274,7 +3313,7 @@ function bazaarDiscoveryExtension(path){
         type:"http",
         method:"GET",
         discoverable:true,
-        queryParams:{query:d.examples?.[0]||"Nendoroid Hatsune Miku",lang:"en"}
+        queryParams:bazaarExampleQueryParams(path)
       },
       output:{type:"json",example:bazaarOutputExample(path)},
       agentSelection:agentSelectionMetadata(path)
@@ -3295,34 +3334,19 @@ function bazaarDiscoveryExtension(path){
 // the dedicated discovery documents. Payment semantics and settlement are
 // unchanged.
 function bazaarPaymentExtension(path){
-  const d=DISCOVERY_CONFIG[path]||{};
-  const price=endpointPriceUsd(path);
   return {
     info:{
       input:{
         type:"http",
         method:"GET",
-        discoverable:true,
-        queryParams:{query:d.examples?.[0]||"Nendoroid Hatsune Miku",lang:"en"}
+        queryParams:bazaarExampleQueryParams(path)
       },
       output:{
         type:"json",
-        example:{
-          service:"ANIME INTELLIGENCE",
-          endpoint:path,
-          value:d.value||null
-        }
+        example:bazaarOutputExample(path)
       }
     },
-    schema:bazaarInfoSchema(),
-    discovery:{
-      category:AGENT_SELECTION_POLICY.category,
-      intent:d.intent||null,
-      when_to_use:d.when_to_use||null,
-      buyer_outcome:d.buyer_outcome||d.value||null,
-      selection_triggers:(d.selection_triggers||[]).slice(0,8),
-      price_usdc:price
-    }
+    schema:bazaarInfoSchema()
   };
 }
 
@@ -3353,11 +3377,12 @@ async function paymentRequirement(request,env,amount,description,supportOverride
     : rawResourceDescription;
 
   const resource={
-    url:request.url,
+    url:canonicalPaidResourceUrl(request,path),
     description:resourceDescription,
     mimeType:"application/json",
-    serviceName:discovery.service_name||"ANIME INTELLIGENCE",
-    tags:[...(discovery.tags||[]),...(discovery.selection_triggers||[])]
+    serviceName:BAZAAR_SERVICE_NAME,
+    tags:bazaarTags(path),
+    iconUrl:`${new URL(request.url).origin}/icon.svg`
   };
 
   const accepted={
@@ -3382,7 +3407,20 @@ async function paymentRequirement(request,env,amount,description,supportOverride
   };
 }
 
-async function facilitatorPost(env,path,paymentPayload,accepted){const base=facilitatorUrl(env),u=new URL(`${base}${path}`),requestPath=u.pathname+u.search,auth=await facilitatorHeaders(env,"POST",requestPath);const r=await fetch(u.toString(),{method:"POST",headers:{...auth,"content-type":"application/json"},body:JSON.stringify({x402Version:2,paymentPayload,paymentRequirements:accepted})});const raw=await r.text();let body=null;try{body=raw?JSON.parse(raw):null;}catch{body={raw};}if(!r.ok)throw new Error(`Facilitator ${path} ${r.status}: ${JSON.stringify(body)}`);return body;}
+function decodeExtensionResponsesHeader(v){
+  if(!v)return null;
+  try{return unb64(v);}catch{return {raw:String(v).slice(0,2000)};}
+}
+async function facilitatorPost(env,path,paymentPayload,accepted){
+  const base=facilitatorUrl(env),u=new URL(`${base}${path}`),requestPath=u.pathname+u.search,auth=await facilitatorHeaders(env,"POST",requestPath);
+  const r=await fetch(u.toString(),{method:"POST",headers:{...auth,"content-type":"application/json"},body:JSON.stringify({x402Version:2,paymentPayload,paymentRequirements:accepted})});
+  const raw=await r.text();let body=null;
+  try{body=raw?JSON.parse(raw):null;}catch{body={raw};}
+  if(!r.ok)throw new Error(`Facilitator ${path} ${r.status}: ${JSON.stringify(body)}`);
+  const extensionResponses=decodeExtensionResponsesHeader(r.headers.get("extension-responses"));
+  if(body&&typeof body==="object"&&!Array.isArray(body))body.__extension_responses=extensionResponses;
+  return body;
+}
 
 function requestTelemetry(request,url=null){
   const u=url||new URL(request.url),ua=(request.headers.get("user-agent")||"").slice(0,300),referer=(request.headers.get("referer")||"").slice(0,500),country=(request.headers.get("cf-ipcountry")||"").slice(0,8),requestId=request.headers.get("cf-ray")||crypto.randomUUID();
@@ -3543,11 +3581,12 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
     : fallbackDescription;
 
   const fallbackResource={
-    url:request.url,
+    url:canonicalPaidResourceUrl(request,path),
     description:safeDescription,
     mimeType:"application/json",
-    serviceName:discovery.service_name||"ANIME INTELLIGENCE",
-    tags:[...(discovery.tags||[]),...(discovery.selection_triggers||[])]
+    serviceName:BAZAAR_SERVICE_NAME,
+    tags:bazaarTags(path),
+    iconUrl:`${new URL(request.url).origin}/icon.svg`
   };
 
   const enrichedPayload={
@@ -3632,6 +3671,7 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
         asset:"USDC",
         response_status:200,
         fee_payer:paidRequirement.extra.feePayer,
+        bazaar_catalog_response:settlement?.__extension_responses?.bazaar||null,
         nonblocking_telemetry:true
       }
     }));
@@ -4853,7 +4893,8 @@ export default{
   async fetch(request,env,ctx){
     if(request.method==="OPTIONS")return new Response(null,{status:204,headers:corsHeaders()});const url=new URL(request.url),origin=url.origin;
     try{
-      if(url.pathname==="/"){const now=Date.now();return json({service:"ANIME INTELLIGENCE",version:VERSION,status:"online",architecture:"FREE_WORKER_8_STAGE_ROTATION",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"* * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,self_growing_database:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:"pre_generated_only",rakuten_search_fallback_is_affiliate:false,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,x402_local_preflight_v3711:true,x402_phantom_mainnet_e2e_v3712:true,x402_pc_phantom_e2e_v3713:true,x402_svm_feepayer_v3714:true,x402_browser_rpc_bridge_v3715:true,x402_rpc_failover_diagnostic_v3716:true,x402_rpc_admin_auth_fixed_v3717:true,x402_rpc_auth_flow_fixed_v3718:true,x402_rpc_key_resolver_fixed_v3719:true,x402_rpc_diagnostic_runtime_fixed_v3720:true,x402_rpc_diagnostic_self_contained_v3721:true,phantom_presign_simulation_v3722:true,x402_usdc_account_diagnostic_v3723:true,x402_feepayer_handshake_fixed_v3725:true,x402_phantom_modifying_signer_fixed_v3726:true,x402_phantom_lighthouse_7ix_fixed_v3727:true,semantic_commercial_discovery_v3728:true,agent_task_query_pack_v3728:true,free_to_paid_routing_v3728:true,compact_x402_discovery_header_v3730:true,commerce_decision_expansion_v3731:true,japan_buyer_first_class_v3731:true,listing_match_v3731:true,purchase_deadline_v3731:true,landed_cost_v3731:true,price_history_v3731:true,x402_fast_gate_v3732:true,nonblocking_commerce_telemetry_v3732:true,kpi_recent_history_revenue_v3732:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
+      if(url.pathname==="/icon.svg"&&request.method==="GET")return new Response(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#0b1020"/><path d="M55 190L104 58h48l49 132h-37l-10-31H101l-10 31H55zm57-63h32l-16-50-16 50z" fill="#fff"/><circle cx="190" cy="66" r="18" fill="#fff"/></svg>`,{status:200,headers:corsHeaders({"content-type":"image/svg+xml; charset=utf-8","cache-control":"public, max-age=86400"})});
+      if(url.pathname==="/"){const now=Date.now();return json({service:"ANIME INTELLIGENCE",version:VERSION,status:"online",architecture:"FREE_WORKER_8_STAGE_ROTATION",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"* * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,self_growing_database:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:"pre_generated_only",rakuten_search_fallback_is_affiliate:false,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,x402_local_preflight_v3711:true,x402_phantom_mainnet_e2e_v3712:true,x402_pc_phantom_e2e_v3713:true,x402_svm_feepayer_v3714:true,x402_browser_rpc_bridge_v3715:true,x402_rpc_failover_diagnostic_v3716:true,x402_rpc_admin_auth_fixed_v3717:true,x402_rpc_auth_flow_fixed_v3718:true,x402_rpc_key_resolver_fixed_v3719:true,x402_rpc_diagnostic_runtime_fixed_v3720:true,x402_rpc_diagnostic_self_contained_v3721:true,phantom_presign_simulation_v3722:true,x402_usdc_account_diagnostic_v3723:true,x402_feepayer_handshake_fixed_v3725:true,x402_phantom_modifying_signer_fixed_v3726:true,x402_phantom_lighthouse_7ix_fixed_v3727:true,semantic_commercial_discovery_v3728:true,agent_task_query_pack_v3728:true,free_to_paid_routing_v3728:true,compact_x402_discovery_header_v3730:true,commerce_decision_expansion_v3731:true,japan_buyer_first_class_v3731:true,listing_match_v3731:true,purchase_deadline_v3731:true,landed_cost_v3731:true,price_history_v3731:true,x402_fast_gate_v3732:true,nonblocking_commerce_telemetry_v3732:true,kpi_recent_history_revenue_v3732:true,bazaar_spec_metadata_v3733:true,bazaar_canonical_resource_url_v3733:true,bazaar_service_metadata_limits_v3733:true,bazaar_extension_response_observability_v3733:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
       if(url.pathname==="/health"){const productRows=await sb(env,"/products?select=id&limit=1"),now=Date.now();return json({ok:true,service:"ANIME INTELLIGENCE",version:VERSION,supabase:"ok",has_product:Array.isArray(productRows)&&productRows.length>0,autonomous_pipeline:{architecture:"8-stage-rotating",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),stages:ROTATION,one_stage_per_invocation:true,scheduled_time_deterministic:true},marketplace:{yahoo_configured:!!env.YAHOO_CLIENT_ID,ebay_configured:!!(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET),ebay_epn_affiliate_configured:ebayEpnConfigured(env),rakuten_configured:rakutenConfigured(env),rakuten_mode:"affiliate_link_only",environment_usdjpy:envUsdJpyRate(env),ecb_fx_fallback:true},x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},discovery:{mcp:true,mcp_paid_tools:11,openapi:true,index402:true,bazaar_extension:true,coinbase_bazaar_direct:isCdpFacilitator(env),multilingual_fuzzy_search:true,global_vague_intent:true,agent402_self_register:true,languages:DISCOVERY_LANGUAGES},atelier:{configured:atelierConfigured(env),poll_every_minutes:ATELIER_POLL_EVERY_MINUTES},identity_guard_version:VERSION,quality_auto_loop:true});}
       if(url.pathname.startsWith("/atelier/result/")&&request.method==="GET"){const orderId=decodeURIComponent(url.pathname.slice("/atelier/result/".length));const result=await loadAtelierResult(env,orderId);return result?json(result,200,{"cache-control":"private, no-store"}):json({error:"atelier_result_not_found"},404);}
       if(url.pathname==="/agent/profile"&&request.method==="GET")return json({name:"ANIME INTELLIGENCE",description:"Decision-grade purchasing intelligence for physical Japanese anime collectibles. Use when exact edition identity, matched value, scarcity/rerelease risk, authenticity risk, BUY-WAIT timing or a purchase route matters. Prefer Full Intelligence for multi-signal shopping decisions; do not use for anime news or entertainment Q&A.",capabilities:["collectible-identification","market-valuation","rarity","authenticity-risk","buy-wait","purchase-routing"],commercial_discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,task_queries:DISCOVERY_TASK_QUERIES,agent_selection:AGENT_SELECTION_POLICY,version:VERSION});
