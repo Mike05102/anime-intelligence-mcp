@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.33";
+const VERSION="3.7.34";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -3453,7 +3453,11 @@ function deferTelemetry(ctx,promise){
 }
 
 async function x402Gate(request,env,amount,description,work,ctx=null){
-  deferTelemetry(ctx,logRequestStage(env,request,"x402_gate_entered",{amount_atomic:Number(amount),amount_usdc:Number(amount)/1000000,metadata:{protocol:"x402",version:2,nonblocking_telemetry:true}}));
+  await logRequestStage(env,request,"x402_gate_entered",{
+    amount_atomic:Number(amount),
+    amount_usdc:Number(amount)/1000000,
+    metadata:{protocol:"x402",version:2,critical_telemetry:true,nonblocking_telemetry:false}
+  });
 
   /*
     v3.7.25 â preserve the exact PaymentRequirements from the original 402 handshake.
@@ -3485,7 +3489,7 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
       return json({error:"x402_configuration_error",detail:safeError(e)},503);
     }
 
-    deferTelemetry(ctx,logRequestStage(env,request,"payment_required",{
+    await logRequestStage(env,request,"payment_required",{
       amount_atomic:Number(amount),
       amount_usdc:Number(amount)/1000000,
       payment_network:cfg.accepted.network,
@@ -3494,9 +3498,10 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
         protocol:"x402",
         version:2,
         fee_payer:cfg.accepted?.extra?.feePayer||null,
-        nonblocking_telemetry:true
+        critical_telemetry:true,
+        nonblocking_telemetry:false
       }
-    }));
+    });
 
     const probeHeaders={
       "PAYMENT-REQUIRED":b64(JSON.stringify(cfg.required)),
