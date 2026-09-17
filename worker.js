@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.34";
+const VERSION="3.7.35";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2125,7 +2125,16 @@ async function sha256Hex(value=""){
 async function logEvent(env,eventType,detail={}){
   if(!env.SUPABASE_URL||!env.SUPABASE_SECRET_KEY)return false;
   try{
-    const metadata={version:VERSION,...(detail.metadata||{})};
+    // v3.7.35 â reserve metadata.version exclusively for the Worker/app version.
+    // Older x402 telemetry used metadata.version=2 for the protocol version,
+    // which overwrote the app version and caused current-version KPI filtering
+    // to silently exclude valid x402_gate_entered/payment_required/paid events.
+    const incomingMetadata={...(detail.metadata||{})};
+    if(incomingMetadata.protocol==="x402"&&incomingMetadata.version!=null&&incomingMetadata.x402_version==null){
+      incomingMetadata.x402_version=incomingMetadata.version;
+    }
+    delete incomingMetadata.version;
+    const metadata={...incomingMetadata,version:VERSION};
     await sb(env,"/api_events",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({occurred_at:new Date().toISOString(),event_type:eventType,endpoint:detail.endpoint||null,product_id:detail.product_id?String(detail.product_id):null,payer_hash:detail.payer_hash||null,amount_atomic:detail.amount_atomic!=null?Number(detail.amount_atomic):null,amount_usdc:detail.amount_usdc!=null?Number(detail.amount_usdc):null,payment_network:detail.payment_network||null,transaction_hash:detail.transaction_hash||null,metadata})});
     return true;
   }catch(e){console.warn("KPI event logging failed",safeError(e));return false;}
@@ -3453,11 +3462,11 @@ function deferTelemetry(ctx,promise){
 }
 
 async function x402Gate(request,env,amount,description,work,ctx=null){
-  await logRequestStage(env,request,"x402_gate_entered",{
+  deferTelemetry(ctx,logRequestStage(env,request,"x402_gate_entered",{
     amount_atomic:Number(amount),
     amount_usdc:Number(amount)/1000000,
-    metadata:{protocol:"x402",version:2,critical_telemetry:true,nonblocking_telemetry:false}
-  });
+    metadata:{protocol:"x402",x402_version:2,critical_telemetry:false,nonblocking_telemetry:true}
+  }));
 
   /*
     v3.7.25 â preserve the exact PaymentRequirements from the original 402 handshake.
@@ -3489,19 +3498,19 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
       return json({error:"x402_configuration_error",detail:safeError(e)},503);
     }
 
-    await logRequestStage(env,request,"payment_required",{
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_required",{
       amount_atomic:Number(amount),
       amount_usdc:Number(amount)/1000000,
       payment_network:cfg.accepted.network,
       metadata:{
         response_status:402,
         protocol:"x402",
-        version:2,
+        x402_version:2,
         fee_payer:cfg.accepted?.extra?.feePayer||null,
-        critical_telemetry:true,
-        nonblocking_telemetry:false
+        critical_telemetry:false,
+        nonblocking_telemetry:true
       }
-    });
+    }));
 
     const probeHeaders={
       "PAYMENT-REQUIRED":b64(JSON.stringify(cfg.required)),
