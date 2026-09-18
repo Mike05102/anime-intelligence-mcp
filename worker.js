@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.43";
+const VERSION="3.7.44";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -1498,13 +1498,44 @@ const GLOBAL_VAGUE_INTENT_TERMS=["anime","anime merch","anime merchandise","anim
 
 const PRODUCT_TYPE_SEARCH_EQUIVALENTS={figure:["figure","nendoroid","figma"],plush:["plush"],trading_card:["trading_card"],model_kit:["model_kit"],acrylic_goods:["acrylic_goods"],keychain:["keychain"],badge:["badge"],lottery_prize:["lottery_prize"],sneaker:["sneaker"],apparel:["apparel"]};
 
+function normalizedUnicodePhrase(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
 function normalizedSearchPhrase(v){return foldLatinForSearch(String(v||"").normalize("NFKC")).replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
-function phraseIncludes(haystack,needle){const h=normalizedSearchPhrase(haystack),n=normalizedSearchPhrase(needle);return !!n&&h.includes(n);}
+function phraseIncludes(haystack,needle){
+  const hu=normalizedUnicodePhrase(haystack),nu=normalizedUnicodePhrase(needle);
+  if(nu&&hu.includes(nu))return true;
+  const h=normalizedSearchPhrase(haystack),n=normalizedSearchPhrase(needle);
+  return !!n&&h.includes(n);
+}
 function strictEntityAliasMatch(haystack,needle){
+  const hu=normalizedUnicodePhrase(haystack),nu=normalizedUnicodePhrase(needle);
+  if(!nu)return false;
+  if(/^[a-z0-9 ]+$/.test(nu)){if((` ${hu} `).includes(` ${nu} `))return true;}else if(hu.includes(nu))return true;
   const h=normalizedSearchPhrase(haystack),n=normalizedSearchPhrase(needle);
   if(!n)return false;
   if(/^[a-z0-9 ]+$/.test(n))return (` ${h} `).includes(` ${n} `);
   return h.includes(n);
+}
+function directMultilingualProductTypeHints(raw=""){
+  const x=String(raw||"").normalize("NFKC");const out=[];const add=t=>{if(!out.includes(t))out.push(t);};
+  if(/(?:figure|figurine|nendoroid|figma|\u30d5\u30a3\u30ae\u30e5\u30a2|\u306d\u3093\u3069\u308d\u3044\u3069|\u624b\u529e|\u624b\u8fa6|\ud53c\uaddc\uc5b4|\u0444\u0438\u0433\u0443\u0440\u043a|\u0645\u062c\u0633\u0645|figurka|figura)/i.test(x))add("figure");
+  if(/(?:plush|plushie|stuffed toy|soft toy|\u306c\u3044\u3050\u308b\u307f|\u6bdb\u7ed2\u73a9\u5177|\u6bdb\u7d68\u73a9\u5177|\ubd09\uc81c\uc778\ud615|peluche|plushtier|stofftier|boneka|\u0e15\u0e38\u0e4a\u0e01\u0e15\u0e32|thÃº bÃ´ng|thu bong|knuffel)/i.test(x))add("plush");
+  if(/(?:trading card|tcg|\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9|\u30c8\u30ec\u30ab|\u96c6\u6362\u5f0f\u5361\u724c|\u96c6\u63db\u5f0f\u5361\u724c|\ud2b8\ub808\uc774\ub529 \uce74\ub4dc)/i.test(x))add("trading_card");
+  if(/(?:model kit|gunpla|plastic model|\u30d7\u30e9\u30e2\u30c7\u30eb|\u30ac\u30f3\u30d7\u30e9|\u6a21\u578b\u5957\u4ef6|\ud504\ub77c\ubaa8\ub378)/i.test(x))add("model_kit");
+  if(/(?:acrylic stand|standee|\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9|\u30a2\u30af\u30b9\u30bf|\u4e9a\u514b\u529b\u7acb\u724c|\uc544\ud06c\ub9b4 \uc2a4\ud0e0\ub4dc)/i.test(x))add("acrylic_goods");
+  if(/(?:keychain|key ring|\u30ad\u30fc\u30db\u30eb\u30c0\u30fc|\u94a5\u5319\u6263|\ud0a4\ub9c1)/i.test(x))add("keychain");
+  if(/(?:badge|pin badge|\u7f36\u30d0\u30c3\u30b8|\u5fbd\u7ae0|\uce94\ubc43\uc9c0)/i.test(x))add("badge");
+  if(/(?:lottery prize|ichiban kuji|\u4e00\u756a\u304f\u3058|\u30d7\u30e9\u30a4\u30ba|\u666f\u54c1|\u4e00\u756a\u8d4f)/i.test(x))add("lottery_prize");
+  if(/(?:sneaker|sneakers|\u30b9\u30cb\u30fc\u30ab\u30fc|\u8fd0\u52a8\u978b|\u904b\u52d5\u978b|\uc6b4\ub3d9\ud654)/i.test(x))add("sneaker");
+  if(/(?:apparel|clothing|t[ -]?shirt|tee|hoodie|sweatshirt|jacket|jersey|swimsuit|\u30a2\u30d1\u30ec\u30eb|T\u30b7\u30e3\u30c4|\u30c6\u30a3\u30fc\u30b7\u30e3\u30c4|\u30d1\u30fc\u30ab\u30fc|\u30b9\u30a6\u30a7\u30c3\u30c8|\u30b8\u30e3\u30b1\u30c3\u30c8|\u6c34\u7740|T\u6064|\u8fde\u5e3d\u886b|\ud2f0\uc154\uce20|\ud6c4\ub4dc\ud2f0|camiseta|tee-shirt|kapuzenpullover|maglietta|moletom|\u0444\u0443\u0442\u0431\u043e\u043b\u043a\u0430|\u062a\u064a \u0634\u064a\u0631\u062a|\u0e40\u0e2a\u0e37\u0e49\u0e2d\u0e22\u0e37\u0e14|Ã¡o thun|ao thun|tiÅÃ¶rt|tisort|koszulka|kaos)/i.test(x))add("apparel");
+  return out;
+}
+function directMultilingualFranchiseHints(raw=""){
+  const x=String(raw||"").normalize("NFKC");const out=[];const add=f=>{if(!out.includes(f))out.push(f);};
+  if(/(?:pokemon|pokÃ©mon|\u30dd\u30b1\u30e2\u30f3|\u30dd\u30b1\u30c3\u30c8\u30e2\u30f3\u30b9\u30bf\u30fc|\u5b9d\u53ef\u68a6|\ud3ec\ucf13\ubaac)/i.test(x))add("Pokemon");
+  if(/(?:one\s*piece|\u30ef\u30f3\u30d4\u30fc\u30b9|\u6d77\u8d3c\u738b|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\uc6d0\ud53c\uc2a4)/i.test(x))add("ONE PIECE");
+  if(/(?:hatsune\s*miku|\u521d\u97f3\u30df\u30af|\ud558\uce20\ub124 \ubbf8\ucfe0)/i.test(x))add("Hatsune Miku");
+  if(/(?:naruto|\u30ca\u30eb\u30c8|\u706b\u5f71\u5fcd\u8005|\ub098\ub8e8\ud1a0)/i.test(x))add("NARUTO");
+  return out;
 }
 
 const MULTILINGUAL_MERCH_SUBTYPE_ALIASES={
@@ -1614,8 +1645,10 @@ function recommendationConfidenceFromRanked(ranked=[],intent=null){
 
 function multilingualQueryHints(query=""){
   const raw=String(query||"").trim(),normalized=normalizedSearchPhrase(raw),productTypes=[],franchiseGroups=[],characterGroups=[];
-  for(const [type,aliases] of Object.entries(MULTILINGUAL_PRODUCT_TYPE_ALIASES))if(aliases.some(a=>phraseIncludes(normalized,a)))productTypes.push(type);
-  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES))if(aliases.some(a=>phraseIncludes(normalized,a)))franchiseGroups.push({canonical,aliases});
+  for(const [type,aliases] of Object.entries(MULTILINGUAL_PRODUCT_TYPE_ALIASES))if(aliases.some(a=>phraseIncludes(raw,a)))productTypes.push(type);
+  for(const type of directMultilingualProductTypeHints(raw))if(!productTypes.includes(type))productTypes.push(type);
+  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES))if(aliases.some(a=>strictEntityAliasMatch(raw,a)))franchiseGroups.push({canonical,aliases});
+  for(const canonical of directMultilingualFranchiseHints(raw))if(!franchiseGroups.some(g=>g.canonical===canonical))franchiseGroups.push({canonical,aliases:MULTILINGUAL_FRANCHISE_ALIASES[canonical]||[canonical]});
   for(const group of MULTILINGUAL_CHARACTER_ALIASES){
     if(group.aliases.some(a=>strictEntityAliasMatch(normalized,a))){
       characterGroups.push(group);
@@ -4640,25 +4673,25 @@ function multilingualMerchIntentAudit(env){
 
 
 const MULTILINGUAL_AMBIGUITY_AUDIT_CASES=[
-  {query:"å¤§ããã¦å®ããã«ãã¥ã¦ã®ã¬ãããã¿",franchise:"Pokemon",character:"Pikachu",type:"plush",pref:"size:large",priority:"value"},
+  {query:"\u5927\u304d\u304f\u3066\u5b89\u3044\u30d4\u30ab\u30c1\u30e5\u30a6\u306e\u306c\u3044\u3050\u308b\u307f",franchise:"Pokemon",character:"Pikachu",type:"plush",pref:"size:large",priority:"value"},
   {query:"a large cheap Pikachu plush",franchise:"Pokemon",character:"Pikachu",type:"plush",pref:"size:large",priority:"value"},
-  {query:"æ³è¦ä¸ä¸ªå¤§çä¾¿å®ç®å¡ä¸æ¯ç»ç©å·",franchise:"Pokemon",character:"Pikachu",type:"plush",pref:"size:large",priority:"value"},
-  {query:"í¬ê³  ì ë ´í í¼ì¹´ì¸ ë´ì ì¸í",franchise:"Pokemon",character:"Pikachu",type:"plush",pref:"size:large",priority:"value"},
-  {query:"é¨å±ã«é£¾ãããã£ãããã¾ã­ã®ãã£ã®ã¥ã¢",franchise:"ONE PIECE",character:"Roronoa Zoro",type:"figure",pref:"use_case:display"},
+  {query:"\u60f3\u8981\u4e00\u4e2a\u5927\u7684\u4fbf\u5b9c\u76ae\u5361\u4e18\u6bdb\u7ed2\u73a9\u5177",franchise:"Pokemon",character:"Pikachu",type:"plush",pref:"size:large",priority:"value"},
+  {query:"\ud06c\uace0 \uc800\ub834\ud55c \ud53c\uce74\uce04 \ubd09\uc81c\uc778\ud615",franchise:"Pokemon",character:"Pikachu",type:"plush",pref:"size:large",priority:"value"},
+  {query:"\u90e8\u5c4b\u306b\u98fe\u308c\u308b\u304b\u3063\u3053\u3044\u3044\u30be\u30ed\u306e\u30d5\u30a3\u30ae\u30e5\u30a2",franchise:"ONE PIECE",character:"Roronoa Zoro",type:"figure",pref:"use_case:display"},
   {query:"a cool Zoro figure for my shelf",franchise:"ONE PIECE",character:"Roronoa Zoro",type:"figure",pref:"style:cool"},
-  {query:"ãã¬ã¼ã³ãç¨ã§å¤ããªãåé³ãã¯",franchise:"Hatsune Miku",character:"Hatsune Miku",pref:"use_case:gift",priority:"gift"},
+  {query:"\u30d7\u30ec\u30bc\u30f3\u30c8\u7528\u3067\u5916\u3055\u306a\u3044\u521d\u97f3\u30df\u30af",franchise:"Hatsune Miku",character:"Hatsune Miku",pref:"use_case:gift",priority:"gift"},
   {query:"a limited Japan-only Luffy figure",franchise:"ONE PIECE",character:"Monkey D. Luffy",type:"figure",pref:"exclusivity:japan_exclusive"},
-  {query:"æªéå°ã®æã®ã«ãã£ãã£ã®ã¥ã¢",franchise:"ONE PIECE",character:"Monkey D. Luffy",type:"figure",pref:"condition:sealed"},
+  {query:"\u672a\u958b\u5c01\u306e\u6614\u306e\u30eb\u30d5\u30a3\u30d5\u30a3\u30ae\u30e5\u30a2",franchise:"ONE PIECE",character:"Monkey D. Luffy",type:"figure",pref:"condition:sealed"},
   {query:"newest Hatsune Miku figure",franchise:"Hatsune Miku",character:"Hatsune Miku",type:"figure",pref:"time:recent"},
-  {query:"ãã®åTikTokã§è¦ãã«ãã£ã®ãã£ã®ã¥ã¢",franchise:"ONE PIECE",character:"Monkey D. Luffy",type:"figure",context:"social_post_image_or_url_not_supplied"},
+  {query:"\u3053\u306e\u524dTikTok\u3067\u898b\u305f\u30eb\u30d5\u30a3\u306e\u30d5\u30a3\u30ae\u30e5\u30a2",franchise:"ONE PIECE",character:"Monkey D. Luffy",type:"figure",context:"social_post_image_or_url_not_supplied"},
   {query:"the Luffy figure I saw on TikTok",franchise:"ONE PIECE",character:"Monkey D. Luffy",type:"figure",context:"social_post_image_or_url_not_supplied"},
-  {query:"æµ·å¤çºéãããããã«ãã®Tã·ã£ã",franchise:"NARUTO",type:"apparel",subtype:"tshirt",pref:"shipping:easy_overseas"},
+  {query:"\u6d77\u5916\u767a\u9001\u3057\u3084\u3059\u3044\u30ca\u30eb\u30c8\u306eT\u30b7\u30e3\u30c4",franchise:"NARUTO",type:"apparel",subtype:"tshirt",pref:"shipping:easy_overseas"},
   {query:"a cute Pokemon gift for a child",franchise:"Pokemon",pref:"use_case:child",priority:"gift"},
-  {query:"èµ¤ãã¦å°ããã¯ã³ãã¼ã¹ã®ã°ããº",franchise:"ONE PIECE",pref:"color:red"},
+  {query:"\u8d64\u304f\u3066\u5c0f\u3055\u3044\u30ef\u30f3\u30d4\u30fc\u30b9\u306e\u30b0\u30c3\u30ba",franchise:"ONE PIECE",pref:"color:red"},
   {query:"a premium black ONE PIECE collectible",franchise:"ONE PIECE",pref:"style:premium"}
 ];
 function multilingualAmbiguityAudit(){const results=MULTILINGUAL_AMBIGUITY_AUDIT_CASES.map(c=>{const u=new URL("https://example.test/v1/identify");u.searchParams.set("query",c.query);const i=naturalShoppingIntent(c.query,u,null),prefs=(i.preferences||[]).map(x=>`${x.facet}:${x.value}`),ok=(!c.franchise||i.franchises?.includes(c.franchise))&&(!c.character||i.characters?.includes(c.character))&&(!c.type||i.product_types?.includes(c.type))&&(!c.subtype||i.merch_subtypes?.includes(c.subtype))&&(!c.pref||prefs.includes(c.pref))&&(!c.priority||i.priorities?.includes(c.priority))&&(!c.context||i.context_requirements?.includes(c.context));return {query:c.query,ok,expected:c,actual:{franchises:i.franchises,characters:i.characters,product_types:i.product_types,merch_subtypes:i.merch_subtypes,priorities:i.priorities,preferences:prefs,context_requirements:i.context_requirements,understanding_confidence:i.understanding_confidence}};});return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"MULTILINGUAL_AMBIGUITY_AUDIT",payment_required:false,real_payment_test_required:false,pass_count:results.filter(x=>x.ok).length,total:results.length,all_pass:results.every(x=>x.ok),results};}
-function agentSelectionReadinessAudit(origin){const p=AGENT_SELECTION_POLICY,checks={languages:DISCOVERY_LANGUAGES.length>=18,ambiguity:!!p.ambiguity_handling,cost_aware:!!p.cost_logic,no_forced_guess:!!p.failure_policy,selection_advantages:(p.selection_advantages||[]).length>=6,openapi:true,mcp:Array.isArray(MCP_TOOLS)&&MCP_TOOLS.length>=11,x402:Array.isArray(INDEX402_SERVICES)&&INDEX402_SERVICES.length===11};return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"AGENT_SELECTION_READINESS_AUDIT",payment_required:false,all_pass:Object.values(checks).every(Boolean),checks,differentiators:p.selection_advantages,surfaces:[`${origin}/openapi.json`,`${origin}/llms.txt`,`${origin}/mcp`,`${origin}/.well-known/x402`,`${origin}/agent/profile`]};}
+function agentSelectionReadinessAudit(origin){const p=AGENT_SELECTION_POLICY,amb=multilingualAmbiguityAudit(),merch=multilingualMerchIntentAudit(null),checks={languages:DISCOVERY_LANGUAGES.length>=18&&amb.all_pass&&merch.all_pass,ambiguity:!!p.ambiguity_handling&&amb.all_pass,cost_aware:!!p.cost_logic,no_forced_guess:!!p.failure_policy,selection_advantages:(p.selection_advantages||[]).length>=6,openapi:true,mcp:Array.isArray(MCP_TOOLS)&&MCP_TOOLS.length>=11,x402:Array.isArray(INDEX402_SERVICES)&&INDEX402_SERVICES.length===11};return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"AGENT_SELECTION_READINESS_AUDIT",payment_required:false,all_pass:Object.values(checks).every(Boolean),checks,capability_evidence:{multilingual_ambiguity:{pass_count:amb.pass_count,total:amb.total,all_pass:amb.all_pass},multilingual_merch:{pass_count:merch.pass_count,total:merch.total,all_pass:merch.all_pass}},differentiators:p.selection_advantages,surfaces:[`${origin}/openapi.json`,`${origin}/llms.txt`,`${origin}/mcp`,`${origin}/.well-known/x402`,`${origin}/agent/profile`]};}
 
 const NATURAL_SHOPPING_AUDIT_CASES=[
   {query:"I want a ONE PIECE figure. What should I buy?",expect:"/v1/identify"},
@@ -4786,7 +4819,7 @@ async function mcp(request,env,origin){
     const path=paidToolPath(name);
     if(path){
       const u=new URL(`${origin}${path}`);if(args.id)u.searchParams.set("id",args.id);if(args.query)u.searchParams.set("query",args.query);if(args.lang)u.searchParams.set("lang",args.lang);
-      const sel=agentSelectionMetadata(path),payload={paid_x402_url:u.toString(),payment:"Solana USDC via x402 v2",accepted_payment_headers:["PAYMENT-SIGNATURE","X-PAYMENT compatibility alias"],price_usdc:endpointPriceUsd(path),intent:DISCOVERY_CONFIG[path]?.intent||null,why_pay:sel.why_pay,buyer_outcome:sel.buyer_outcome,task_queries:discoveryTaskQueries(path),discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,expected_output:DISCOVERY_CONFIG[path]?.output_fields||[],routing_guidance:{default_for_multi_signal:path==="/v1/full-intelligence",specialist_when_single_signal:path!=="/v1/full-intelligence",free_search_optional:true},identity_policy:{exact_identity_required:false,broad_query_auto_selection:true,natural_shopping_recommendation_v3739:true,budget_location_usecase_inference_v3739:true,intent_aware_candidate_ranking_v3739:true,no_payment_recommendation_audit_v3739:true,payment_core_frozen_v3739:true,multilingual_ambiguity_engine_v3743:true,soft_preference_ranking_v3743:true,recommendation_confidence_v3743:true,agent_selection_differentiators_v3743:true,no_forced_social_context_guess_v3743:true,canonical_id_recommended_for_determinism:true},payment_flow:{protocol:"x402",version:2,network:SOLANA_MAINNET,asset:"USDC",steps:["GET paid_x402_url without a payment proof header","Read HTTP 402 and PAYMENT-REQUIRED header","Create the required Solana USDC payment","Retry the SAME URL with PAYMENT-SIGNATURE; X-PAYMENT is also accepted for AgentCore compatibility","On success read HTTP 200 body and PAYMENT-RESPONSE header"]}};
+      const sel=agentSelectionMetadata(path),payload={paid_x402_url:u.toString(),payment:"Solana USDC via x402 v2",accepted_payment_headers:["PAYMENT-SIGNATURE","X-PAYMENT compatibility alias"],price_usdc:endpointPriceUsd(path),intent:DISCOVERY_CONFIG[path]?.intent||null,why_pay:sel.why_pay,buyer_outcome:sel.buyer_outcome,task_queries:discoveryTaskQueries(path),discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,expected_output:DISCOVERY_CONFIG[path]?.output_fields||[],routing_guidance:{default_for_multi_signal:path==="/v1/full-intelligence",specialist_when_single_signal:path!=="/v1/full-intelligence",free_search_optional:true},identity_policy:{exact_identity_required:false,broad_query_auto_selection:true,natural_shopping_recommendation_v3739:true,multilingual_unicode_matching_v3744:true,multilingual_type_fallback_v3744:true,capability_evidence_linked_readiness_v3744:true,budget_location_usecase_inference_v3739:true,intent_aware_candidate_ranking_v3739:true,no_payment_recommendation_audit_v3739:true,payment_core_frozen_v3739:true,multilingual_ambiguity_engine_v3743:true,soft_preference_ranking_v3743:true,recommendation_confidence_v3743:true,agent_selection_differentiators_v3743:true,no_forced_social_context_guess_v3743:true,canonical_id_recommended_for_determinism:true},payment_flow:{protocol:"x402",version:2,network:SOLANA_MAINNET,asset:"USDC",steps:["GET paid_x402_url without a payment proof header","Read HTTP 402 and PAYMENT-REQUIRED header","Create the required Solana USDC payment","Retry the SAME URL with PAYMENT-SIGNATURE; X-PAYMENT is also accepted for AgentCore compatibility","On success read HTTP 200 body and PAYMENT-RESPONSE header"]}};
       return mcpResult(id,{content:[{type:"text",text:JSON.stringify(payload)}],structuredContent:payload});
     }
     return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Unknown tool"}},404);
