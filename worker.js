@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.39";
+const VERSION="3.7.40";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -1485,6 +1485,14 @@ const MULTILINGUAL_PRODUCT_TYPE_ALIASES={
   "apparel":["apparel","clothing","shirt","t-shirt","hoodie","jacket","ropa","camiseta","sweat","vetement","v\u00eatement","kleidung","\u30a2\u30d1\u30ec\u30eb","T\u30b7\u30e3\u30c4","\u30d1\u30fc\u30ab\u30fc","\u8863\u670d","\u670d\u88c5","\uc758\ub958","\u043e\u0434\u0435\u0436\u0434\u0430"]
 }
 const MULTILINGUAL_FRANCHISE_ALIASES={"Pokemon":["Pokemon","Pok\u00e9mon","\u30dd\u30b1\u30e2\u30f3","\u30dd\u30b1\u30c3\u30c8\u30e2\u30f3\u30b9\u30bf\u30fc","\u5b9d\u53ef\u68a6","\u5bf6\u53ef\u5922","\u795e\u5947\u5b9d\u8d1d","\u795e\u5947\u5bf6\u8c9d","\ud3ec\ucf13\ubaac","\u0e42\u0e1b\u0e40\u0e01\u0e21\u0e2d\u0e19","\u0628\u0648\u0643\u064a\u0645\u0648\u0646","\u092a\u094b\u0915\u0947\u092e\u094b\u0928"],"ONE PIECE":["ONE PIECE","One Piece","\u30ef\u30f3\u30d4\u30fc\u30b9","\u6d77\u8d3c\u738b","\u6d77\u8cca\u738b","\u822a\u6d77\u738b","\uc6d0\ud53c\uc2a4"],"Hatsune Miku":["Hatsune Miku","\u521d\u97f3\u30df\u30af","\u521d\u97f3\u672a\u6765","\u521d\u97f3\u672a\u4f86","\ud558\uce20\ub124 \ubbf8\ucfe0"],"Gundam":["Gundam","\u30ac\u30f3\u30c0\u30e0","\u9ad8\u8fbe","\u9ad8\u9054","\uac74\ub2f4"],"Dragon Ball":["Dragon Ball","\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb","\u9f99\u73e0","\u9f8d\u73e0","\ub4dc\ub798\uace4\ubcfc"],"Demon Slayer":["Demon Slayer","Kimetsu no Yaiba","\u9b3c\u6ec5\u306e\u5203","\u9b3c\u706d\u4e4b\u5203","\uadc0\uba78\uc758 \uce7c\ub0a0"],"Jujutsu Kaisen":["Jujutsu Kaisen","\u546a\u8853\u5efb\u6226","\u5492\u672f\u56de\u6218","\u5492\u8853\u8ff4\u6230","\uc8fc\uc220\ud68c\uc804"],"NARUTO":["NARUTO","Naruto","\u30ca\u30eb\u30c8","\u706b\u5f71\u5fcd\u8005","\ub098\ub8e8\ud1a0"],"BLEACH":["BLEACH","Bleach","\u30d6\u30ea\u30fc\u30c1","\u6b7b\u795e","\ube14\ub9ac\uce58"],"My Hero Academia":["My Hero Academia","Boku no Hero Academia","\u50d5\u306e\u30d2\u30fc\u30ed\u30fc\u30a2\u30ab\u30c7\u30df\u30a2","\u6211\u7684\u82f1\u96c4\u5b66\u9662","\u6211\u7684\u82f1\u96c4\u5b78\u9662","\ub098\uc758 \ud788\uc5b4\ub85c \uc544\uce74\ub370\ubbf8\uc544"],"Attack on Titan":["Attack on Titan","Shingeki no Kyojin","\u9032\u6483\u306e\u5de8\u4eba","\u8fdb\u51fb\u7684\u5de8\u4eba","\u9032\u64ca\u7684\u5de8\u4eba","\uc9c4\uaca9\uc758 \uac70\uc778"],"Evangelion":["Evangelion","\u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3","EVA","\u65b0\u4e16\u7eaa\u798f\u97f3\u6218\u58eb","\u65b0\u4e16\u7d00\u798f\u97f3\u6230\u58eb","\uc5d0\ubc18\uac8c\ub9ac\uc628"],"Fate":["Fate","\u30d5\u30a7\u30a4\u30c8"],"Hololive":["Hololive","\u30db\u30ed\u30e9\u30a4\u30d6","\ud640\ub85c\ub77c\uc774\ube0c"],"Genshin Impact":["Genshin Impact","\u539f\u795e","\uc6d0\uc2e0"],"Honkai Star Rail":["Honkai Star Rail","Honkai: Star Rail","\u5d29\u58ca\u30b9\u30bf\u30fc\u30ec\u30a4\u30eb","\u5d29\u574f\u661f\u7a79\u94c1\u9053","\u5d29\u58de\u661f\u7a79\u9435\u9053","\ubd95\uad34 \uc2a4\ud0c0\ub808\uc77c"],"Blue Archive":["Blue Archive","\u30d6\u30eb\u30fc\u30a2\u30fc\u30ab\u30a4\u30d6","\u78a7\u84dd\u6863\u6848","\u851a\u85cd\u6a94\u6848","\ube14\ub8e8 \uc544\uce74\uc774\ube0c"],"Uma Musume":["Uma Musume","\u30a6\u30de\u5a18","\u8d5b\u9a6c\u5a18","\u8cfd\u99ac\u5a18","\uc6b0\ub9c8\ubb34\uc2a4\uba54"],"Love Live":["Love Live","\u30e9\u30d6\u30e9\u30a4\u30d6","\ub7ec\ube0c\ub77c\uc774\ube0c"],"Haikyu":["Haikyu","Haikyuu","\u30cf\u30a4\u30ad\u30e5\u30fc","\u6392\u7403\u5c11\u5e74","\ud558\uc774\ud050"],"Detective Conan":["Detective Conan","Case Closed","\u540d\u63a2\u5075\u30b3\u30ca\u30f3","\u540d\u4fa6\u63a2\u67ef\u5357","\u540d\u5075\u63a2\u67ef\u5357","\uba85\ud0d0\uc815 \ucf54\ub09c"],"Frieren":["Frieren","\u846c\u9001\u306e\u30d5\u30ea\u30fc\u30ec\u30f3","\u846c\u9001\u7684\u8299\u8389\u83b2","\u846c\u9001\u7684\u8299\u8389\u84ee","\uc7a5\uc1a1\uc758 \ud504\ub9ac\ub80c"]};
+const MULTILINGUAL_CHARACTER_ALIASES=[
+  {character:"Monkey D. Luffy",franchise:"ONE PIECE",aliases:["luffy","monkey d luffy","monkey d. luffy","ã«ãã£","ã¢ã³ã­ã¼ d ã«ãã£","ã¢ã³ã­ã¼ã»dã»ã«ãã£","è·¯é£","é­¯å¤«","ë£¨í¼"]},
+  {character:"Roronoa Zoro",franchise:"ONE PIECE",aliases:["zoro","roronoa zoro","ã¾ã­","ã­ã­ãã¢ ã¾ã­","ã­ã­ãã¢ã»ã¾ã­","ç´¢é","ì¡°ë¡"]},
+  {character:"Naruto Uzumaki",franchise:"NARUTO",aliases:["naruto","naruto uzumaki","ãã«ã","ããã¾ããã«ã","ããã¾ã ãã«ã","é¸£äºº","é³´äºº","ëë£¨í "]},
+  {character:"Sasuke Uchiha",franchise:"NARUTO",aliases:["sasuke","sasuke uchiha","ãµã¹ã±","ãã¡ã¯ãµã¹ã±","ãã¡ã¯ ãµã¹ã±","ä½å©","ì¬ì¤ì¼"]},
+  {character:"Pikachu",franchise:"Pokemon",aliases:["pikachu","ãã«ãã¥ã¦","ç®å¡ä¸","í¼ì¹´ì¸"]},
+  {character:"Hatsune Miku",franchise:"Hatsune Miku",aliases:["hatsune miku","åé³ãã¯","åé³æªæ¥","åé³æªä¾","íì¸ ë¤ ë¯¸ì¿ "]}
+];
 const MULTILINGUAL_GENERIC_TERMS=["anime","animation","manga","collectible","collectibles","merch","merchandise","goods","stuff","toys","toy","character goods","character merchandise","japanese","japan","recommend","recommendation","best","buy","find","search","looking for","want","please","gift","gifts","cool","popular","cheap","rare","\u30a2\u30cb\u30e1","\u30b0\u30c3\u30ba","\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba","\u304a\u3059\u3059\u3081","\u63a2\u3057\u3066","\u6b32\u3057\u3044","\u30c8\u30a4","\u304a\u3082\u3061\u3083","\u52d5\u6f2b","\u52a8\u6f2b","\u5468\u8fb9","\u5468\u908a","\u5468\u8fb9\u5546\u54c1","\u5468\u908a\u5546\u54c1","\u73a9\u5177","\u63a8\u8350","\u63a8\u85a6","\ucc3e\uc544","\ucd94\ucc9c","\uc560\ub2c8","\uad7f\uc988","\uc7a5\ub09c\uac10","figurine anime","figura anime","figura de anime","anime figur","anime figurine","anime figure","anime merch","merch anime","produits anime","produits derives anime","objets anime","merchandising anime","productos anime","merch de anime","productos de anime","anime artikel","anime merch artikel","anime waren","anime merchandise","prodotti anime","prodotti manga","produtos anime","merch de anime","\u0430\u043d\u0438\u043c\u0435","\u0430\u043d\u0438\u043c\u0435 \u043c\u0435\u0440\u0447","coleccionable","coleccionables","objet de collection","sammlerstueck","sammlerst\u00fcck","merch anime indonesia","barang anime","merch anime thailand","\u0e02\u0e2d\u0e07\u0e2a\u0e30\u0e2a\u0e21\u0e2d\u0e19\u0e34\u0e40\u0e21\u0e30","\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32\u0e2d\u0e19\u0e34\u0e40\u0e21\u0e30","\u0111\u1ed3 ch\u01a1i anime","do choi anime","h\u00e0ng anime","anime \u00fcr\u00fcnleri","anime urunleri","anime merch nederland","anime spullen","gad\u017cet anime","gadzet anime","produkty anime","\u0645\u0646\u062a\u062c\u0627\u062a \u0627\u0644\u0623\u0646\u0645\u064a","\u0628\u0636\u0627\u0626\u0639 \u0627\u0644\u0623\u0646\u0645\u064a","\u0627\u0646\u0645\u064a","\u090f\u0928\u0940\u092e\u0947 \u092e\u0930\u094d\u091a","\u090f\u0928\u0940\u092e\u0947 \u0938\u093e\u092e\u093e\u0928","\u090f\u0928\u0940\u092e\u0947 \u0916\u093f\u0932\u094c\u0928\u0947"];
 const GLOBAL_VAGUE_INTENT_TERMS=["anime","anime merch","anime merchandise","anime goods","anime stuff","anime toys","manga merch","character goods","Japanese collectibles","Pokemon","Pokemon merch","Pokemon stuff","Pokemon toys","ONE PIECE","One Piece merch","Nendoroid","Gunpla","\u30a2\u30cb\u30e1","\u30a2\u30cb\u30e1 \u30b0\u30c3\u30ba","\u30dd\u30b1\u30e2\u30f3 \u30b0\u30c3\u30ba","\u30ef\u30f3\u30d4\u30fc\u30b9 \u30b0\u30c3\u30ba","figurine manga","produits anime","merch anime","peluche Pokemon","figuras anime","merch de anime","productos anime","Anime Figuren","Anime Merch","Pokemon Pluesch","prodotti anime","produtos anime","merch de anime","\u52a8\u6f2b\u5468\u8fb9","\u52a8\u6f2b\u624b\u529e","\u5b9d\u53ef\u68a6\u5468\u8fb9","\u52d5\u6f2b\u5468\u908a","\u5bf6\u53ef\u5922\u5468\u908a","\uc560\ub2c8 \uad7f\uc988","\ud3ec\ucf13\ubaac \uad7f\uc988","\u0430\u043d\u0438\u043c\u0435 \u043c\u0435\u0440\u0447","\u0645\u0646\u062a\u062c\u0627\u062a \u0627\u0644\u0623\u0646\u0645\u064a","\u090f\u0928\u0940\u092e\u0947 \u092e\u0930\u094d\u091a","merch anime indonesia","merch anime thailand","do choi anime","anime urunleri","anime merch nederland","gadzet anime"];
 
@@ -1493,15 +1501,33 @@ const PRODUCT_TYPE_SEARCH_EQUIVALENTS={figure:["figure","nendoroid","figma"],plu
 function normalizedSearchPhrase(v){return foldLatinForSearch(String(v||"").normalize("NFKC")).replace(/[\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
 function phraseIncludes(haystack,needle){const h=normalizedSearchPhrase(haystack),n=normalizedSearchPhrase(needle);return !!n&&h.includes(n);}
 function multilingualQueryHints(query=""){
-  const raw=String(query||"").trim(),normalized=normalizedSearchPhrase(raw),productTypes=[],franchiseGroups=[];
+  const raw=String(query||"").trim(),normalized=normalizedSearchPhrase(raw),productTypes=[],franchiseGroups=[],characterGroups=[];
   for(const [type,aliases] of Object.entries(MULTILINGUAL_PRODUCT_TYPE_ALIASES))if(aliases.some(a=>phraseIncludes(normalized,a)))productTypes.push(type);
   for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES))if(aliases.some(a=>phraseIncludes(normalized,a)))franchiseGroups.push({canonical,aliases});
+  for(const group of MULTILINGUAL_CHARACTER_ALIASES){
+    if(group.aliases.some(a=>phraseIncludes(normalized,a))){
+      characterGroups.push(group);
+      if(group.franchise&&!franchiseGroups.some(g=>g.canonical===group.franchise))franchiseGroups.push({canonical:group.franchise,aliases:MULTILINGUAL_FRANCHISE_ALIASES[group.franchise]||[group.franchise]});
+    }
+  }
   let residual=` ${normalized} `;
   const removable=[...MULTILINGUAL_GENERIC_TERMS,...Object.values(MULTILINGUAL_PRODUCT_TYPE_ALIASES).flat()];
   for(const term of removable){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
   for(const g of franchiseGroups)for(const term of g.aliases){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
+  for(const g of characterGroups)for(const term of g.aliases){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
   const residualTerms=[...new Set(residual.replace(/\s+/g," ").trim().split(" ").filter(x=>x.length>=2))].slice(0,4);
-  const generic_intent=GLOBAL_VAGUE_INTENT_TERMS.some(t=>phraseIncludes(normalized,t))||MULTILINGUAL_GENERIC_TERMS.some(t=>normalizedSearchPhrase(t)===normalized); return {language:detectSearchLanguage(raw),product_types:[...new Set(productTypes)],franchises:franchiseGroups.map(g=>g.canonical),franchise_aliases:[...new Set(franchiseGroups.flatMap(g=>g.aliases))].slice(0,12),residual_terms:residualTerms,ambiguous_category_search:productTypes.length>0&&franchiseGroups.length===0&&residualTerms.length===0,generic_intent};
+  const generic_intent=GLOBAL_VAGUE_INTENT_TERMS.some(t=>phraseIncludes(normalized,t))||MULTILINGUAL_GENERIC_TERMS.some(t=>normalizedSearchPhrase(t)===normalized);
+  return {
+    language:detectSearchLanguage(raw),
+    product_types:[...new Set(productTypes)],
+    franchises:franchiseGroups.map(g=>g.canonical),
+    franchise_aliases:[...new Set(franchiseGroups.flatMap(g=>g.aliases))].slice(0,12),
+    characters:characterGroups.map(g=>g.character),
+    character_aliases:[...new Set(characterGroups.flatMap(g=>g.aliases))].slice(0,12),
+    residual_terms:residualTerms,
+    ambiguous_category_search:productTypes.length>0&&franchiseGroups.length===0&&characterGroups.length===0&&residualTerms.length===0,
+    generic_intent
+  };
 }
 function safeSearchTerm(v){return String(v||"").replace(/[,%()]/g," ").replace(/\s+/g," ").trim().slice(0,80);}
 function mergeUniqueProducts(groups=[],limit=10){const out=[],seen=new Set();for(const rows of groups){for(const p of (Array.isArray(rows)?rows:[])){if(!p?.id||seen.has(p.id))continue;seen.add(p.id);out.push(p);if(out.length>=limit)return out;}}return out;}
@@ -1640,9 +1666,10 @@ function discoveryTypeMatchesHint(actual,hint){
 function discoveryProductFitScore(p,hints,query=""){
   let score=broadDiscoveryScore(p);
   const actualType=discoveryEffectiveType(p),actualFranchise=canonicalizeDiscoveryFranchise(discoverySafeFranchise(p));
-  const wantedTypes=hints?.product_types||[],wantedFranchises=(hints?.franchises||[]).map(canonicalizeDiscoveryFranchise);
+  const wantedTypes=hints?.product_types||[],wantedFranchises=(hints?.franchises||[]).map(canonicalizeDiscoveryFranchise),wantedCharacters=hints?.characters||[];
   if(wantedTypes.length)score+=wantedTypes.some(t=>discoveryTypeMatchesHint(actualType,t))?140:-220;
   if(wantedFranchises.length)score+=wantedFranchises.some(f=>String(f||"").toLowerCase()===String(actualFranchise||"").toLowerCase())?160:-260;
+  if(wantedCharacters.length)score+=candidateMatchesIntentCharacters(p,wantedCharacters)?170:-320;
   const title=normalizedSearchPhrase(discoveryTitle(p));
   for(const term of (hints?.residual_terms||[]))if(phraseIncludes(title,term))score+=24;
   const qn=normalizedSearchPhrase(query);
@@ -1650,14 +1677,15 @@ function discoveryProductFitScore(p,hints,query=""){
   return score;
 }
 function rankAndFilterDiscoveryProducts(rows=[],hints={},query="",limit=10){
-  const structured=(hints.product_types?.length||0)+(hints.franchises?.length||0)>0;
+  const structured=(hints.product_types?.length||0)+(hints.franchises?.length||0)+(hints.characters?.length||0)>0;
   const scored=(Array.isArray(rows)?rows:[]).filter(p=>p?.id).map(p=>({
     p,
     score:discoveryProductFitScore(p,hints,query),
     type_ok:!hints.product_types?.length||hints.product_types.some(t=>discoveryTypeMatchesHint(discoveryEffectiveType(p),t)),
-    franchise_ok:!hints.franchises?.length||hints.franchises.map(canonicalizeDiscoveryFranchise).some(f=>String(f||"").toLowerCase()===String(canonicalizeDiscoveryFranchise(discoverySafeFranchise(p))||"").toLowerCase())
+    franchise_ok:!hints.franchises?.length||hints.franchises.map(canonicalizeDiscoveryFranchise).some(f=>String(f||"").toLowerCase()===String(canonicalizeDiscoveryFranchise(discoverySafeFranchise(p))||"").toLowerCase()),
+    character_ok:!hints.characters?.length||candidateMatchesIntentCharacters(p,hints.characters)
   }));
-  const filtered=structured?scored.filter(x=>x.type_ok&&x.franchise_ok):scored;
+  const filtered=structured?scored.filter(x=>x.type_ok&&x.franchise_ok&&x.character_ok):scored;
   return (filtered.length?filtered:scored).sort((a,b)=>b.score-a.score).slice(0,limit).map(x=>x.p);
 }
 
@@ -1680,6 +1708,49 @@ function preferredFranchiseSearchAlias(franchise=""){
   return preferred[franchise]||franchise||"";
 }
 
+function intentCharacterGroups(chars=[]){
+  const wanted=new Set((Array.isArray(chars)?chars:[chars]).map(x=>normalize(x||"")).filter(Boolean));
+  return MULTILINGUAL_CHARACTER_ALIASES.filter(g=>wanted.has(normalize(g.character||"")));
+}
+function candidateCharacterText(p){
+  const chars=Array.isArray(p?.character_names)?p.character_names.join(" "):(p?.character_names||"");
+  return normalizedSearchPhrase([discoveryTitle(p),chars,p?.series,p?.brand,p?.manufacturer].filter(Boolean).join(" "));
+}
+function candidateMatchesIntentCharacters(p,chars=[]){
+  const groups=intentCharacterGroups(chars);
+  if(!groups.length)return false;
+  const text=candidateCharacterText(p);
+  return groups.some(g=>g.aliases.some(a=>phraseIncludes(text,a)));
+}
+function candidateMatchesIntentFranchises(p,franchises=[]){
+  const actual=canonicalizeDiscoveryFranchise(discoverySafeFranchise(p));
+  return (franchises||[]).map(canonicalizeDiscoveryFranchise).some(f=>String(f||"").toLowerCase()===String(actual||"").toLowerCase());
+}
+function candidateMatchesIntentTypes(p,types=[]){
+  const actual=discoveryEffectiveType(p);
+  return (types||[]).some(t=>discoveryTypeMatchesHint(actual,t));
+}
+function explicitIntentPresent(intent){
+  return !!((intent?.franchises?.length||0)||(intent?.product_types?.length||0)||(intent?.characters?.length||0));
+}
+function intentCompatibility(p,intent){
+  const franchiseRequired=!!intent?.franchises?.length;
+  const typeRequired=!!intent?.product_types?.length;
+  const characterRequired=!!intent?.characters?.length;
+  const franchise_ok=!franchiseRequired||candidateMatchesIntentFranchises(p,intent.franchises);
+  const type_ok=!typeRequired||candidateMatchesIntentTypes(p,intent.product_types);
+  const character_ok=!characterRequired||candidateMatchesIntentCharacters(p,intent.characters);
+  return {ok:franchise_ok&&type_ok&&character_ok,franchise_ok,type_ok,character_ok,explicit_constraints:franchiseRequired||typeRequired||characterRequired};
+}
+function targetedIntentQuery(intent,originalQuery=""){
+  const parts=[];
+  if(intent?.characters?.[0])parts.push(intent.characters[0]);
+  else if(intent?.franchises?.[0])parts.push(preferredFranchiseSearchAlias(intent.franchises[0]));
+  if(intent?.product_types?.[0])parts.push(intent.product_types[0].replace(/_/g," "));
+  const built=parts.join(" ").trim();
+  return built||String(originalQuery||"").trim();
+}
+
 async function lightweightStructuredFallback(env,hints,query,limit=10){
   const dbTypes=[...new Set((hints.product_types||[]).flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]))];
   if(!dbTypes.length&&!hints.franchises?.length)return [];
@@ -1689,7 +1760,7 @@ async function lightweightStructuredFallback(env,hints,query,limit=10){
   // First try one narrow title query using the most likely catalog language. This
   // replaces the old 40+ clause OR query with a single field predicate.
   const franchise=hints.franchises?.[0]||"";
-  const alias=safeSearchTerm(preferredFranchiseSearchAlias(franchise));
+  const alias=safeSearchTerm(preferredFranchiseSearchAlias(franchise)||(hints.character_aliases?.[0]||""));
   if(alias){
     const rows=await sbOptional(env,`/products?select=${select}${typeFilter}&canonical_name_ja=ilike.*${encodeURIComponent(alias)}*&limit=${Math.max(20,Math.min(60,limit*5))}`);
     if(Array.isArray(rows)&&rows.length){
@@ -1720,8 +1791,8 @@ async function findProducts(env,q="",limit=10){
   if(jan){const exact=await loadProductsByJans(env,[jan]);if(exact.length)return exact.slice(0,limit);}
   const hints=multilingualQueryHints(query),groups=[];
   const dbTypes=[...new Set(hints.product_types.flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]))];
-  const semanticTerms=[...new Set([...hints.franchise_aliases,...hints.residual_terms].map(safeSearchTerm).filter(Boolean))].slice(0,12);
-  const structured=dbTypes.length||hints.franchises.length;
+  const semanticTerms=[...new Set([...hints.franchise_aliases,...(hints.character_aliases||[]),...hints.residual_terms].map(safeSearchTerm).filter(Boolean))].slice(0,12);
+  const structured=dbTypes.length||hints.franchises.length||(hints.characters?.length||0);
 
   // For recognized multilingual category/franchise intents, query canonical DB fields directly.
   // This avoids wasting one Supabase request on the untranslated raw phrase and keeps WORLD AUDIT under subrequest limits.
@@ -3998,6 +4069,7 @@ function paidQueryRelevanceScore(query,p){
   let bonus=0;
   if(hints.franchises?.length&&hints.franchises.some(x=>normalize(x)===normalize(fr)))bonus+=8;
   if(hints.product_types?.length&&hints.product_types.includes(type))bonus+=8;
+  if(hints.characters?.length)bonus+=candidateMatchesIntentCharacters(p,hints.characters)?18:-14;
   return Math.min(45,lexical*.28+bonus);
 }
 
@@ -4037,6 +4109,7 @@ function naturalShoppingIntent(query="",url=null,env=null){
     goal:recommendationIntent?"recommend_or_discover":"resolve_product",
     recommendation_intent:recommendationIntent,
     franchises:hints.franchises||[],
+    characters:hints.characters||[],
     product_types:hints.product_types||[],
     residual_terms:hints.residual_terms||[],
     buyer_country:buyerCountry,
@@ -4080,8 +4153,10 @@ function paidCandidateRanking(query,p,index=0,intent=null){
   const purchasable=affiliateReady?32:0;
   const searchOrder=Math.max(0,10-index);
   const intentBonus=candidateIntentBonus(p,intent);
-  const score=Math.round((relevance+popularity+recency+quality+completeness+purchasable+searchOrder+intentBonus.score)*10)/10;
-  return {product:p,score,affiliate_ready:affiliateReady,breakdown:{query_relevance:Math.round(relevance*10)/10,popularity_signal:Math.round(popularity*10)/10,release_recency:recency,identity_quality:Math.round(quality*10)/10,metadata_completeness:completeness,affiliate_purchase_route:purchasable,search_rank:searchOrder,intent_fit:intentBonus.score,intent_fit_detail:intentBonus.breakdown}};
+  const compatibility=intentCompatibility(p,intent);
+  const intentConstraintScore=compatibility.explicit_constraints?(compatibility.ok?22:-260):0;
+  const score=Math.round((relevance+popularity+recency+quality+completeness+purchasable+searchOrder+intentBonus.score+intentConstraintScore)*10)/10;
+  return {product:p,score,affiliate_ready:affiliateReady,breakdown:{query_relevance:Math.round(relevance*10)/10,popularity_signal:Math.round(popularity*10)/10,release_recency:recency,identity_quality:Math.round(quality*10)/10,metadata_completeness:completeness,affiliate_purchase_route:purchasable,search_rank:searchOrder,intent_fit:intentBonus.score,intent_fit_detail:intentBonus.breakdown,intent_constraint_score:intentConstraintScore,intent_compatibility:compatibility}};
 }
 
 function rankPaidCandidates(query,rows=[],intent=null){
@@ -4095,6 +4170,7 @@ function commercialFallbackQueries(query){
   const hints=multilingualQueryHints(query),out=[];
   const add=v=>{v=String(v||"").trim();if(v&&!out.some(x=>normalize(x)===normalize(v)))out.push(v);};
   for(const t of (hints.residual_terms||[]))add(t);
+  for(const c of (hints.characters||[]))add(c);
   for(const f of (hints.franchises||[]))add(f);
   // Strip generic shopping/category words but retain character/product identity terms.
   let stripped=String(query||"")
@@ -4142,12 +4218,37 @@ async function preflightPaidProduct(env,url){
   const exact=rows.filter(p=>exactPaidIdentityMatch(query,p));
   if(exact.length===1)return {ok:true,product:exact[0],resolution:"exact_query",selection:{method:"exact_query",automatic:false,commercial_default:false,shopping_intent:shoppingIntent,recommended_paid_endpoint:naturalPaidRoute(shoppingIntent,query),alternatives:[]}};
 
-  const ranked=rankPaidCandidates(query,rows,shoppingIntent),winner=ranked[0];
+  const explicitIntent=explicitIntentPresent(shoppingIntent);
+  let candidateRows=rows;
+  let compatibleRows=explicitIntent?rows.filter(p=>intentCompatibility(p,shoppingIntent).ok):rows;
+  if(explicitIntent&&!compatibleRows.length){
+    const targeted=targetedIntentQuery(shoppingIntent,query);
+    if(targeted&&normalize(targeted)!==normalize(query)){
+      const fallback=await commercialFallbackProducts(env,targeted,10);
+      if(fallback.length){
+        candidateRows=mergeUniqueProducts([candidateRows,fallback],20);
+        compatibleRows=candidateRows.filter(p=>intentCompatibility(p,shoppingIntent).ok);
+      }
+    }
+    if(!compatibleRows.length&&PIPELINE.selfDiscoveryEnabled){
+      try{
+        const discovered=await selfDiscoverProduct(env,targetedIntentQuery(shoppingIntent,query));
+        if(discovered){
+          candidateRows=mergeUniqueProducts([candidateRows,[discovered]],20);
+          compatibleRows=candidateRows.filter(p=>intentCompatibility(p,shoppingIntent).ok);
+        }
+      }catch{}
+    }
+  }
+  const ranked=rankPaidCandidates(query,compatibleRows.length?compatibleRows:candidateRows,shoppingIntent),winner=ranked[0];
   if(!winner?.product)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false}};
+  const winnerCompatibility=intentCompatibility(winner.product,shoppingIntent);
+  if(explicitIntent&&!winnerCompatibility.ok){
+    return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found_for_explicit_intent",charged:false,detail:"No catalog candidate satisfied the explicit franchise / character / product-type intent strongly enough. No payment is requested.",free_search_url:`${url.origin}/v1/search?query=${encodeURIComponent(query)}`}};
+  }
 
-  // v3.6.12 commercial default:
-  // Once relevant candidates exist, do not force a second canonical-ID round trip.
-  // Choose the strongest purchasable/relevant candidate and preserve alternatives in the paid response.
+  // v3.7.40 commercial default:
+  // Keep the one-call commercial-default flow, but never let an explicit franchise/character/type request fall through to an unrelated product.
   return {
     ok:true,
     product:winner.product,
@@ -4156,8 +4257,9 @@ async function preflightPaidProduct(env,url){
       method:"commercial_default_recommendation",
       automatic:true,
       commercial_default:true,
-      policy_version:"3.6.12",
-      policy:"Select the strongest relevant candidate using query relevance, available popularity/demand signals, release recency, identity quality, catalog completeness and purchase-route readiness. A valid pre-generated Rakuten affiliate route receives a purchasability boost but never substitutes for query relevance. Alternatives remain visible so agents can inspect other candidates without blocking the payment flow.",
+      policy_version:"3.7.40",
+      policy:"Select the strongest relevant candidate using query relevance, explicit franchise/character/type intent compatibility, available popularity or demand signals, release recency, identity quality, catalog completeness and purchase-route readiness. A valid pre-generated Rakuten affiliate route receives a purchasability boost but never substitutes for semantic relevance. When the query contains an explicit franchise, character or product type, unrelated candidates are rejected instead of being recommended.",
+      shopping_intent:shoppingIntent,
       selected:paidRankedView(winner),
       alternatives:ranked.slice(1,5).map(paidRankedView)
     }
@@ -4392,8 +4494,9 @@ async function naturalShoppingAudit(env,origin){
     let pre=null,error=null;
     try{pre=await preflightPaidProduct(env,u);}catch(e){error=safeError(e);}
     const intent=naturalShoppingIntent(c.query,u,env),route=naturalPaidRoute(intent,c.query),selected=pre?.selection?.selected|| (pre?.product?paidCandidateView(pre.product):null);
-    const ok=!!pre?.ok&&!!selected?.id&&route===c.expect;
-    results.push({query:c.query,ok,expected_route:c.expect,inferred_route:route,shopping_intent:intent,resolution:pre?.resolution||null,selected,alternatives:(pre?.selection?.alternatives||[]).slice(0,4),error});
+    const compatibility=pre?.product?intentCompatibility(pre.product,intent):null;
+    const ok=!!pre?.ok&&!!selected?.id&&route===c.expect&&(!explicitIntentPresent(intent)||compatibility?.ok===true);
+    results.push({query:c.query,ok,expected_route:c.expect,inferred_route:route,shopping_intent:intent,resolution:pre?.resolution||null,selected,selection_compatibility:compatibility,alternatives:(pre?.selection?.alternatives||[]).slice(0,4),error});
   }
   return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"NATURAL_SHOPPING_RECOMMENDATION_AUDIT",payment_required:false,real_payment_test_required:false,pass_count:results.filter(x=>x.ok).length,total:results.length,all_pass:results.every(x=>x.ok),results,note:"This audit exercises interpretation, catalog retrieval, ranking, budget/location/use-case inference and paid-endpoint routing without entering x402 settlement."};
 }
@@ -4909,7 +5012,7 @@ async function worldDiscoveryAudit(env,mode="all",origin="https://anime-intellig
   return out;
 }
 
-function adminPage(env){const bazaarPayTo=String(env?.X402_WALLET_ADDRESS||'');return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>ANIME INTELLIGENCE ${VERSION}</title><style>body{background:#080808;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:20px}main{max-width:720px;margin:auto}h1{font-size:26px}h2{font-size:18px;margin-top:28px}input,button{width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px}input{background:#161616;color:#fff;border:1px solid #444}button{font-weight:800;border:0;background:#fff;color:#000}.go{background:#35e27a}.market{background:#f5c242}.backfill{background:#63b3ff}.quality{background:#36d9c5}.final{background:#c995ff}.index{background:#ff8b55}.bazaar{background:#4f7cff;color:#fff}.bazaarLink{display:block;width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;font-weight:800;background:#4f7cff;color:#fff;text-align:center;text-decoration:none}pre{white-space:pre-wrap;word-break:break-word;background:#111;padding:15px;border-radius:10px;min-height:140px}.small{color:#aaa;font-size:13px;line-height:1.5}.badge{display:inline-block;padding:6px 10px;background:#18251d;border:1px solid #35e27a;border-radius:999px;font-size:12px;color:#8dffb5}.danger{background:#7f1d1d!important;color:#fff!important;border-color:#991b1b!important}.rcard{background:#141414;border:1px solid #333;border-radius:12px;padding:12px;margin:12px 0}.rcard img{width:88px;height:88px;object-fit:contain;background:#fff;border-radius:8px;float:right;margin-left:10px}.rcard a{display:inline-block;padding:10px 12px;background:#f5c242;color:#000;border-radius:8px;font-weight:800;text-decoration:none;margin:6px 0}.rcard input{margin:5px 0}.rmeta{font-size:12px;color:#aaa}.pager{display:flex;gap:8px}.pager button{width:50%}</style></head><body><main><h1>ANIME INTELLIGENCE ${VERSION}</h1><div class="badge">v${VERSION} / MONETIZATION INTEGRATED</div><input id="k" type="password" placeholder="REFRESH_KEY"><h2>\u5b89\u5168\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3</h2><button class="go" onclick="run('/admin/expand','POST')">\u5b89\u51681\u30b5\u30a4\u30af\u30eb\uff08\u73fe\u5728\u306e\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3\uff09</button><button class="go" onclick="runDbExpand()">DB\u62e1\u5f35\uff1a\u4e3b\u8981\u30e1\u30fc\u30ab\u30fc\u3092\u81ea\u52d5\u62e1\u5f35</button><button class="go" onclick="runArchiveExpand()">CATALOG\uff1aYahoo JAN\u4ed8\u304d\u30b3\u30ec\u30af\u30c6\u30a3\u30d6\u30eb\u3092\u81ea\u52d5\u3067\u6700\u5f8c\u307e\u3067\u62e1\u5f35</button><select id="catalogCategory" style="width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;background:#161616;color:#fff;border:1px solid #444"><option value="plush">\u306c\u3044\u3050\u308b\u307f</option><option value="acrylic_goods">\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9</option><option value="lottery_prize">\u4e00\u756a\u304f\u3058\u666f\u54c1</option><option value="model_kit">\u30d7\u30e9\u30e2\u30c7\u30eb</option><option value="badge">\u7f36\u30d0\u30c3\u30b8</option><option value="keychain">\u30ad\u30fc\u30db\u30eb\u30c0\u30fc</option><option value="limited_goods">\u9650\u5b9a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba</option><option value="trading_card">\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9</option><option value="sneaker">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30b9\u30cb\u30fc\u30ab\u30fc</option><option value="apparel">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30a2\u30d1\u30ec\u30eb</option><option value="figure">\u30d5\u30a3\u30ae\u30e5\u30a2</option></select><button onclick="runCatalogCategoryTest()">CATALOG CATEGORY TEST\uff1a\u9078\u629e\u30ab\u30c6\u30b4\u30ea\u30921\u30d0\u30c3\u30c1\u691c\u67fb</button><button onclick="run('/admin/catalog-run?batches=1','POST')">CATALOG CONTINUE\uff1a\u901a\u5e38\u30ab\u30fc\u30bd\u30eb\u30921\u30d0\u30c3\u30c1\u9032\u3081\u308b</button><button onclick="run('/admin/catalog-progress','GET')">CATALOG PROGRESS</button><button onclick="run('/admin/catalog-auto-status','GET')">CATALOG AUTO STATUS\uff1a\u30d0\u30c3\u30af\u30b0\u30e9\u30a6\u30f3\u30c9\u81ea\u52d5\u62e1\u5f35\u3092\u78ba\u8a8d</button><button onclick="run('/admin/official-mass-patrol','POST')">OFFICIAL MASS PATROL\uff1a\u30e1\u30fc\u30ab\u30fc\u516c\u5f0f\u5546\u54c1\u3092\u5de1\u56de</button><p class="small">MASS \u2192 OFFICIAL \u2192 YAHOO \u2192 EBAY \u2192 MASS \u2192 BACKFILL \u2192 YAHOO \u2192 EBAY</p><h2>\u500b\u5225\u5b9f\u884c</h2><button onclick="run('/admin/expand?stage=mass','POST')">MASS\uff1aGood Smile\u5546\u54c1\u8ffd\u52a0</button><button onclick="run('/admin/expand?stage=official','POST')">OFFICIAL\uff1a\u516c\u5f0f\u5546\u54c1\u30da\u30fc\u30b8\u88dc\u5b8c</button><button class="backfill" onclick="run('/admin/expand?stage=backfill','POST')">BACKFILL\uff1a\u65e2\u5b58JAN\u5546\u54c1\u88dc\u5b8c</button><button class="market" onclick="run('/admin/expand?stage=yahoo','POST')">YAHOO\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><button class="market" onclick="run('/admin/expand?stage=ebay','POST')">EBAY\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><h2>\u54c1\u8cea\u4fee\u5fa9</h2><button class="quality" onclick="runQuality()">QUALITY\uff1a\u5168\u4ef6\u81ea\u52d5\u54c1\u8cea\u4fee\u5fa9</button><button class="quality" onclick="run('/admin/catalog-cleanup','GET')">DB CLEANUP CHECK\uff1a\u524a\u9664\u5019\u88dc\u3060\u3051\u78ba\u8a8d</button><button class="danger" onclick="runCatalogCleanupApply()">DB CLEANUP APPLY\uff1a\u78ba\u5b9a\u5019\u88dc\u3092\u524a\u9664</button><button class="danger" onclick="runFinalizeV3()">FINALIZE V3\uff1a\u30af\u30ea\u30fc\u30f3\u30a2\u30c3\u30d7\u2192\u5168\u6a5f\u80fd\u691c\u67fb\u2192\u5b8c\u4e86</button><h2>\u53ce\u76ca\u30fbKPI</h2><button class="go" onclick="run('/admin/revenue-status','GET')">FIRST REVENUE CHECK\uff1a\u58f2\u4e0a\u30fb\u521d\u56de\u6c7a\u6e08\u30fbBazaar</button><button class="go" onclick="run(\'/admin/kpi\',\'GET\')">KPI\uff1aAPI\u58f2\u4e0a\u30fbpayer\u30fbconversion</button><h2>Rakuten Affiliate 10,000+</h2><p class="small">\u8cfc\u5165\u53ef\u80fd\u6027\u30fb\u518d\u8ca9\u30fb\u4e88\u7d04\u30fbJAN\u30fb\u4eba\u6c17\u5ea6\u3067\u5019\u88dc100\u4ef6\u3092\u512a\u5148\u8868\u793a\u3002\u697d\u5929\u3067\u5546\u54c1\u4fa1\u683c\u30ca\u30d3\uff08\u4fa1\u683c\u6bd4\u8f03\uff09\u30ea\u30f3\u30af\u3092\u4f5c\u308c\u308b\u5834\u5408\u306f\u6700\u512a\u5148\u3067\u767b\u9332\u3057\u307e\u3059\u3002Canonical product ID\u306f\u81ea\u52d5\u3067\u3059\u3002</p><button class="market" onclick="loadRakutenCandidates(1)">RAKUTEN\u5019\u88dc100\u4ef6\u3092\u8868\u793a</button><button class="go" onclick="loadRakutenRegistered()">RAKUTEN\u767b\u9332\u6e08\u4e00\u89a7\uff1a\u904e\u53bb\u306e\u767b\u9332\u3092\u78ba\u8a8d</button><div id="rakutenRegistered"></div><div id="rakutenPager"></div><div id="rakutenCandidates"></div><div id="rakutenSeries"></div><details><summary class="small">\u500b\u5225ID\u3067\u767b\u9332</summary><input id="rap" placeholder="Canonical product ID"><input id="rau" placeholder="Official Rakuten affiliate URL"><input id="ras" placeholder="Shop name (optional)"><input id="raprice" inputmode="numeric" placeholder="Price JPY (optional)"><button class="market" onclick="registerRakutenAffiliate()">RAKUTEN AFFILIATE LINK\uff1a\u5546\u54c1\u306b\u767b\u9332</button></details><h2>SEARCH DIAGNOSTIC</h2><input id="sdq" value="One Piece figure" placeholder="Search diagnostic query"><button class="quality" onclick="run('/admin/search-diagnostic?query='+encodeURIComponent(document.getElementById('sdq').value),'GET')">SEARCH DIAGNOSTIC: Supabase\u691c\u7d22\u539f\u56e0\u7279\u5b9a</button><button class="go" onclick="run('/admin/natural-shopping-audit','GET')">NATURAL SHOPPING AUDITï¼èªç¶ãªè²·ãç©è³ªå10ä»¶ãç¡æä¸æ¬ãã¹ã</button><p class="small">\u79d8\u5bc6\u9375\u306f\u8fd4\u3055\u305a\u3001Supabase\u306eHTTP status\u30fb\u5b9f\u884c\u6761\u4ef6\u30fb\u4ef6\u6570\u30fb\u30a8\u30e9\u30fc\u30921\u56de\u3067\u78ba\u8a8d\u3057\u307e\u3059\u3002</p><h2>\u691c\u67fb</h2><button onclick="run('/admin/expand?stage=metrics','POST')">DB\u6210\u9577\u72b6\u6cc1</button><button class="final" onclick="run('/admin/final-check','GET')">FINAL CHECK</button><h2>Atelier</h2><button class="go" onclick="run('/admin/atelier-status','GET')">ATELIER STATUS</button><button class="go" onclick="run('/admin/atelier-poll','POST')">ATELIER POLL NOW</button><h2>Discovery</h2><button class="go" onclick="run('/admin/world-discovery-audit?mode=all','GET')">WORLD DISCOVERY AUDIT: MULTILINGUAL + AGENT402</button><button onclick="run('/admin/world-discovery-audit?mode=internal','GET')">WORLD INTERNAL SEARCH AUDIT</button><button onclick="run('/admin/world-discovery-audit?mode=agent402','GET')">AGENT402 REGISTER + LIVE DISCOVERY AUDIT</button><button class="index" onclick="run('/admin/agent402-register','POST')">AGENT402 REGISTER ORIGIN</button><button class="bazaar" onclick="run('/admin/bazaar-compliance-audit','GET')">COINBASE BAZAAR VALIDATE: 11 API</button><button class="bazaar" onclick="run('/admin/bazaar-merchant-audit','GET')">COINBASE BAZAAR STATUS: 11 API LISTING</button><button class="quality" onclick="run('/admin/bazaar-full-quality-audit','GET')">BAZAAR FULL QUALITY AUDIT: 11/11 + PAYMENT + SCHEMA + MOJIBAKE</button><input id="bq" value="anime collectibles" placeholder="Bazaar semantic search query"><button class="bazaar" onclick="run('/admin/bazaar-semantic-audit?query='+encodeURIComponent(document.getElementById('bq').value),'GET')">COINBASE BAZAAR SEARCH RANK</button><button class="index" onclick="run('/admin/discovery-v3-update','POST')">DISCOVERY V3 UPDATE\uff1a\u516c\u958b\u30e1\u30bf\u30c7\u30fc\u30bf\uff0b402 Index\u4e00\u62ec\u66f4\u65b0</button><button class="index" onclick="run('/admin/402index/register','POST')">402 Index\u307811\u30b5\u30fc\u30d3\u30b9\u767b\u9332</button><a class="bazaarLink" href="https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?payTo=9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT&amp;limit=20" target="_blank" rel="noopener noreferrer">Coinbase Bazaar\uff1a11 API\u63b2\u8f09\u78ba\u8a8d\uff08Coinbase\u3092\u76f4\u63a5\u958b\u304f\uff09</a><h2>x402 RPC PREFLIGHT</h2><p class="small">Run this on iPhone before using PC/Phantom. It verifies that the Worker can read Solana mainnet blockhash + USDC mint data.</p><button class="bazaar" onclick="x402RpcCheck()">x402 RPC CHECK</button><pre id="x402rpc">READY - no RPC check yet.</pre><script>
+function adminPage(env){const bazaarPayTo=String(env?.X402_WALLET_ADDRESS||'');return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>ANIME INTELLIGENCE ${VERSION}</title><style>body{background:#080808;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:20px}main{max-width:720px;margin:auto}h1{font-size:26px}h2{font-size:18px;margin-top:28px}input,button{width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px}input{background:#161616;color:#fff;border:1px solid #444}button{font-weight:800;border:0;background:#fff;color:#000}.go{background:#35e27a}.market{background:#f5c242}.backfill{background:#63b3ff}.quality{background:#36d9c5}.final{background:#c995ff}.index{background:#ff8b55}.bazaar{background:#4f7cff;color:#fff}.bazaarLink{display:block;width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;font-weight:800;background:#4f7cff;color:#fff;text-align:center;text-decoration:none}pre{white-space:pre-wrap;word-break:break-word;background:#111;padding:15px;border-radius:10px;min-height:140px}.small{color:#aaa;font-size:13px;line-height:1.5}.badge{display:inline-block;padding:6px 10px;background:#18251d;border:1px solid #35e27a;border-radius:999px;font-size:12px;color:#8dffb5}.danger{background:#7f1d1d!important;color:#fff!important;border-color:#991b1b!important}.rcard{background:#141414;border:1px solid #333;border-radius:12px;padding:12px;margin:12px 0}.rcard img{width:88px;height:88px;object-fit:contain;background:#fff;border-radius:8px;float:right;margin-left:10px}.rcard a{display:inline-block;padding:10px 12px;background:#f5c242;color:#000;border-radius:8px;font-weight:800;text-decoration:none;margin:6px 0}.rcard input{margin:5px 0}.rmeta{font-size:12px;color:#aaa}.pager{display:flex;gap:8px}.pager button{width:50%}</style></head><body><main><h1>ANIME INTELLIGENCE ${VERSION}</h1><div class="badge">v${VERSION} / MONETIZATION INTEGRATED</div><input id="k" type="password" placeholder="REFRESH_KEY"><h2>\u5b89\u5168\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3</h2><button class="go" onclick="run('/admin/expand','POST')">\u5b89\u51681\u30b5\u30a4\u30af\u30eb\uff08\u73fe\u5728\u306e\u30ed\u30fc\u30c6\u30fc\u30b7\u30e7\u30f3\uff09</button><button class="go" onclick="runDbExpand()">DB\u62e1\u5f35\uff1a\u4e3b\u8981\u30e1\u30fc\u30ab\u30fc\u3092\u81ea\u52d5\u62e1\u5f35</button><button class="go" onclick="runArchiveExpand()">CATALOG\uff1aYahoo JAN\u4ed8\u304d\u30b3\u30ec\u30af\u30c6\u30a3\u30d6\u30eb\u3092\u81ea\u52d5\u3067\u6700\u5f8c\u307e\u3067\u62e1\u5f35</button><select id="catalogCategory" style="width:100%;padding:16px;margin:7px 0;box-sizing:border-box;font-size:16px;border-radius:10px;background:#161616;color:#fff;border:1px solid #444"><option value="plush">\u306c\u3044\u3050\u308b\u307f</option><option value="acrylic_goods">\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9</option><option value="lottery_prize">\u4e00\u756a\u304f\u3058\u666f\u54c1</option><option value="model_kit">\u30d7\u30e9\u30e2\u30c7\u30eb</option><option value="badge">\u7f36\u30d0\u30c3\u30b8</option><option value="keychain">\u30ad\u30fc\u30db\u30eb\u30c0\u30fc</option><option value="limited_goods">\u9650\u5b9a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba</option><option value="trading_card">\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9</option><option value="sneaker">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30b9\u30cb\u30fc\u30ab\u30fc</option><option value="apparel">\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc\u30a2\u30d1\u30ec\u30eb</option><option value="figure">\u30d5\u30a3\u30ae\u30e5\u30a2</option></select><button onclick="runCatalogCategoryTest()">CATALOG CATEGORY TEST\uff1a\u9078\u629e\u30ab\u30c6\u30b4\u30ea\u30921\u30d0\u30c3\u30c1\u691c\u67fb</button><button onclick="run('/admin/catalog-run?batches=1','POST')">CATALOG CONTINUE\uff1a\u901a\u5e38\u30ab\u30fc\u30bd\u30eb\u30921\u30d0\u30c3\u30c1\u9032\u3081\u308b</button><button onclick="run('/admin/catalog-progress','GET')">CATALOG PROGRESS</button><button onclick="run('/admin/catalog-auto-status','GET')">CATALOG AUTO STATUS\uff1a\u30d0\u30c3\u30af\u30b0\u30e9\u30a6\u30f3\u30c9\u81ea\u52d5\u62e1\u5f35\u3092\u78ba\u8a8d</button><button onclick="run('/admin/official-mass-patrol','POST')">OFFICIAL MASS PATROL\uff1a\u30e1\u30fc\u30ab\u30fc\u516c\u5f0f\u5546\u54c1\u3092\u5de1\u56de</button><p class="small">MASS \u2192 OFFICIAL \u2192 YAHOO \u2192 EBAY \u2192 MASS \u2192 BACKFILL \u2192 YAHOO \u2192 EBAY</p><h2>\u500b\u5225\u5b9f\u884c</h2><button onclick="run('/admin/expand?stage=mass','POST')">MASS\uff1aGood Smile\u5546\u54c1\u8ffd\u52a0</button><button onclick="run('/admin/expand?stage=official','POST')">OFFICIAL\uff1a\u516c\u5f0f\u5546\u54c1\u30da\u30fc\u30b8\u88dc\u5b8c</button><button class="backfill" onclick="run('/admin/expand?stage=backfill','POST')">BACKFILL\uff1a\u65e2\u5b58JAN\u5546\u54c1\u88dc\u5b8c</button><button class="market" onclick="run('/admin/expand?stage=yahoo','POST')">YAHOO\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><button class="market" onclick="run('/admin/expand?stage=ebay','POST')">EBAY\uff1a\u5e02\u5834\u4fa1\u683c\u66f4\u65b0</button><h2>\u54c1\u8cea\u4fee\u5fa9</h2><button class="quality" onclick="runQuality()">QUALITY\uff1a\u5168\u4ef6\u81ea\u52d5\u54c1\u8cea\u4fee\u5fa9</button><button class="quality" onclick="run('/admin/catalog-cleanup','GET')">DB CLEANUP CHECK\uff1a\u524a\u9664\u5019\u88dc\u3060\u3051\u78ba\u8a8d</button><button class="danger" onclick="runCatalogCleanupApply()">DB CLEANUP APPLY\uff1a\u78ba\u5b9a\u5019\u88dc\u3092\u524a\u9664</button><button class="danger" onclick="runFinalizeV3()">FINALIZE V3\uff1a\u30af\u30ea\u30fc\u30f3\u30a2\u30c3\u30d7\u2192\u5168\u6a5f\u80fd\u691c\u67fb\u2192\u5b8c\u4e86</button><h2>\u53ce\u76ca\u30fbKPI</h2><button class="go" onclick="run('/admin/revenue-status','GET')">FIRST REVENUE CHECK\uff1a\u58f2\u4e0a\u30fb\u521d\u56de\u6c7a\u6e08\u30fbBazaar</button><button class="go" onclick="run(\'/admin/kpi\',\'GET\')">KPI\uff1aAPI\u58f2\u4e0a\u30fbpayer\u30fbconversion</button><h2>Rakuten Affiliate 10,000+</h2><p class="small">\u8cfc\u5165\u53ef\u80fd\u6027\u30fb\u518d\u8ca9\u30fb\u4e88\u7d04\u30fbJAN\u30fb\u4eba\u6c17\u5ea6\u3067\u5019\u88dc100\u4ef6\u3092\u512a\u5148\u8868\u793a\u3002\u697d\u5929\u3067\u5546\u54c1\u4fa1\u683c\u30ca\u30d3\uff08\u4fa1\u683c\u6bd4\u8f03\uff09\u30ea\u30f3\u30af\u3092\u4f5c\u308c\u308b\u5834\u5408\u306f\u6700\u512a\u5148\u3067\u767b\u9332\u3057\u307e\u3059\u3002Canonical product ID\u306f\u81ea\u52d5\u3067\u3059\u3002</p><button class="market" onclick="loadRakutenCandidates(1)">RAKUTEN\u5019\u88dc100\u4ef6\u3092\u8868\u793a</button><button class="go" onclick="loadRakutenRegistered()">RAKUTEN\u767b\u9332\u6e08\u4e00\u89a7\uff1a\u904e\u53bb\u306e\u767b\u9332\u3092\u78ba\u8a8d</button><div id="rakutenRegistered"></div><div id="rakutenPager"></div><div id="rakutenCandidates"></div><div id="rakutenSeries"></div><details><summary class="small">\u500b\u5225ID\u3067\u767b\u9332</summary><input id="rap" placeholder="Canonical product ID"><input id="rau" placeholder="Official Rakuten affiliate URL"><input id="ras" placeholder="Shop name (optional)"><input id="raprice" inputmode="numeric" placeholder="Price JPY (optional)"><button class="market" onclick="registerRakutenAffiliate()">RAKUTEN AFFILIATE LINK\uff1a\u5546\u54c1\u306b\u767b\u9332</button></details><h2>SEARCH DIAGNOSTIC</h2><input id="sdq" value="One Piece figure" placeholder="Search diagnostic query"><button class="quality" onclick="run('/admin/search-diagnostic?query='+encodeURIComponent(document.getElementById('sdq').value),'GET')">SEARCH DIAGNOSTIC: Supabase\u691c\u7d22\u539f\u56e0\u7279\u5b9a</button><button class="go" onclick="run('/admin/natural-shopping-audit','GET')">NATURAL SHOPPING AUDIT - 10 FREE SHOPPING QUERY TESTS</button><p class="small">\u79d8\u5bc6\u9375\u306f\u8fd4\u3055\u305a\u3001Supabase\u306eHTTP status\u30fb\u5b9f\u884c\u6761\u4ef6\u30fb\u4ef6\u6570\u30fb\u30a8\u30e9\u30fc\u30921\u56de\u3067\u78ba\u8a8d\u3057\u307e\u3059\u3002</p><h2>\u691c\u67fb</h2><button onclick="run('/admin/expand?stage=metrics','POST')">DB\u6210\u9577\u72b6\u6cc1</button><button class="final" onclick="run('/admin/final-check','GET')">FINAL CHECK</button><h2>Atelier</h2><button class="go" onclick="run('/admin/atelier-status','GET')">ATELIER STATUS</button><button class="go" onclick="run('/admin/atelier-poll','POST')">ATELIER POLL NOW</button><h2>Discovery</h2><button class="go" onclick="run('/admin/world-discovery-audit?mode=all','GET')">WORLD DISCOVERY AUDIT: MULTILINGUAL + AGENT402</button><button onclick="run('/admin/world-discovery-audit?mode=internal','GET')">WORLD INTERNAL SEARCH AUDIT</button><button onclick="run('/admin/world-discovery-audit?mode=agent402','GET')">AGENT402 REGISTER + LIVE DISCOVERY AUDIT</button><button class="index" onclick="run('/admin/agent402-register','POST')">AGENT402 REGISTER ORIGIN</button><button class="bazaar" onclick="run('/admin/bazaar-compliance-audit','GET')">COINBASE BAZAAR VALIDATE: 11 API</button><button class="bazaar" onclick="run('/admin/bazaar-merchant-audit','GET')">COINBASE BAZAAR STATUS: 11 API LISTING</button><button class="quality" onclick="run('/admin/bazaar-full-quality-audit','GET')">BAZAAR FULL QUALITY AUDIT: 11/11 + PAYMENT + SCHEMA + MOJIBAKE</button><input id="bq" value="anime collectibles" placeholder="Bazaar semantic search query"><button class="bazaar" onclick="run('/admin/bazaar-semantic-audit?query='+encodeURIComponent(document.getElementById('bq').value),'GET')">COINBASE BAZAAR SEARCH RANK</button><button class="index" onclick="run('/admin/discovery-v3-update','POST')">DISCOVERY V3 UPDATE\uff1a\u516c\u958b\u30e1\u30bf\u30c7\u30fc\u30bf\uff0b402 Index\u4e00\u62ec\u66f4\u65b0</button><button class="index" onclick="run('/admin/402index/register','POST')">402 Index\u307811\u30b5\u30fc\u30d3\u30b9\u767b\u9332</button><a class="bazaarLink" href="https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?payTo=9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT&amp;limit=20" target="_blank" rel="noopener noreferrer">Coinbase Bazaar\uff1a11 API\u63b2\u8f09\u78ba\u8a8d\uff08Coinbase\u3092\u76f4\u63a5\u958b\u304f\uff09</a><h2>x402 RPC PREFLIGHT</h2><p class="small">Run this on iPhone before using PC/Phantom. It verifies that the Worker can read Solana mainnet blockhash + USDC mint data.</p><button class="bazaar" onclick="x402RpcCheck()">x402 RPC CHECK</button><pre id="x402rpc">READY - no RPC check yet.</pre><script>
 function x402AdminKey(){
   const selectors=[
     '#refreshKey','#key','input[name="refresh_key"]','input[name="refreshKey"]',
