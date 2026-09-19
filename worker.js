@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.57";
+const VERSION="3.7.58";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -1498,6 +1498,19 @@ const GLOBAL_VAGUE_INTENT_TERMS=["anime","anime merch","anime merchandise","anim
 
 const PRODUCT_TYPE_SEARCH_EQUIVALENTS={figure:["figure","nendoroid","figma"],plush:["plush"],trading_card:["trading_card"],model_kit:["model_kit"],acrylic_goods:["acrylic_goods"],keychain:["keychain"],badge:["badge"],lottery_prize:["lottery_prize"],sneaker:["sneaker"],apparel:["apparel"]};
 
+function repairUtf8Mojibake(v=""){
+  const s=String(v||"");
+  if(!/[\u00c2\u00c3\u00d0\u00d1\u00d8\u00d9\u00e0\u00e1\u00e2\u00e3\u00ec\u00ed]/.test(s))return s;
+  try{
+    const bytes=[];
+    const map={0x20AC:0x80,0x201A:0x82,0x0192:0x83,0x201E:0x84,0x2026:0x85,0x2020:0x86,0x2021:0x87,0x02C6:0x88,0x2030:0x89,0x0160:0x8A,0x2039:0x8B,0x0152:0x8C,0x017D:0x8E,0x2018:0x91,0x2019:0x92,0x201C:0x93,0x201D:0x94,0x2022:0x95,0x2013:0x96,0x2014:0x97,0x02DC:0x98,0x2122:0x99,0x0161:0x9A,0x203A:0x9B,0x0153:0x9C,0x017E:0x9E,0x0178:0x9F};
+    for(const ch of s){const cp=ch.codePointAt(0);if(cp<=255)bytes.push(cp);else if(map[cp]!==undefined)bytes.push(map[cp]);else return s;}
+    const decoded=new TextDecoder("utf-8",{fatal:true}).decode(new Uint8Array(bytes));
+    const before=(s.match(/[\u00c2\u00c3\u00d0\u00d1\u00d8\u00d9]/g)||[]).length;
+    const after=(decoded.match(/[\u00c2\u00c3\u00d0\u00d1\u00d8\u00d9]/g)||[]).length;
+    return after<before?decoded:s;
+  }catch{return s;}
+}
 function normalizedUnicodePhrase(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
 function normalizedSearchPhrase(v){return foldLatinForSearch(String(v||"").normalize("NFKC")).replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
 function phraseIncludes(haystack,needle){
@@ -1770,7 +1783,7 @@ function recommendationConfidenceFromRanked(ranked=[],intent=null){
 }
 
 function multilingualQueryHints(query=""){
-  const raw=String(query||"").trim(),normalized=normalizedSearchPhrase(raw),productTypes=[],franchiseGroups=[],characterGroups=[],asciiFallback=asciiSafeUnicodeIntentFallback(raw);
+  const raw=repairUtf8Mojibake(String(query||"").trim()),normalized=normalizedSearchPhrase(raw),productTypes=[],franchiseGroups=[],characterGroups=[],asciiFallback=asciiSafeUnicodeIntentFallback(raw);
   for(const [type,aliases] of Object.entries(MULTILINGUAL_PRODUCT_TYPE_ALIASES))if(aliases.some(a=>phraseIncludes(raw,a)))productTypes.push(type);
   for(const type of directMultilingualProductTypeHints(raw))if(!productTypes.includes(type))productTypes.push(type);
   for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES))if(aliases.some(a=>strictEntityAliasMatch(raw,a)))franchiseGroups.push({canonical,aliases});
@@ -4931,26 +4944,26 @@ async function freeSearch(request,env,url){
 }
 
 const MULTILINGUAL_MERCH_INTENT_AUDIT_CASES=[
-  {lang:"ja",query:"ã¯ã³ãã¼ã¹ã®Tã·ã£ããã»ãã",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"ja",query:"\u30ef\u30f3\u30d4\u30fc\u30b9\u306eT\u30b7\u30e3\u30c4\u304c\u307b\u3057\u3044",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
   {lang:"en",query:"I want a One Piece T-shirt",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"zh-CN",query:"ææ³è¦æµ·è´¼çTæ¤",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"zh-TW",query:"ææ³è¦èªæµ·çTæ¤",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"ko",query:"ìí¼ì¤ í°ìì¸  ì¬ê³  ì¶ì´",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"zh-CN",query:"\u6211\u60f3\u8981\u6d77\u8d3c\u738bT\u6064",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"zh-TW",query:"\u6211\u60f3\u8981\u822a\u6d77\u738bT\u6064",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"ko",query:"\uc6d0\ud53c\uc2a4 \ud2f0\uc154\uce20 \uc0ac\uace0 \uc2f6\uc5b4",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
   {lang:"es",query:"Quiero una camiseta de One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
   {lang:"fr",query:"Je veux un t-shirt One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"de",query:"Ich mÃ¶chte ein One Piece T-Shirt",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"de",query:"Ich m\u00f6chte ein One Piece T-Shirt",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
   {lang:"it",query:"Voglio una maglietta di One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
   {lang:"pt",query:"Quero uma camiseta de One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"ru",query:"Ð¥Ð¾ÑÑ ÑÑÑÐ±Ð¾Ð»ÐºÑ ÐÐ°Ð½ ÐÐ¸Ñ",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"ar",query:"Ø£Ø±ÙØ¯ ØªÙ Ø´ÙØ±Øª ÙÙ Ø¨ÙØ³",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"hi",query:"à¤®à¥à¤à¥ à¤µà¤¨ à¤ªà¥à¤¸ à¤à¥-à¤¶à¤°à¥à¤ à¤à¤¾à¤¹à¤¿à¤",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"th",query:"à¸­à¸¢à¸²à¸à¹à¸à¹à¹à¸ªà¸·à¹à¸­à¸¢à¸·à¸ à¸§à¸±à¸à¸à¸µà¸",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"vi",query:"TÃ´i muá»n Ã¡o thun One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"tr",query:"One Piece tiÅÃ¶rt istiyorum",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"ru",query:"\u0425\u043e\u0447\u0443 \u0444\u0443\u0442\u0431\u043e\u043b\u043a\u0443 \u0412\u0430\u043d \u041f\u0438\u0441",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"ar",query:"\u0623\u0631\u064a\u062f \u062a\u064a \u0634\u064a\u0631\u062a \u0648\u0646 \u0628\u064a\u0633",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"hi",query:"\u092e\u0941\u091d\u0947 \u0935\u0928 \u092a\u0940\u0938 \u091f\u0940-\u0936\u0930\u094d\u091f \u091a\u093e\u0939\u093f\u090f",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"th",query:"\u0e2d\u0e22\u0e32\u0e01\u0e44\u0e14\u0e49\u0e40\u0e2a\u0e37\u0e49\u0e2d\u0e22\u0e37\u0e14 \u0e27\u0e31\u0e19\u0e1e\u0e35\u0e0b",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"vi",query:"T\u00f4i mu\u1ed1n \u00e1o thun One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"tr",query:"One Piece ti\u015f\u00f6rt istiyorum",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
   {lang:"nl",query:"Ik wil een One Piece T-shirt",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"pl",query:"ChcÄ koszulkÄ One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"pl",query:"Chc\u0119 koszulk\u0119 One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
   {lang:"id",query:"Saya mau kaos One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
-  {lang:"ja-negative",query:"å¤ç¨ã®ã¯ã³ãã¼ã¹ãæ¬²ãã",franchise:null,type:null,subtype:null},
+  {lang:"ja-negative",query:"\u590f\u7528\u306e\u30ef\u30f3\u30d4\u30fc\u30b9\u304c\u6b32\u3057\u3044",franchise:null,type:null,subtype:null},
   {lang:"en-negative",query:"I want a one-piece swimsuit",franchise:null,type:"apparel",subtype:"swimsuit"}
 ];
 function multilingualMerchIntentAudit(env){
