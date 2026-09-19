@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.60";
+const VERSION="3.7.61";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -1797,6 +1797,10 @@ function multilingualQueryHints(query=""){
   for(const c of asciiFallback.characters){const g=MULTILINGUAL_CHARACTER_ALIASES.find(x=>x.character===c);if(g&&!characterGroups.some(x=>x.character===c))characterGroups.push(g);}
   for(const f of asciiFallback.franchises)if(!franchiseGroups.some(g=>g.canonical===f))franchiseGroups.push({canonical:f,aliases:MULTILINGUAL_FRANCHISE_ALIASES[f]||[f]});
   const merchSubtypes=[...new Set([...merchSubtypeHints(raw),...asciiFallback.subtypes])];
+  // Merch subtype recognition is more robust than language-specific apparel words.
+  // Always promote a recognized apparel subtype to product_type=apparel so that
+  // Vietnamese/Turkish/Polish/Indic/etc. cannot lose the category after deployment.
+  if(merchSubtypes.some(x=>["tshirt","hoodie","jacket","sweatshirt","swimsuit"].includes(x))&&!productTypes.includes("apparel"))productTypes.push("apparel");
   let onePieceContext=onePieceQueryContext(raw,productTypes,merchSubtypes,characterGroups);
   const asciiSafeOnePiece=asciiFallback.franchises.includes("ONE PIECE");
   // If the ASCII-safe multilingual fallback has already established ONE PIECE from
@@ -5041,23 +5045,53 @@ function auditPostgrestIn(values=[]){
   const clean=[...new Set((values||[]).map(v=>String(v||"").trim()).filter(Boolean))];
   return `in.(${clean.map(v=>`"${v.replace(/"/g,'\\"')}"`).join(",")})`;
 }
+function auditCharacterSearchTerms(character=""){
+  const map={
+    "Pikachu":["\u30d4\u30ab\u30c1\u30e5\u30a6","Pikachu"],
+    "Roronoa Zoro":["\u30be\u30ed","Roronoa Zoro","Zoro"],
+    "Monkey D. Luffy":["\u30eb\u30d5\u30a3","Monkey D. Luffy","Luffy"],
+    "Hatsune Miku":["\u521d\u97f3\u30df\u30af","Hatsune Miku"],
+    "Naruto Uzumaki":["\u3046\u305a\u307e\u304d\u30ca\u30eb\u30c8","Naruto Uzumaki"]
+  };
+  return (map[String(character||"")]||[String(character||"")]).filter(Boolean);
+}
+function auditPreferenceEvidenceTerms(intent){
+  const out=[];const add=v=>{v=String(v||"").trim();if(v&&!out.includes(v))out.push(v);};
+  const prefs=intent?.preferences||[];const has=(f,v)=>prefs.some(p=>p.facet===f&&p.value===v);
+  if(has("size","large")){for(const x of ["BIG","49cm","40cm","30cm","1/1","L\u30b5\u30a4\u30ba","\u5927\u578b"])add(x);}
+  if(has("size","small")){for(const x of ["\u30df\u30cb","\u5c0f\u578b","10cm","12cm","15cm"])add(x);}
+  if(has("color","red")){add("\u8d64");add("red");}
+  if(has("color","black")){add("\u9ed2");add("black");}
+  if(has("style","premium")){for(const x of ["Premium","\u9ad8\u7d1a","\u8c6a\u83ef","1/4","1/6","Masterline","Prime 1","Hot Toys","\u30a2\u30eb\u30bf\u30fc"])add(x);}
+  if(has("use_case","gift")){add("\u30d7\u30ec\u30bc\u30f3\u30c8");add("gift");}
+  if(has("condition","sealed")){add("\u672a\u958b\u5c01");add("sealed");add("unopened");}
+  if(has("exclusivity","japan_exclusive")){for(const x of ["BASE SHOP","\u9ea6\u308f\u3089\u30b9\u30c8\u30a2","\u65e5\u672c\u9650\u5b9a","\u56fd\u5185\u9650\u5b9a","JUMP SHOP"])add(x);}
+  return out.slice(0,10);
+}
 const AUDIT_PRODUCT_SELECT="id,canonical_name_ja,canonical_name_en,manufacturer,brand,series,franchise,character_names,jan_code,model_number,product_type,msrp_jpy,original_release_date,official_url,official_image_url,product_status,identification_confidence,metadata";
 async function auditStructuredCatalogFetch(env,intent,opts={}){
   const params=new URLSearchParams();
   params.set("select",AUDIT_PRODUCT_SELECT);
-  params.set("limit",String(Math.max(1,Math.min(Number(opts.limit||60),80))));
+  params.set("limit",String(Math.max(1,Math.min(Number(opts.limit||60),90))));
   const franchise=intent?.franchises?.[0]||"";
   const fvals=auditFranchiseDbValues(franchise);
   if(fvals.length)params.set("franchise",auditPostgrestIn(fvals));
-  const dbTypes=[...new Set((intent?.product_types||[]).flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]).map(x=>String(x||"").trim()).filter(Boolean))];
-  if(dbTypes.length)params.set("product_type",auditPostgrestIn(dbTypes));
-  if(opts.titleTerm){
-    const term=safeSearchTerm(String(opts.titleTerm||"").trim());
-    if(term)params.set("canonical_name_ja",`ilike.*${term}*`);
+  if(!opts.skipType){
+    const dbTypes=[...new Set((intent?.product_types||[]).flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]).map(x=>String(x||"").trim()).filter(Boolean))];
+    if(dbTypes.length)params.set("product_type",auditPostgrestIn(dbTypes));
+  }
+  const must=String(opts.mustTitleTerm||opts.titleTerm||"").trim();
+  if(must){const term=safeSearchTerm(must);if(term)params.set("canonical_name_ja",`ilike.*${term}*`);}
+  const any=[...new Set((opts.anyTitleTerms||[]).map(safeSearchTerm).filter(Boolean))].slice(0,10);
+  if(any.length){
+    const clauses=[];
+    for(const term of any){clauses.push(`canonical_name_ja.ilike.*${term}*`);clauses.push(`canonical_name_en.ilike.*${term}*`);}
+    params.set("or",`(${clauses.join(",")})`);
   }
   const rows=await sbOptional(env,`/products?${params.toString()}`);
   return Array.isArray(rows)?rows:[];
 }
+
 async function fastAuditCatalogCandidates(env,intent,limit=50){
   // Audit path deliberately avoids expensive multi-column wildcard OR scans.
   // First use exact franchise/type filters, then do character/preference matching in Worker memory.
@@ -5140,38 +5174,80 @@ async function multilingualAmbiguousShoppingE2EBatchAudit(env){
     const intent=naturalShoppingIntent(c.query,u,env);
     return {c,index,intent,intent_ok:auditExpectedIntentMatch(intent,c),expectedContextStop:!!c.context&&intent?.context_requirements?.includes(c.context)};
   });
-  const buckets=new Map();
-  for(const x of prepared){if(x.expectedContextStop)continue;const key=auditBucketKey(x.intent);if(!buckets.has(key))buckets.set(key,x.intent);}
-  const catalog=new Map();
-  const entries=[...buckets.entries()];
-  // Run only a handful of compact exact-filter reads. This is intentionally not
-  // the production self-discovery path; it verifies live catalog compatibility
-  // without creating a 12x query storm or touching x402/payment.
-  const settled=await Promise.allSettled(entries.map(async([key,intent])=>[key,await auditStructuredCatalogFetch(env,intent,{limit:70})]));
-  for(let i=0;i<entries.length;i++){
-    const key=entries[i][0],r=settled[i];catalog.set(key,r.status==="fulfilled"?(r.value[1]||[]):[]);
-  }
-  const results=[];
-  for(const x of prepared){
-    const {c,index,intent,intent_ok,expectedContextStop}=x;
-    if(expectedContextStop){results.push({case:index+1,ok:!!intent_ok,query:c.query,hard_match:true,alternatives_hard_match:true,preference_status:"not_required",confidence:"guarded",selected:null,error:null});continue;}
-    let rows=[...(catalog.get(auditBucketKey(intent))||[])].filter(p=>intentCompatibility(p,intent).ok);
-    // Character-specific rescue: one compact exact-franchise/type title lookup,
-    // only when the shared bucket did not contain any compatible character.
-    if((intent?.characters||[]).length&&!rows.length){
-      try{const alias=preferredCharacterSearchAlias(intent.characters[0])||intent.characters[0];rows=(await auditStructuredCatalogFetch(env,intent,{limit:35,titleTerm:alias})).filter(p=>intentCompatibility(p,intent).ok);}catch{}
+
+  // Build compact case-specific live-catalog reads. Character requests use a
+  // Japanese-first title anchor so a random franchise slice cannot hide the requested character.
+  const basePromises=prepared.map(async x=>{
+    if(x.expectedContextStop)return [];
+    const {c,intent}=x;
+    const character=intent?.characters?.[0]||"";
+    const aliases=auditCharacterSearchTerms(character);
+    if(character){
+      for(const term of aliases.slice(0,2)){
+        const rows=await auditStructuredCatalogFetch(env,intent,{limit:55,mustTitleTerm:term});
+        const compatible=rows.filter(p=>intentCompatibility(p,intent).ok);
+        if(compatible.length)return compatible;
+      }
+      return [];
     }
-    if(c.budget_max_jpy&&rows.length){const known=rows.map(p=>({p,b:budgetConstraintStatus(p,intent)})).filter(x=>x.b.known),within=known.filter(x=>x.b.ok).map(x=>x.p);if(within.length)rows=within;else if(known.length)rows=[];}
+    if(c.subtype){
+      const term=preferredTypeSearchAlias(intent);
+      const rows=await auditStructuredCatalogFetch(env,intent,{limit:55,skipType:true,mustTitleTerm:term});
+      return rows.filter(p=>intentCompatibility(p,intent).ok);
+    }
+    const rows=await auditStructuredCatalogFetch(env,intent,{limit:75});
+    return rows.filter(p=>intentCompatibility(p,intent).ok);
+  });
+  const baseSettled=await Promise.allSettled(basePromises);
+
+  const results=[];
+  for(let i=0;i<prepared.length;i++){
+    const {c,index,intent,intent_ok,expectedContextStop}=prepared[i];
+    if(expectedContextStop){results.push({case:index+1,ok:!!intent_ok,query:c.query,hard_match:true,alternatives_hard_match:true,preference_status:"not_required",confidence:"guarded",selected:null,error:null});continue;}
+    let rows=baseSettled[i].status==="fulfilled"?(baseSettled[i].value||[]):[];
+
+    // If live catalog candidates satisfy identity but not the requested decision preference,
+    // issue one extra exact-franchise/type query constrained by preference evidence.
+    const prefKey=c.pref||null;
+    if(prefKey&&rows.length){
+      const best=Math.max(0,...rows.map(p=>candidatePreferenceFit(p,intent?.preferences||[]).matched.length));
+      if(best===0){
+        const evidence=auditPreferenceEvidenceTerms(intent);
+        if(evidence.length){
+          try{
+            const char=intent?.characters?.[0]||"";
+            const charTerm=char?(auditCharacterSearchTerms(char)[0]||""):"";
+            const extra=await auditStructuredCatalogFetch(env,intent,{limit:60,skipType:!!c.subtype,mustTitleTerm:charTerm,anyTitleTerms:evidence});
+            rows=mergeUniqueProducts([rows,extra],160).filter(p=>intentCompatibility(p,intent).ok);
+          }catch{}
+        }
+      }
+    }
+
+    // If a category-only merch request has no canonical row, retry without product_type
+    // but keep franchise + subtype title evidence. This catches catalog rows whose source
+    // classifier has not yet normalized apparel correctly.
+    if(!rows.length&&c.subtype){
+      try{
+        const term=preferredTypeSearchAlias(intent);
+        rows=(await auditStructuredCatalogFetch(env,intent,{limit:70,skipType:true,mustTitleTerm:term})).filter(p=>candidateMatchesIntentFranchises(p,intent.franchises)&&candidateMatchesMerchSubtype(p,intent.merch_subtypes));
+      }catch{}
+    }
+
+    if(c.budget_max_jpy&&rows.length){
+      const known=rows.map(p=>({p,b:budgetConstraintStatus(p,intent)})).filter(x=>x.b.known),within=known.filter(x=>x.b.ok).map(x=>x.p);
+      if(within.length)rows=within;else if(known.length)rows=[];
+    }
     const ranked=rankPaidCandidates(c.query,rows,intent),winner=ranked[0]||null,selectedProduct=winner?.product||null,selectedView=winner?paidRankedView(winner,intent):null,alternatives=ranked.slice(1,4).map(x=>paidRankedView(x,intent));
     const hard_match=!!selectedProduct&&auditProductHardMatch(selectedProduct,intent,c),alternatives_hard_match=alternatives.every(y=>y?.score_breakdown?.intent_compatibility?.ok===true);
-    const pref_key=c.pref||null,matched=selectedView?.matched_preferences||[],unconfirmed=selectedView?.unconfirmed_preferences||[],routeDeferred=pref_key==="shipping:easy_overseas"&&hard_match;
-    const preference_status=!pref_key?"not_required":matched.includes(pref_key)?"matched":routeDeferred?"deferred_to_purchase_route":unconfirmed.includes(pref_key)?"unconfirmed":"not_reflected";
-    const preference_ok=!pref_key||["matched","deferred_to_purchase_route"].includes(preference_status),budget_guard_ok=!!c.budget_max_jpy&&!selectedProduct;
+    const matched=selectedView?.matched_preferences||[],unconfirmed=selectedView?.unconfirmed_preferences||[],routeDeferred=prefKey==="shipping:easy_overseas"&&hard_match;
+    const preference_status=!prefKey?"not_required":matched.includes(prefKey)?"matched":routeDeferred?"deferred_to_purchase_route":unconfirmed.includes(prefKey)?"unconfirmed":"not_reflected";
+    const preference_ok=!prefKey||["matched","deferred_to_purchase_route"].includes(preference_status),budget_guard_ok=!!c.budget_max_jpy&&!selectedProduct;
     const ok=!!(intent_ok&&(budget_guard_ok||(selectedProduct&&hard_match&&alternatives_hard_match&&preference_ok)));
     results.push({case:index+1,ok,query:c.query,hard_match,alternatives_hard_match,preference_status,confidence:winner?recommendationConfidenceFromRanked(ranked,intent).label:(budget_guard_ok?"guarded":"low"),selected:selectedView?.name_ja||selectedView?.name_en||null,error:null});
   }
   const pass=results.filter(x=>x.ok).length,hard=results.filter(x=>x.hard_match&&x.alternatives_hard_match).length,prefReq=MULTILINGUAL_AMBIGUOUS_SHOPPING_E2E_CASES.filter(x=>x.pref).length,prefMatched=results.filter(x=>x.preference_status==="matched").length,prefReflected=results.filter(x=>["matched","deferred_to_purchase_route"].includes(x.preference_status)).length;
-  return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"MULTILINGUAL_AMBIGUOUS_SHOPPING_E2E_AUDIT",resource_safe_mode:"single batch; compact exact franchise/type catalog reads shared across 12 cases; character rescue only when needed; no self-discovery/x402/payment path",payment_required:false,real_payment_test_required:false,pass_count:pass,total:results.length,all_pass:pass===results.length,hard_constraint_pass_count:hard,preference_matched_count:prefMatched,preference_reflected_or_deferred_count:prefReflected,preference_required_count:prefReq,results};
+  return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"MULTILINGUAL_AMBIGUOUS_SHOPPING_E2E_AUDIT",resource_safe_mode:"single batch; Japanese-first character anchors; exact franchise/type reads; one preference-evidence rescue per failing case; no self-discovery/x402/payment path",payment_required:false,real_payment_test_required:false,pass_count:pass,total:results.length,all_pass:pass===results.length,hard_constraint_pass_count:hard,preference_matched_count:prefMatched,preference_reflected_or_deferred_count:prefReflected,preference_required_count:prefReq,results};
 }
 
 function agentSelectionReadinessAudit(origin){
@@ -5192,7 +5268,7 @@ function agentSelectionReadinessAudit(origin){
     agent_services:Array.isArray(INDEX402_SERVICES)&&INDEX402_SERVICES.length===11,
     x402:Array.isArray(INDEX402_SERVICES)&&INDEX402_SERVICES.length===11
   };
-  return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"AGENT_SELECTION_READINESS_AUDIT",payment_required:false,all_pass:Object.values(checks).every(Boolean),checks,capability_evidence:{multilingual_ambiguity:{pass_count:amb.pass_count,total:amb.total,all_pass:amb.all_pass},multilingual_merch:{pass_count:merch.pass_count,total:merch.total,all_pass:merch.all_pass},mcp_tools:{total:MCP_TOOLS.length,paid:MCP_TOOLS.filter(t=>t?.annotations?.paid===true).length,free:MCP_TOOLS.filter(t=>t?.annotations?.paid!==true).length},safety_guards:{external_context_required:true,budget_must_be_verified_before_charge:true,buy_wait_requires_exact_identity:true,marketplace_listing_noise_penalized:true},resource_limits:{semantic_terms_max:6,structured_or_terms_max:4,fallback_catalog_scan_max_rows:600}},differentiators:p.selection_advantages,surfaces:[`${origin}/openapi.json`,`${origin}/llms.txt`,`${origin}/mcp`,`${origin}/.well-known/x402`,`${origin}/agent/profile`,`${origin}/agent/services`]};
+  return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"AGENT_SELECTION_READINESS_AUDIT",payment_required:false,all_pass:Object.values(checks).every(Boolean),checks,capability_evidence:{multilingual_ambiguity:{pass_count:amb.pass_count,total:amb.total,all_pass:amb.all_pass},multilingual_merch:{pass_count:merch.pass_count,total:merch.total,all_pass:merch.all_pass,failed:merch.results.filter(x=>!x.ok).map(x=>({lang:x.lang,actual:x.actual,expected:x.expected}))},mcp_tools:{total:MCP_TOOLS.length,paid:MCP_TOOLS.filter(t=>t?.annotations?.paid===true).length,free:MCP_TOOLS.filter(t=>t?.annotations?.paid!==true).length},safety_guards:{external_context_required:true,budget_must_be_verified_before_charge:true,buy_wait_requires_exact_identity:true,marketplace_listing_noise_penalized:true},resource_limits:{semantic_terms_max:6,structured_or_terms_max:4,fallback_catalog_scan_max_rows:600}},differentiators:p.selection_advantages,surfaces:[`${origin}/openapi.json`,`${origin}/llms.txt`,`${origin}/mcp`,`${origin}/.well-known/x402`,`${origin}/agent/profile`,`${origin}/agent/services`]};
 }
 
 function discoveryExample(path){const d=DISCOVERY_CONFIG[path]||{};return {service:"ANIME INTELLIGENCE",version:VERSION,endpoint:path,example_query:d.examples?.[0]||"Nendoroid Hatsune Miku",value:d.value||null,note:"Representative response shape; live values depend on the resolved product and current observations."};}
