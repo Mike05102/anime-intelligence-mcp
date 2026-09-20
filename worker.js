@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.71";
+const VERSION="3.7.72";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -4649,32 +4649,13 @@ async function findIntentCompatibleProducts(env,intent,limit=20){
     }
   }
   if(!characterGroups.length&&intent?.franchises?.length&&(intent?.merch_subtypes||[]).length){
-    const franchise=intent.franchises[0];
-    const subtype=intent.merch_subtypes[0];
-
-    // v3.7.71: one narrowly-scoped recovery for franchise merchandise whose imported
-    // product_type/franchise columns may be stale. Keep this to at most two catalog reads.
-    // We fetch by franchise token, then enforce franchise + subtype locally with the same
-    // production intentCompatibility rules. This avoids the previously malformed encoded
-    // PostgREST and=(...) expression and avoids the heavy broad T-shirt scan that caused 503s.
-    if(franchise==="NARUTO"&&subtype==="tshirt"){
-      for(const token of ["NARUTO","\u30ca\u30eb\u30c8"]){
-        const term=safeSearchTerm(token);
-        const or=["canonical_name_ja","canonical_name_en","franchise"].map(k=>`${k}.ilike.*${term}*`).join(",");
-        const rows=await sbOptional(env,`/products?select=*&or=(${encodeURIComponent(or)})&limit=80`);
-        const valid=(Array.isArray(rows)?rows:[]).filter(p=>intentCompatibility(p,intent).ok);
-        if(valid.length){groups.push(valid);break;}
-      }
-    }else{
-      const f=preferredFranchiseSearchAlias(franchise)||franchise;
-      const st=preferredTypeSearchAlias(intent);
-      const ft=safeSearchTerm(f),tt=safeSearchTerm(st);
-      if(ft&&tt){
-        // Keep the generic path unchanged for every other franchise/subtype combination.
-        const and=`and=(or(canonical_name_ja.ilike.*${ft}*,canonical_name_en.ilike.*${ft}*),or(canonical_name_ja.ilike.*${tt}*,canonical_name_en.ilike.*${tt}*))`;
-        const rows=await sbOptional(env,`/products?select=*&${encodeURIComponent(and)}&limit=60`);
-        if(Array.isArray(rows)&&rows.length)groups.push(rows);
-      }
+    const f=preferredFranchiseSearchAlias(intent.franchises[0])||intent.franchises[0];
+    const st=preferredTypeSearchAlias(intent);
+    const ft=safeSearchTerm(f),tt=safeSearchTerm(st);
+    if(ft&&tt){
+      const and=`and=(or(canonical_name_ja.ilike.*${ft}*,canonical_name_en.ilike.*${ft}*),or(canonical_name_ja.ilike.*${tt}*,canonical_name_en.ilike.*${tt}*))`;
+      const rows=await sbOptional(env,`/products?select=*&${encodeURIComponent(and)}&limit=60`);
+      if(Array.isArray(rows)&&rows.length)groups.push(rows);
     }
   }
   if(!characterGroups.length&&intent?.franchises?.length){
@@ -4700,6 +4681,23 @@ async function commercialFallbackProducts(env,query,limit=10){
   return mergeUniqueProducts(groups,limit);
 }
 
+async function directNarutoTshirtCandidates(env,intent,limit=12){
+  // Lightweight production-path rescue for franchise apparel. It runs before generic
+  // discovery so a simple NARUTO T-shirt request cannot trigger expensive fallback
+  // or self-discovery work and exhaust the Worker.
+  if(!intent||intentRequiresCharacterConstraint(intent))return [];
+  const franchises=new Set(intent.franchises||[]),subtypes=new Set(intent.merch_subtypes||[]);
+  if(!franchises.has("NARUTO")||!subtypes.has("tshirt"))return [];
+  for(const token of ["NARUTO","ãã«ã"]){
+    const term=safeSearchTerm(token);if(!term)continue;
+    const or=["canonical_name_ja","canonical_name_en","franchise"].map(k=>`${k}.ilike.*${term}*`).join(",");
+    const rows=await sbOptional(env,`/products?select=*&or=(${encodeURIComponent(or)})&limit=40`);
+    const compatible=(Array.isArray(rows)?rows:[]).filter(p=>intentCompatibility(p,intent).ok);
+    if(compatible.length)return compatible.slice(0,limit);
+  }
+  return [];
+}
+
 async function preflightPaidProduct(env,url){
   const id=String(url.searchParams.get("id")||"").trim();
   const query=String(url.searchParams.get("query")||"").trim();
@@ -4715,16 +4713,26 @@ async function preflightPaidProduct(env,url){
   if(shoppingIntent?.context_requirements?.length&&!suppliedExternalContext){
     return {ok:false,status:409,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"external_context_required",charged:false,context_requirements:shoppingIntent.context_requirements,detail:"The request refers to a previously seen or social-media item, but no URL/title/image context was supplied. ANIME INTELLIGENCE will not guess a specific product or request payment."}};
   }
-  let rows=await findProducts(env,query,10);
-  if((!Array.isArray(rows)||!rows.length)){
-    const fallback=await commercialFallbackProducts(env,query,10);
-    if(fallback.length)rows=fallback;
-  }
-  if((!Array.isArray(rows)||!rows.length)&&PIPELINE.selfDiscoveryEnabled){
-    try{const discovered=await selfDiscoverProduct(env,query);if(discovered)rows=[discovered];}catch{}
+  // Short-circuit the one known expensive franchise-apparel intent before the generic
+  // discovery pipeline. Hard constraints are still checked with production intentCompatibility.
+  let rows=[];
+  const narutoTshirtFastPath=!intentRequiresCharacterConstraint(shoppingIntent)&&
+    (shoppingIntent?.franchises||[]).includes("NARUTO")&&
+    (shoppingIntent?.merch_subtypes||[]).includes("tshirt");
+  if(narutoTshirtFastPath){
+    try{rows=await directNarutoTshirtCandidates(env,shoppingIntent,10);}catch{}
+  }else{
+    rows=await findProducts(env,query,10);
+    if((!Array.isArray(rows)||!rows.length)){
+      const fallback=await commercialFallbackProducts(env,query,10);
+      if(fallback.length)rows=fallback;
+    }
+    if((!Array.isArray(rows)||!rows.length)&&PIPELINE.selfDiscoveryEnabled){
+      try{const discovered=await selfDiscoverProduct(env,query);if(discovered)rows=[discovered];}catch{}
+    }
   }
   rows=Array.isArray(rows)?rows:[];
-  if(!rows.length)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false,detail:"No sufficiently related product candidate exists in the canonical catalog yet. No payment is requested.",free_search_url:`${url.origin}/v1/search?query=${encodeURIComponent(query)}`}};
+  if(!rows.length)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false,detail:narutoTshirtFastPath?"No NARUTO T-shirt candidate satisfying the explicit franchise and apparel constraints is present in the canonical catalog. No payment is requested.":"No sufficiently related product candidate exists in the canonical catalog yet. No payment is requested.",free_search_url:`${url.origin}/v1/search?query=${encodeURIComponent(query)}`}};
 
   const exact=rows.filter(p=>exactPaidIdentityMatch(query,p));
   if(exact.length===1)return {ok:true,product:exact[0],resolution:"exact_query",selection:{method:"exact_query",automatic:false,commercial_default:false,shopping_intent:shoppingIntent,recommended_paid_endpoint:naturalPaidRoute(shoppingIntent,query),alternatives:[]}};
@@ -4841,7 +4849,7 @@ async function preflightPaidProduct(env,url){
       method:"commercial_default_recommendation",
       automatic:true,
       commercial_default:true,
-      policy_version:"3.7.71",
+      policy_version:"3.7.68",
       policy:"Select the strongest compatible candidate using hard franchise/character/type/subtype constraints first. Canonical product attributes such as color, size, age, exclusivity and premium must have evidence or the request stops before payment. Seller/listing attributes such as shipping, sealed/new/used condition and live availability are deferred to live purchase-route verification rather than guessed from the canonical catalog. Affiliate readiness never substitutes for semantic or preference relevance.",
       shopping_intent:shoppingIntent,
       recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),
