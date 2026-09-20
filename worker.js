@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.68";
+const VERSION="3.7.69";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -4649,13 +4649,32 @@ async function findIntentCompatibleProducts(env,intent,limit=20){
     }
   }
   if(!characterGroups.length&&intent?.franchises?.length&&(intent?.merch_subtypes||[]).length){
-    const f=preferredFranchiseSearchAlias(intent.franchises[0])||intent.franchises[0];
+    // v3.7.69: title-level franchise + merchandise-subtype retrieval.
+    // Do NOT percent-encode the whole PostgREST `and=(...)` expression: doing so turns
+    // the structural `=` / commas into part of one parameter key, so the intended AND
+    // filter is never applied. This was the remaining reason a query such as
+    // "æµ·å¤çºéãããããã«ãã®Tã·ã£ã" could see nearby NARUTO alternatives but
+    // fail to retrieve a hard-compatible T-shirt candidate.
+    const franchise=intent.franchises[0];
+    const f=preferredFranchiseSearchAlias(franchise)||franchise;
     const st=preferredTypeSearchAlias(intent);
     const ft=safeSearchTerm(f),tt=safeSearchTerm(st);
     if(ft&&tt){
-      const and=`and=(or(canonical_name_ja.ilike.*${ft}*,canonical_name_en.ilike.*${ft}*),or(canonical_name_ja.ilike.*${tt}*,canonical_name_en.ilike.*${tt}*))`;
-      const rows=await sbOptional(env,`/products?select=*&${encodeURIComponent(and)}&limit=60`);
-      if(Array.isArray(rows)&&rows.length)groups.push(rows);
+      const jaAnd=`and=(canonical_name_ja.ilike.*${ft}*,canonical_name_ja.ilike.*${tt}*)`;
+      const enFranchise=safeSearchTerm(franchise)||ft;
+      const enSubtype=(intent.merch_subtypes||[])[0]==="tshirt"?"T-shirt":tt;
+      const enAnd=`and=(canonical_name_en.ilike.*${enFranchise}*,canonical_name_en.ilike.*${safeSearchTerm(enSubtype)}*)`;
+      for(const filter of [jaAnd,enAnd]){
+        const rows=await sbOptional(env,`/products?select=*&${filter}&limit=80`);
+        if(Array.isArray(rows)&&rows.length)groups.push(rows);
+      }
+    }
+    // Bounded subtype-first rescue for marketplace imports whose franchise column is stale
+    // or blank. The local intentCompatibility() check below still requires both the NARUTO
+    // franchise evidence and T-shirt subtype evidence, so this cannot promote unrelated shirts.
+    if(tt){
+      const subtypeRows=await sbOptional(env,`/products?select=*&or=(${encodeURIComponent(`canonical_name_ja.ilike.*${tt}*,canonical_name_en.ilike.*${tt}*`)})&limit=120`);
+      if(Array.isArray(subtypeRows)&&subtypeRows.length)groups.push(subtypeRows);
     }
   }
   if(!characterGroups.length&&intent?.franchises?.length){
@@ -4822,7 +4841,7 @@ async function preflightPaidProduct(env,url){
       method:"commercial_default_recommendation",
       automatic:true,
       commercial_default:true,
-      policy_version:"3.7.68",
+      policy_version:"3.7.69",
       policy:"Select the strongest compatible candidate using hard franchise/character/type/subtype constraints first. Canonical product attributes such as color, size, age, exclusivity and premium must have evidence or the request stops before payment. Seller/listing attributes such as shipping, sealed/new/used condition and live availability are deferred to live purchase-route verification rather than guessed from the canonical catalog. Affiliate readiness never substitutes for semantic or preference relevance.",
       shopping_intent:shoppingIntent,
       recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),
