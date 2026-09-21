@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.72";
+const VERSION="3.7.73";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -4594,6 +4594,21 @@ function candidateIntentBonus(p,intent){
   return {score:Math.round(score*10)/10,breakdown:b};
 }
 
+function candidateRequestedCharacterConflict(p,intent){
+  const wanted=new Set(intent?.characters||[]);
+  if(!wanted.size)return false;
+  const title=String(discoveryTitle(p)||"").normalize("NFKC");
+  // A collaboration/series name can mention Hatsune Miku while the actual SKU is a
+  // different Piapro character. Reject that single-character SKU unless it is clearly
+  // a multi-character set/bundle.
+  if(wanted.has("Hatsune Miku")){
+    const other=/(?:Kagamine\s+Rin|Kagamine\s+Len|Megurine\s+Luka|é¡é³ãªã³|é¡é³ã¬ã³|å·¡é³ã«ã«)/i.test(title);
+    const bundle=/(?:ã»ãã|set\b|bundle|collection|\b[2-9]ç¨®|å¨\d+ç¨®)/i.test(title);
+    if(other&&!bundle)return true;
+  }
+  return false;
+}
+
 function paidCandidateRanking(query,p,index=0,intent=null){
   const affiliateReady=registeredRakutenAffiliateOffers(p).length>0;
   const popularity=paidPopularitySignal(p),recency=paidReleaseRecencyScore(p),relevance=paidQueryRelevanceScore(query,p);
@@ -4606,8 +4621,9 @@ function paidCandidateRanking(query,p,index=0,intent=null){
   const intentConstraintScore=compatibility.explicit_constraints?(compatibility.ok?22:-260):0;
   const listingNoise=listingNoiseScore(p),listingNoisePenalty=-Math.min(24,listingNoise*8);
   const budgetStatus=budgetConstraintStatus(p,intent),budgetHardPenalty=budgetStatus.required&&budgetStatus.known&&!budgetStatus.ok?-220:0;
-  const score=Math.round((relevance+popularity+recency+quality+completeness+purchasable+searchOrder+intentBonus.score+intentConstraintScore+listingNoisePenalty+budgetHardPenalty)*10)/10;
-  return {product:p,score,affiliate_ready:affiliateReady,breakdown:{query_relevance:Math.round(relevance*10)/10,popularity_signal:Math.round(popularity*10)/10,release_recency:recency,identity_quality:Math.round(quality*10)/10,metadata_completeness:completeness,affiliate_purchase_route:purchasable,search_rank:searchOrder,intent_fit:intentBonus.score,intent_fit_detail:intentBonus.breakdown,intent_constraint_score:intentConstraintScore,intent_compatibility:compatibility,listing_noise_penalty:listingNoisePenalty,budget_constraint:budgetStatus}};
+  const characterConflictPenalty=candidateRequestedCharacterConflict(p,intent)?-400:0;
+  const score=Math.round((relevance+popularity+recency+quality+completeness+purchasable+searchOrder+intentBonus.score+intentConstraintScore+listingNoisePenalty+budgetHardPenalty+characterConflictPenalty)*10)/10;
+  return {product:p,score,affiliate_ready:affiliateReady,breakdown:{query_relevance:Math.round(relevance*10)/10,popularity_signal:Math.round(popularity*10)/10,release_recency:recency,identity_quality:Math.round(quality*10)/10,metadata_completeness:completeness,affiliate_purchase_route:purchasable,search_rank:searchOrder,intent_fit:intentBonus.score,intent_fit_detail:intentBonus.breakdown,intent_constraint_score:intentConstraintScore,intent_compatibility:compatibility,listing_noise_penalty:listingNoisePenalty,budget_constraint:budgetStatus,character_conflict_penalty:characterConflictPenalty}};
 }
 
 function rankPaidCandidates(query,rows=[],intent=null){
@@ -4682,19 +4698,61 @@ async function commercialFallbackProducts(env,query,limit=10){
 }
 
 async function directNarutoTshirtCandidates(env,intent,limit=12){
-  // Lightweight production-path rescue for franchise apparel. It runs before generic
-  // discovery so a simple NARUTO T-shirt request cannot trigger expensive fallback
-  // or self-discovery work and exhaust the Worker.
+  // Resource-safe production rescue for franchise apparel. First use the canonical
+  // catalog. If the catalog has no NARUTO T-shirt yet, perform exactly one focused
+  // Yahoo Shopping discovery request, canonicalize at most one compatible listing,
+  // insert it into the product master, then return that canonical row. This avoids
+  // the generic fallback/self-discovery fan-out that previously exhausted Workers.
   if(!intent||intentRequiresCharacterConstraint(intent))return [];
   const franchises=new Set(intent.franchises||[]),subtypes=new Set(intent.merch_subtypes||[]);
   if(!franchises.has("NARUTO")||!subtypes.has("tshirt"))return [];
-  for(const token of ["NARUTO","ãã«ã"]){
-    const term=safeSearchTerm(token);if(!term)continue;
-    const or=["canonical_name_ja","canonical_name_en","franchise"].map(k=>`${k}.ilike.*${term}*`).join(",");
-    const rows=await sbOptional(env,`/products?select=*&or=(${encodeURIComponent(or)})&limit=40`);
-    const compatible=(Array.isArray(rows)?rows:[]).filter(p=>intentCompatibility(p,intent).ok);
-    if(compatible.length)return compatible.slice(0,limit);
-  }
+
+  const catalogLookup=async()=>{
+    for(const token of ["NARUTO","ãã«ã"]){
+      const term=safeSearchTerm(token);if(!term)continue;
+      const or=["canonical_name_ja","canonical_name_en","franchise"].map(k=>`${k}.ilike.*${term}*`).join(",");
+      const rows=await sbOptional(env,`/products?select=*&or=(${encodeURIComponent(or)})&limit=40`);
+      const compatible=(Array.isArray(rows)?rows:[]).filter(p=>intentCompatibility(p,intent).ok);
+      if(compatible.length)return compatible.slice(0,limit);
+    }
+    return [];
+  };
+
+  const existing=await catalogLookup();
+  if(existing.length)return existing;
+  if(!env.YAHOO_CLIENT_ID)return [];
+
+  try{
+    const result=await yahooRequest(env,{query:"NARUTO Tã·ã£ã",condition:"new"},20);
+    const hits=Array.isArray(result?.hits)?result.hits:[];
+    for(const hit of hits){
+      const name=cleanOfficialTitle(hit?.name||"")||String(hit?.name||"").trim();
+      if(!name)continue;
+      let classification=classifyProduct(name);
+      classification=((classification.type==="other"||!classification.type)?apparelClassifierOverride(name,classification):classification);
+      // A marketplace title must itself prove both franchise and T-shirt identity.
+      const probe={canonical_name_ja:name,canonical_name_en:null,franchise:"NARUTO",product_type:classification.type||"apparel",series:null,brand:hit?.brand?.name||null,character_names:[]};
+      if(!intentCompatibility(probe,intent).ok)continue;
+      if(classification.type!=="apparel"&&!candidateMatchesIntentTypes(probe,["apparel"]))continue;
+      if(!candidateMatchesMerchSubtype(probe,["tshirt"]))continue;
+
+      const jan=cleanJan(hit?.janCode);
+      const ident=collectibleIdentityKey(name,"apparel",jan);
+      const apparel=apparelIdentity(name);
+      const x={jan:jan||null,name,classification:{...classification,type:"apparel"},trading_card_form:null,sneaker:null,apparel,identity_method:ident.identity_method,hit,canonical_identity:ident.identity||null,canonical_fingerprint:ident.fingerprint||null,source_key:ident.source_key};
+      const source=await ensureYahooSource(env);
+      const payload=yahooCatalogSeedPayload(x,"NARUTO Tã·ã£ã",1,source.source_id,new Date().toISOString());
+      payload.franchise="NARUTO";
+      payload.product_type="apparel";
+      const inserted=await sbOptional(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify([payload])});
+      const insertedRows=Array.isArray(inserted)?inserted:[];
+      const compatibleInserted=insertedRows.filter(p=>intentCompatibility(p,intent).ok);
+      if(compatibleInserted.length)return compatibleInserted.slice(0,limit);
+      // If an identical product already existed, re-read the canonical catalog once.
+      const reread=await catalogLookup();
+      if(reread.length)return reread;
+    }
+  }catch{}
   return [];
 }
 
