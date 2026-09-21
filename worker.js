@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.75";
+const VERSION="3.7.76";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -1565,7 +1565,7 @@ function asciiSafeUnicodeIntentFallback(raw=""){
 
   if(/(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(x)){add(characters,"Pikachu");add(franchises,"Pokemon");}
   if(/(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(x)){add(characters,"Roronoa Zoro");add(franchises,"ONE PIECE");}
-  if(/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(x)){add(characters,"Monkey D. Luffy");add(franchises,"ONE PIECE");}
+  if(/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|(?<![\u30a1-\u30f6\u30fc])\u30eb\u30d5\u30a3|\u30ef\u30f3\u30d4\u30fc\u30b9\s*\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(x)){add(characters,"Monkey D. Luffy");add(franchises,"ONE PIECE");}
 
   // Japanese bare ã¯ã³ãã¼ã¹ is context-sensitive. Merchandise words make franchise use likely;
   // dress/swimsuit context keeps it as ordinary apparel.
@@ -2022,7 +2022,7 @@ function candidateMatchesIntentCharacters(p,chars=[]){
     const c=String(g.character||"");
     // ASCII-safe direct patterns protect CJK/Korean character matching from copy/deploy encoding issues.
     if(c==="Pikachu"&&/(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(raw))return true;
-    if(c==="Monkey D. Luffy"&&/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(raw))return true;
+    if(c==="Monkey D. Luffy"&&/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|(?<![\u30a1-\u30f6\u30fc])\u30eb\u30d5\u30a3|\u30ef\u30f3\u30d4\u30fc\u30b9\s*\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(raw))return true;
     if(c==="Roronoa Zoro"&&/(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(raw))return true;
     if(c==="Naruto Uzumaki"&&/(?:naruto\s*uzumaki|uzumaki\s*naruto|\u3046\u305a\u307e\u304d\s*\u30ca\u30eb\u30c8|\u6f29\u6da1\u9cf4\u4eba|\u6f29\u6e26\u9cf4\u4eba)/i.test(raw))return true;
     if(c==="Sasuke Uchiha"&&/(?:sasuke(?:\s*uchiha)?|\u3046\u3061\u306f\s*\u30b5\u30b9\u30b1|\u30b5\u30b9\u30b1|\u4f50\u52a9|\uc0ac\uc2a4\ucf00)/i.test(raw))return true;
@@ -2115,7 +2115,7 @@ function preferredCharacterSearchAlias(character=""){
 function preferenceSearchTerms(intent){
   const out=[];const add=v=>{v=String(v||"").trim();if(v&&!out.includes(v))out.push(v);};
   for(const p of (intent?.preferences||[])){
-    if(p.facet==="size"&&p.value==="large")add("BIG");
+    if(p.facet==="size"&&p.value==="large"){add("49cm");add("Lãµã¤ãº");add("å¤§ãã");add("1/1");add("BIG");}
     else if(p.facet==="size"&&p.value==="small")add("ãã");
     else if(p.facet==="color"&&p.value==="red")add("èµ¤");
     else if(p.facet==="color"&&p.value==="black")add("é»");
@@ -2146,6 +2146,27 @@ function preferredTypeSearchAlias(intent){
   const t=intent?.product_types?.[0];
   return ({figure:"ãã£ã®ã¥ã¢",plush:"ã¬ãããã¿",apparel:"",trading_card:"ã«ã¼ã",model_kit:"ãã©ã¢ãã«",acrylic_goods:"ã¢ã¯ãªã«ã¹ã¿ã³ã",keychain:"ã­ã¼ãã«ãã¼",badge:"ç¼¶ããã¸",sneaker:"ã¹ãã¼ã«ã¼"})[t]||String(t||"").replace(/_/g," ");
 }
+function canonicalIntentRetrievalQuery(intent,originalQuery=""){
+  // v3.7.76: equivalent multilingual intents retrieve/rank from one canonical anchor.
+  // This removes JA/ZH/KO candidate-pool drift without weakening hard constraints.
+  const parts=[];
+  if(intentRequiresCharacterConstraint(intent)&&intent?.characters?.[0])parts.push(preferredCharacterSearchAlias(intent.characters[0]));
+  else if(intent?.franchises?.[0])parts.push(preferredFranchiseSearchAlias(intent.franchises[0]));
+  const type=preferredTypeSearchAlias(intent);if(type)parts.push(type);
+  const strict=strictCatalogPreferences(intent);
+  for(const pref of strict){
+    if(pref.facet==="size"&&pref.value==="large")parts.push("49cm");
+    else if(pref.facet==="size"&&pref.value==="small")parts.push("ãã");
+    else if(pref.facet==="color"&&pref.value==="red")parts.push("èµ¤");
+    else if(pref.facet==="color"&&pref.value==="black")parts.push("é»");
+    else if(pref.facet==="exclusivity"&&pref.value==="japan_exclusive")parts.push("BASE SHOP Limited Edition");
+    else if(pref.facet==="time"&&pref.value==="older")parts.push("æ§");
+    else if(pref.facet==="style"&&pref.value==="premium")parts.push("Premium");
+  }
+  const built=parts.filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+  return built||String(originalQuery||"").trim();
+}
+
 function preferenceTargetedQueries(intent,originalQuery=""){
   const identity=(intentRequiresCharacterConstraint(intent)&&intent?.characters?.[0])?preferredCharacterSearchAlias(intent.characters[0]):(intent?.franchises?.[0]?preferredFranchiseSearchAlias(intent.franchises[0]):"");
   const type=preferredTypeSearchAlias(intent),terms=preferenceSearchTerms(intent),out=[];
@@ -4701,7 +4722,7 @@ function directCharacterPatternMatches(character,title=""){
   const t=String(title||"").normalize("NFKC");
   if(!t)return false;
   if(character==="Pikachu")return /(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(t);
-  if(character==="Monkey D. Luffy")return /(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(t);
+  if(character==="Monkey D. Luffy")return /(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|(?<![\u30a1-\u30f6\u30fc])\u30eb\u30d5\u30a3|\u30ef\u30f3\u30d4\u30fc\u30b9\s*\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(t);
   if(character==="Roronoa Zoro")return /(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(t);
   if(character==="Naruto Uzumaki")return /(?:naruto\s*uzumaki|uzumaki\s*naruto|\u3046\u305a\u307e\u304d\s*\u30ca\u30eb\u30c8|\u6f29\u6da1\u9cf4\u4eba|\u6f29\u6e26\u9cf4\u4eba)/i.test(t);
   if(character==="Sasuke Uchiha")return /(?:sasuke(?:\s*uchiha)?|\u3046\u3061\u306f\s*\u30b5\u30b9\u30b1|\u30b5\u30b9\u30b1|\u4f50\u52a9|\uc0ac\uc2a4\ucf00)/i.test(t);
@@ -4711,10 +4732,9 @@ function directCharacterPatternMatches(character,title=""){
 }
 function directCharacterTitleEvidence(p,intent){
   if(!intentRequiresCharacterConstraint(intent))return true;
-  // v3.7.75 â the displayed/primary canonical title is the final identity gate.
-  // Do NOT allow a stale character_names field or a contaminated secondary English name
-  // to make another-character SKU pass (e.g. Luffy request -> FZ027 Bins).
-  const primary=String(cleanNullishValue(p?.canonical_name_ja)||cleanNullishValue(p?.canonical_name_en)||"").normalize("NFKC");
+  // v3.7.76: character evidence must be visible in exactly the title returned to the buyer.
+  // Metadata/character_names/secondary names cannot rescue a different-character SKU.
+  const primary=String(canonicalDisplayName(p)||"").normalize("NFKC").trim();
   if(!primary)return false;
   return (intent?.characters||[]).some(c=>directCharacterPatternMatches(c,primary));
 }
@@ -4828,6 +4848,7 @@ async function preflightPaidProduct(env,url){
   }
   // Short-circuit the one known expensive franchise-apparel intent before the generic
   // discovery pipeline. Hard constraints are still checked with production intentCompatibility.
+  const retrievalQuery=canonicalIntentRetrievalQuery(shoppingIntent,query);
   let rows=[];
   const narutoTshirtFastPath=!intentRequiresCharacterConstraint(shoppingIntent)&&
     (shoppingIntent?.franchises||[]).includes("NARUTO")&&
@@ -4835,13 +4856,13 @@ async function preflightPaidProduct(env,url){
   if(narutoTshirtFastPath){
     try{rows=await directNarutoTshirtCandidates(env,shoppingIntent,10);}catch{}
   }else{
-    rows=await findProducts(env,query,10);
+    rows=await findProducts(env,retrievalQuery,10);
     if((!Array.isArray(rows)||!rows.length)){
-      const fallback=await commercialFallbackProducts(env,query,10);
+      const fallback=await commercialFallbackProducts(env,retrievalQuery,10);
       if(fallback.length)rows=fallback;
     }
     if((!Array.isArray(rows)||!rows.length)&&PIPELINE.selfDiscoveryEnabled){
-      try{const discovered=await selfDiscoverProduct(env,query);if(discovered)rows=[discovered];}catch{}
+      try{const discovered=await selfDiscoverProduct(env,retrievalQuery);if(discovered)rows=[discovered];}catch{}
     }
   }
   rows=Array.isArray(rows)?rows:[];
@@ -4871,7 +4892,7 @@ async function preflightPaidProduct(env,url){
         compatibleRows=candidateRows.filter(automaticCompatible);
       }
     }catch{}
-    const targeted=targetedIntentQuery(shoppingIntent,query);
+    const targeted=targetedIntentQuery(shoppingIntent,retrievalQuery);
     if(targeted&&normalize(targeted)!==normalize(query)){
       const fallback=await commercialFallbackProducts(env,targeted,10);
       if(fallback.length){
@@ -4952,7 +4973,7 @@ async function preflightPaidProduct(env,url){
     const maxMatched=Math.max(0,...evidence.map(x=>x.fit.matched.length));
     if(maxMatched>0)rankingRows=evidence.filter(x=>x.fit.matched.length===maxMatched).map(x=>x.p);
   }
-  const ranked=rankPaidCandidates(query,rankingRows,shoppingIntent),winner=ranked[0];
+  const ranked=rankPaidCandidates(retrievalQuery,rankingRows,shoppingIntent),winner=ranked[0];
   if(!winner?.product)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false}};
   const winnerCompatibility=intentCompatibility(winner.product,shoppingIntent);
   const winnerCharacterEvidence=directCharacterTitleEvidence(winner.product,shoppingIntent);
@@ -4970,7 +4991,7 @@ async function preflightPaidProduct(env,url){
       method:"commercial_default_recommendation",
       automatic:true,
       commercial_default:true,
-      policy_version:"3.7.75",
+      policy_version:"3.7.76",
       policy:"Select the strongest compatible candidate using hard franchise/character/type/subtype constraints first. Canonical product attributes such as color, size, age, exclusivity and premium must have evidence or the request stops before payment. Seller/listing attributes such as shipping, sealed/new/used condition and live availability are deferred to live purchase-route verification rather than guessed from the canonical catalog. Affiliate readiness never substitutes for semantic or preference relevance.",
       shopping_intent:shoppingIntent,
       recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),
