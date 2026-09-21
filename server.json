@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Mike05102/anime-intelligence-mcp",
   "title": "ANIME INTELLIGENCE",
-  "description": "AI-native Japanese anime collectible purchase intelligence: exact product identity, market value, rarity, authenticity risk, BUY/WAIT timing, listing match, deadlines, landed cost, price history and purchase routing for Japan and global buyers.",
+  "description": "AI-native Japanese anime collectibles shopping intelligence for autonomous agents: natural-language product discovery, canonical identity, market value, rarity, authenticity risk, BUY/WAIT timing, listing match, deadlines, landed cost, price history and purchase routing. Core discovery languages: Japanese, English, Simplified/Traditional Chinese, Korean, Spanish, French and German. Paid tools use x402 v2 USDC on Solana; identify starts at 0.005 USDC.",
   "websiteUrl": "https://anime-intelligence.goodmy0312.workers.dev",
   "repository": {
     "url": "https://github.com/Mike05102/anime-intelligence-mcp",
     "source": "github"
   },
-  "version": "3.7.33",
+  "version": "3.7.78",
   "remotes": [
     {
       "type": "streamable-http",
