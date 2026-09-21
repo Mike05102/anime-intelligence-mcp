@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.73";
+const VERSION="3.7.74";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -4697,6 +4697,51 @@ async function commercialFallbackProducts(env,query,limit=10){
   return mergeUniqueProducts(groups,limit);
 }
 
+function directCharacterTitleEvidence(p,intent){
+  if(!intentRequiresCharacterConstraint(intent))return true;
+  const title=String(discoveryTitle(p)||"").normalize("NFKC");
+  for(const c of (intent?.characters||[])){
+    if(c==="Pikachu"&&/(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(title))return true;
+    if(c==="Monkey D. Luffy"&&/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(title))return true;
+    if(c==="Roronoa Zoro"&&/(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(title))return true;
+    if(c==="Naruto Uzumaki"&&/(?:naruto\s*uzumaki|uzumaki\s*naruto|\u3046\u305a\u307e\u304d\s*\u30ca\u30eb\u30c8|\u6f29\u6da1\u9cf4\u4eba|\u6f29\u6e26\u9cf4\u4eba)/i.test(title))return true;
+    if(c==="Sasuke Uchiha"&&/(?:sasuke(?:\s*uchiha)?|\u3046\u3061\u306f\s*\u30b5\u30b9\u30b1|\u30b5\u30b9\u30b1|\u4f50\u52a9|\uc0ac\uc2a4\ucf00)/i.test(title))return true;
+    if(c==="Hatsune Miku"&&/(?:hatsune\s*miku|\u521d\u97f3\u30df\u30af|\u521d\u97f3\u672a\u6765|\u521d\u97f3\u672a\u4f86|\ud558\uce20\ub124\s*\ubbf8\ucfe0)/i.test(title))return true;
+  }
+  return false;
+}
+
+async function canonicalizeFocusedEbayNarutoTshirt(env,intent,limit=12){
+  if(!env.EBAY_CLIENT_ID||!env.EBAY_CLIENT_SECRET)return [];
+  try{
+    const data=await ebayBrowseRequest(env,{q:"NARUTO T-shirt",limit:20});
+    const items=Array.isArray(data?.itemSummaries)?data.itemSummaries:[];
+    for(const item of items){
+      const title=cleanOfficialTitle(item?.title||"")||String(item?.title||"").trim();
+      if(!title)continue;
+      if(!/(?:\bNARUTO\b|\u30ca\u30eb\u30c8)/i.test(title))continue;
+      if(!/(?:\bt[ -]?shirt\b|\btee\b|\u30c6\u30a3\u30fc\u30b7\u30e3\u30c4|\u30c6\u30a3\u30b7\u30e3\u30c4|T\u30b7\u30e3\u30c4)/i.test(title))continue;
+      if(EBAY_SUSPICIOUS_TERMS.test(title))continue;
+      const probe={canonical_name_ja:null,canonical_name_en:title,franchise:"NARUTO",product_type:"apparel",series:null,brand:item?.brand||null,character_names:[]};
+      if(!intentCompatibility(probe,intent).ok)continue;
+      const itemId=String(item?.itemId||"").trim();if(!itemId)continue;
+      const price=Number(item?.price?.value||0),currency=String(item?.price?.currency||"");
+      const image=item?.image?.imageUrl||item?.thumbnailImages?.[0]?.imageUrl||null;
+      const sourceKey=`catalog:ebay:naruto_tshirt:${itemId}`;
+      const now=new Date().toISOString();
+      const payload={canonical_name_ja:title,canonical_name_en:title,manufacturer:null,brand:item?.brand||null,series:null,franchise:"NARUTO",character_names:[],jan_code:null,model_number:null,product_type:"apparel",scale:null,edition:null,limited_type:null,msrp_jpy:currency==="JPY"&&price>0?Math.round(price):null,original_release_date:null,official_url:null,official_image_url:image,image_source_url:item?.itemWebUrl||null,image_status:image?"found":"pending",source_id:null,source_product_key:sourceKey,product_status:"active",identification_confidence:.72,source_last_checked_at:now,metadata:{connector:"ebay_focused_naruto_tshirt",catalog_seed:true,discovery_source:"ebay",discovery_query:"NARUTO T-shirt",ebay_item_id:itemId,ebay_marketplace:EBAY_MARKETPLACE,classification:{type:"apparel",subtype:"tshirt",version:VERSION},apparel:{item_type:"tshirt",collaboration:"NARUTO"},identity_quality_score:36,quality_version:VERSION,ingestion_version:VERSION}};
+      const inserted=await sbOptional(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify([payload])});
+      const insertedRows=Array.isArray(inserted)?inserted:[];
+      const compatible=insertedRows.filter(p=>intentCompatibility(p,intent).ok);
+      if(compatible.length)return compatible.slice(0,limit);
+      const existing=await sbOptional(env,`/products?select=*&source_product_key=eq.${encodeURIComponent(sourceKey)}&limit=1`);
+      const rows=Array.isArray(existing)?existing.filter(p=>intentCompatibility(p,intent).ok):[];
+      if(rows.length)return rows.slice(0,limit);
+    }
+  }catch{}
+  return [];
+}
+
 async function directNarutoTshirtCandidates(env,intent,limit=12){
   // Resource-safe production rescue for franchise apparel. First use the canonical
   // catalog. If the catalog has no NARUTO T-shirt yet, perform exactly one focused
@@ -4753,6 +4798,8 @@ async function directNarutoTshirtCandidates(env,intent,limit=12){
       if(reread.length)return reread;
     }
   }catch{}
+  const ebay=await canonicalizeFocusedEbayNarutoTshirt(env,intent,limit);
+  if(ebay.length)return ebay;
   return [];
 }
 
@@ -4799,14 +4846,15 @@ async function preflightPaidProduct(env,url){
   }
 
   const explicitIntent=explicitIntentPresent(shoppingIntent);
+  const automaticCompatible=p=>intentCompatibility(p,shoppingIntent).ok&&directCharacterTitleEvidence(p,shoppingIntent);
   let candidateRows=rows;
-  let compatibleRows=explicitIntent?rows.filter(p=>intentCompatibility(p,shoppingIntent).ok):rows;
+  let compatibleRows=explicitIntent?rows.filter(automaticCompatible):rows;
   if(explicitIntent&&!compatibleRows.length){
     try{
       const direct=await findIntentCompatibleProducts(env,shoppingIntent,20);
       if(direct.length){
         candidateRows=mergeUniqueProducts([candidateRows,direct],30);
-        compatibleRows=candidateRows.filter(p=>intentCompatibility(p,shoppingIntent).ok);
+        compatibleRows=candidateRows.filter(automaticCompatible);
       }
     }catch{}
     const targeted=targetedIntentQuery(shoppingIntent,query);
@@ -4814,7 +4862,7 @@ async function preflightPaidProduct(env,url){
       const fallback=await commercialFallbackProducts(env,targeted,10);
       if(fallback.length){
         candidateRows=mergeUniqueProducts([candidateRows,fallback],20);
-        compatibleRows=candidateRows.filter(p=>intentCompatibility(p,shoppingIntent).ok);
+        compatibleRows=candidateRows.filter(automaticCompatible);
       }
     }
     if(!compatibleRows.length&&PIPELINE.selfDiscoveryEnabled){
@@ -4823,7 +4871,7 @@ async function preflightPaidProduct(env,url){
           const discovered=await selfDiscoverProduct(env,discoveryQuery);
           if(discovered){
             candidateRows=mergeUniqueProducts([candidateRows,[discovered]],20);
-            compatibleRows=candidateRows.filter(p=>intentCompatibility(p,shoppingIntent).ok);
+            compatibleRows=candidateRows.filter(automaticCompatible);
             if(compatibleRows.length)break;
           }
         }catch{}
@@ -4843,15 +4891,15 @@ async function preflightPaidProduct(env,url){
           const more=await findProducts(env,pq,12);
           if(Array.isArray(more)&&more.length){
             candidateRows=mergeUniqueProducts([candidateRows,more],40);
-            compatibleRows=candidateRows.filter(p=>intentCompatibility(p,shoppingIntent).ok);
+            compatibleRows=candidateRows.filter(automaticCompatible);
           }
           let current=preferenceEvidenceSummary(compatibleRows,shoppingIntent);
           if(current.best_matched>=current.required)break;
           if(PIPELINE.selfDiscoveryEnabled){
             const discovered=await selfDiscoverProduct(env,pq);
-            if(discovered&&intentCompatibility(discovered,shoppingIntent).ok){
+            if(discovered&&automaticCompatible(discovered)){
               candidateRows=mergeUniqueProducts([candidateRows,[discovered]],40);
-              compatibleRows=candidateRows.filter(p=>intentCompatibility(p,shoppingIntent).ok);
+              compatibleRows=candidateRows.filter(automaticCompatible);
               current=preferenceEvidenceSummary(compatibleRows,shoppingIntent);
               if(current.best_matched>=current.required)break;
             }
@@ -4893,7 +4941,8 @@ async function preflightPaidProduct(env,url){
   const ranked=rankPaidCandidates(query,rankingRows,shoppingIntent),winner=ranked[0];
   if(!winner?.product)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false}};
   const winnerCompatibility=intentCompatibility(winner.product,shoppingIntent);
-  if(explicitIntent&&!winnerCompatibility.ok){
+  const winnerCharacterEvidence=directCharacterTitleEvidence(winner.product,shoppingIntent);
+  if(explicitIntent&&(!winnerCompatibility.ok||!winnerCharacterEvidence)){
     return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found_for_explicit_intent",charged:false,detail:"No catalog candidate satisfied the explicit franchise / character / product-type intent strongly enough. No payment is requested.",free_search_url:`${url.origin}/v1/search?query=${encodeURIComponent(query)}`}};
   }
 
