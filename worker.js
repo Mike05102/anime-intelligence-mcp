@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.77";
+const VERSION="3.7.78";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2744,6 +2744,11 @@ async function revenueMetrics(env){
   const latestExternal=externalPaid.length?externalPaid[0]:null,firstExternal=externalPaid.length?externalPaid[externalPaid.length-1]:null;
   const recentLatestExternal=recentHistoryExternalPaid.length?recentHistoryExternalPaid[0]:null,recentFirstExternal=recentHistoryExternalPaid.length?recentHistoryExternalPaid[recentHistoryExternalPaid.length-1]:null;
   const stage=(calls.length===0)?"no_external_api_traffic":(queryCalls.length===0)?"discovered_or_probed_but_no_product_intent":(selected.length===0)?"product_intent_but_no_canonical_selection":(gateEntered.length===0)?"canonical_selected_but_x402_gate_not_entered":(paymentRequired.length===0)?(configErrors.length?"x402_configuration_error_before_402":"x402_gate_entered_but_402_not_issued"):(attempts.length===0)?"402_issued_but_no_payment_retry":(verified.length===0)?"payment_retry_received_but_not_verified":(paid.length===0)?"payment_verified_but_not_settled":"revenue_confirmed";
+  const selectedByRequest=new Map(selected.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
+  const requiredByRequest=new Map(paymentRequired.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
+  const attemptByRequest=new Map(attempts.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
+  const query_intent_samples=realShoppingIntentCalls.slice(0,20).map(x=>{const rid=String(x.metadata?.request_id||"");const sel=selectedByRequest.get(rid),req=requiredByRequest.get(rid),att=attemptByRequest.get(rid);return {occurred_at:x.occurred_at||null,endpoint:x.endpoint||null,source_class:x.metadata?.source_class||null,source_fingerprint:x.metadata?.source_fingerprint||null,user_agent:x.metadata?.user_agent||null,client_name:x.metadata?.client_name||null,referer:x.metadata?.referer||null,origin:x.metadata?.origin||null,country:x.metadata?.country||null,query:String(x.metadata?.intent_query||x.metadata?.query_text||"").slice(0,180)||null,canonical_product_id:sel?.product_id||sel?.metadata?.canonical_product_id||null,payment_required:!!req,payment_attempted:!!att,payment_header_name:att?.metadata?.payment_header_name||null};});
+  const query_source_fingerprints=countBy(realShoppingIntentCalls,x=>x.metadata?.source_fingerprint||x.metadata?.source_class);
   return {
     event_window:versionEvents.length?`current_version_${VERSION}_events_within_latest_${PIPELINE.kpiEventReadLimit}`:`latest_${PIPELINE.kpiEventReadLimit}_x402_funnel_events_fallback`,events_in_window:events.length,all_recent_events_seen:allEvents.length,funnel_stage:stage,
     first_revenue_confirmed:paid.length>0,recent_history_revenue_confirmed:recentHistoryPaid.length>0,
@@ -2751,7 +2756,7 @@ async function revenueMetrics(env){
     recent_history_paid_calls:recentHistoryPaid.length,recent_history_unique_payers:recentHistoryPayers.size,recent_history_revenue_usdc:Number(recentHistoryRevenue.toFixed(6)),
     recent_history_external_paid_calls:recentHistoryExternalPaid.length,recent_history_external_unique_payers:recentHistoryExternalPayers.size,recent_history_external_revenue_usdc:Number(recentHistoryExternalRevenue.toFixed(6)),
     recent_history_test_paid_calls:recentHistoryTestPaid.length,recent_history_test_unique_payers:recentHistoryTestPayers.size,recent_history_test_revenue_usdc:Number(recentHistoryTestRevenue.toFixed(6)),
-    total_api_calls:calls.length,query_bearing_calls:queryCalls.length,query_only_calls:queryOnlyCalls.length,canonical_id_calls:canonicalIdCalls.length,crawler_or_monitor_calls:crawlerCalls.length,unclassified_client_calls:unclassifiedCalls.length,real_shopping_intent_calls:realShoppingIntentCalls.length,
+    total_api_calls:calls.length,query_bearing_calls:queryCalls.length,query_only_calls:queryOnlyCalls.length,canonical_id_calls:canonicalIdCalls.length,crawler_or_monitor_calls:crawlerCalls.length,unclassified_client_calls:unclassifiedCalls.length,real_shopping_intent_calls:realShoppingIntentCalls.length,query_source_fingerprints,query_intent_samples,
     canonical_product_selected:selected.length,canonical_product_selected_by_source:canonicalSelectedBySource,x402_gate_entered:gateEntered.length,x402_configuration_errors:configErrors.length,payment_required_responses:paymentRequired.length,payment_required_with_query:paymentRequiredWithQuery,payment_required_with_canonical_id:paymentRequiredWithCanonicalId,payment_required_without_query_or_id:paymentRequiredWithoutIntent,payment_required_by_source:paymentRequiredBySource,payment_required_by_endpoint:paymentRequiredByEndpoint,payment_required_by_source_and_endpoint:paymentRequiredBySourceAndEndpoint,payment_attempts:attempts.length,payment_attempts_by_source:paymentAttemptsBySource,payment_verified:verified.length,
     paid_calls:paid.length,unique_payers:payerCounts.size,repeat_payers:[...payerCounts.values()].filter(n=>n>=2).length,revenue_usdc:Number(revenue.toFixed(6)),first_payment:paymentView(firstPaid),latest_payment:paymentView(latestPaid),
     external_paid_calls:externalPaid.length,external_unique_payers:externalPayers.size,external_revenue_usdc:Number(externalRevenue.toFixed(6)),first_external_payment:paymentView(firstExternal),latest_external_payment:paymentView(latestExternal),
@@ -4075,23 +4080,28 @@ async function facilitatorPost(env,path,paymentPayload,accepted){
 
 function requestTelemetry(request,url=null){
   const u=url||new URL(request.url),ua=(request.headers.get("user-agent")||"").slice(0,300),referer=(request.headers.get("referer")||"").slice(0,500),country=(request.headers.get("cf-ipcountry")||"").slice(0,8),requestId=request.headers.get("cf-ray")||crypto.randomUUID();
-  const low=ua.toLowerCase(),ref=referer.toLowerCase();let source_class="unknown";
-  if(/agent402/.test(low)||/agent402\.tools/.test(ref))source_class="agent402";
-  else if(/x402scan/.test(low)||/x402scan/.test(ref))source_class="x402scan";
-  else if(/402.?index|x402.?index/.test(low)||/402index/.test(ref))source_class="402_index";
-  else if(/402\.ad/.test(low)||/402\.ad/.test(ref))source_class="402_ad";
-  else if(/coinbase|cdp|x402.*bazaar|bazaar.*x402/.test(low)||/coinbase|cdp/.test(ref))source_class="coinbase_or_cdp";
-  else if(/mcp/.test(low))source_class="mcp_client";
+  const origin=(request.headers.get("origin")||"").slice(0,300),accept=(request.headers.get("accept")||"").slice(0,220),secFetchSite=(request.headers.get("sec-fetch-site")||"").slice(0,40),clientName=(request.headers.get("x-client-name")||request.headers.get("x-agent-name")||"").slice(0,120),mcpSession=(request.headers.get("mcp-session-id")||"").slice(0,120);
+  const low=ua.toLowerCase(),ref=referer.toLowerCase(),clientLow=clientName.toLowerCase();let source_class="unknown";
+  if(/agent402/.test(low)||/agent402\.tools/.test(ref)||/agent402/.test(clientLow))source_class="agent402";
+  else if(/x402scan/.test(low)||/x402scan/.test(ref)||/x402scan/.test(clientLow))source_class="x402scan";
+  else if(/402.?index|x402.?index/.test(low)||/402index/.test(ref)||/402.?index/.test(clientLow))source_class="402_index";
+  else if(/402\.ad/.test(low)||/402\.ad/.test(ref)||/402\.ad/.test(clientLow))source_class="402_ad";
+  else if(/coinbase|cdp|x402.*bazaar|bazaar.*x402/.test(low)||/coinbase|cdp/.test(ref)||/coinbase|cdp|bazaar/.test(clientLow))source_class="coinbase_or_cdp";
+  else if(/mcp/.test(low)||mcpSession||/mcp/.test(clientLow))source_class="mcp_client";
   else if(/bot|crawler|spider|scanner|health|probe|uptime|monitor/.test(low))source_class="bot_or_monitor";
   else if(ua)source_class="unclassified_client";
   const intent_signal=u.searchParams.get("id")?"canonical_id":u.searchParams.get("query")?"query":"none";
   const test_mode=u.searchParams.get("ai_e2e")==="1"?"admin_x402_e2e":null;
-  return {request_id:requestId,method:request.method,user_agent:ua||null,referer:referer||null,country:country||null,source_class,intent_signal,test_mode,payment_header_present:!!(request.headers.get("payment-signature")||request.headers.get("x-payment")),query_present:!!u.searchParams.get("query"),id_present:!!u.searchParams.get("id")};
+  const paymentHeader=request.headers.get("payment-signature")?"PAYMENT-SIGNATURE":request.headers.get("x-payment")?"X-PAYMENT":null;
+  return {request_id:requestId,method:request.method,user_agent:ua||null,referer:referer||null,origin:origin||null,accept:accept||null,sec_fetch_site:secFetchSite||null,client_name:clientName||null,mcp_session_present:!!mcpSession,country:country||null,source_class,intent_signal,test_mode,payment_header_present:!!paymentHeader,payment_header_name:paymentHeader,query_present:!!u.searchParams.get("query"),id_present:!!u.searchParams.get("id")};
 }
 async function logRequestStage(env,request,eventType,extra={}){
   try{
     const url=new URL(request.url),base=requestTelemetry(request,url);
-    return await logEvent(env,eventType,{endpoint:url.pathname,product_id:extra.product_id||null,payer_hash:extra.payer_hash||null,amount_atomic:extra.amount_atomic??null,amount_usdc:extra.amount_usdc??null,payment_network:extra.payment_network||null,transaction_hash:extra.transaction_hash||null,metadata:{...base,...(extra.metadata||{})}});
+    // Privacy-preserving stable source grouping: no raw client IP is stored.
+    const sourceMaterial=[base.source_class,base.user_agent,base.referer,base.origin,base.client_name,base.country].map(x=>String(x||"")).join("|");
+    const sourceFingerprint=sourceMaterial.replace(/\|/g,"").trim()? (await sha256Hex(`anime-intelligence-client:${sourceMaterial}`)).slice(0,24):null;
+    return await logEvent(env,eventType,{endpoint:url.pathname,product_id:extra.product_id||null,payer_hash:extra.payer_hash||null,amount_atomic:extra.amount_atomic??null,amount_usdc:extra.amount_usdc??null,payment_network:extra.payment_network||null,transaction_hash:extra.transaction_hash||null,metadata:{...base,source_fingerprint:sourceFingerprint,...(extra.metadata||{})}});
   }catch(e){return null;}
 }
 
@@ -4162,6 +4172,11 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
       "x402-asset":"USDC",
       "x402-network":cfg.accepted.network,
       "x402-pay-to":cfg.accepted.payTo,
+      "x402-retry-header":"PAYMENT-SIGNATURE",
+      "x402-service":"ANIME INTELLIGENCE",
+      "x402-endpoint":new URL(request.url).pathname,
+      "x402-value":String((DISCOVERY_CONFIG[new URL(request.url).pathname]?.buyer_outcome||DISCOVERY_CONFIG[new URL(request.url).pathname]?.value||description||"")).slice(0,240),
+      "access-control-expose-headers":"PAYMENT-REQUIRED,PAYMENT-RESPONSE,WWW-Authenticate,x402-price,x402-asset,x402-network,x402-pay-to,x402-retry-header,x402-service,x402-endpoint,x402-value",
       "cache-control":"no-store"
     };
     return json(cfg.required,402,probeHeaders);
@@ -6390,7 +6405,7 @@ export default{
       if(url.pathname==="/health"){const productRows=await sb(env,"/products?select=id&limit=1"),now=Date.now();return json({ok:true,service:"ANIME INTELLIGENCE",version:VERSION,supabase:"ok",has_product:Array.isArray(productRows)&&productRows.length>0,autonomous_pipeline:{architecture:"8-stage-rotating",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),stages:ROTATION,one_stage_per_invocation:true,scheduled_time_deterministic:true},marketplace:{yahoo_configured:!!env.YAHOO_CLIENT_ID,ebay_configured:!!(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET),ebay_epn_affiliate_configured:ebayEpnConfigured(env),rakuten_configured:rakutenConfigured(env),rakuten_mode:"affiliate_link_only",environment_usdjpy:envUsdJpyRate(env),ecb_fx_fallback:true},x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},discovery:{mcp:true,mcp_paid_tools:MCP_TOOLS.filter(t=>t?.annotations?.paid===true).length,openapi:true,index402:true,bazaar_extension:true,coinbase_bazaar_direct:isCdpFacilitator(env),multilingual_fuzzy_search:true,global_vague_intent:true,agent402_self_register:true,languages:DISCOVERY_LANGUAGES,locales:DISCOVERY_LOCALES},atelier:{configured:atelierConfigured(env),poll_every_minutes:ATELIER_POLL_EVERY_MINUTES},identity_guard_version:VERSION,quality_auto_loop:true});}
       if(url.pathname.startsWith("/atelier/result/")&&request.method==="GET"){const orderId=decodeURIComponent(url.pathname.slice("/atelier/result/".length));const result=await loadAtelierResult(env,orderId);return result?json(result,200,{"cache-control":"private, no-store"}):json({error:"atelier_result_not_found"},404);}
       if(url.pathname==="/agent/profile"&&request.method==="GET")return json({name:"ANIME INTELLIGENCE",description:"Multilingual vague-to-canonical purchasing intelligence for physical Japanese anime collectibles. Use when the buyer speaks naturally or ambiguously about franchise, character, category, budget, color, size, style, gift/display use, condition, availability or buyer location. Missing prior/social visual context is surfaced rather than guessed. Prefer Full Intelligence for multi-signal shopping decisions; do not use for anime news or entertainment Q&A.",capabilities:["multilingual-vague-shopping-intent","hard-and-soft-constraint-ranking","verified-budget-guard","missing-context-no-guess","canonical-listing-separation","collectible-identification","market-valuation","rarity","authenticity-risk","exact-identity-buy-wait","buyer-country-purchase-routing","recommendation-confidence"],commercial_discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,task_queries:DISCOVERY_TASK_QUERIES,agent_selection:AGENT_SELECTION_POLICY,version:VERSION});
-      if(url.pathname==="/agent/services"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,services:INDEX402_SERVICES.map(x=>({path:x.path,title:x.name,category:"anime_collectibles_intelligence",price_usdc:x.price_usd,price_type:"fixed",protocol:"x402",network:SOLANA_MAINNET,capability:DISCOVERY_CONFIG[x.path]?.value||null,when_to_use:DISCOVERY_CONFIG[x.path]?.when_to_use||null}))});
+      if(url.pathname==="/agent/services"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,payment_flow:{protocol:"x402",version:2,asset:"USDC",network:SOLANA_MAINNET,first_request:"GET service URL without payment proof",on_402:"Read PAYMENT-REQUIRED and accepts[0]",retry:"Retry the exact same URL with PAYMENT-SIGNATURE",compatibility_alias:"X-PAYMENT",success:"HTTP 200 + PAYMENT-RESPONSE"},services:INDEX402_SERVICES.map(x=>({path:x.path,title:x.name,category:"anime_collectibles_intelligence",price_usdc:x.price_usd,price_type:"fixed",protocol:"x402",network:SOLANA_MAINNET,capability:DISCOVERY_CONFIG[x.path]?.value||null,when_to_use:DISCOVERY_CONFIG[x.path]?.when_to_use||null,why_pay:DISCOVERY_CONFIG[x.path]?.why_pay||AGENT_SELECTION_POLICY.why_pay,buyer_outcome:DISCOVERY_CONFIG[x.path]?.buyer_outcome||DISCOVERY_CONFIG[x.path]?.value||null,retry_header:"PAYMENT-SIGNATURE",accepted_payment_headers:["PAYMENT-SIGNATURE","X-PAYMENT"],example_url:`${origin}${x.path}?query=${encodeURIComponent(DISCOVERY_CONFIG[x.path]?.examples?.[0]||"Hatsune Miku figure")}`}))});
       if(url.pathname==="/openapi.json")return json(openapi(origin));
       if(url.pathname==="/llms.txt")return text(llmsTxt(origin));
       if(url.pathname==="/.well-known/x402")return json(x402WellKnown(origin),200,{"cache-control":"public, max-age=300"});
