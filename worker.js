@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.74";
+const VERSION="3.7.75";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -4697,18 +4697,26 @@ async function commercialFallbackProducts(env,query,limit=10){
   return mergeUniqueProducts(groups,limit);
 }
 
+function directCharacterPatternMatches(character,title=""){
+  const t=String(title||"").normalize("NFKC");
+  if(!t)return false;
+  if(character==="Pikachu")return /(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(t);
+  if(character==="Monkey D. Luffy")return /(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(t);
+  if(character==="Roronoa Zoro")return /(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(t);
+  if(character==="Naruto Uzumaki")return /(?:naruto\s*uzumaki|uzumaki\s*naruto|\u3046\u305a\u307e\u304d\s*\u30ca\u30eb\u30c8|\u6f29\u6da1\u9cf4\u4eba|\u6f29\u6e26\u9cf4\u4eba)/i.test(t);
+  if(character==="Sasuke Uchiha")return /(?:sasuke(?:\s*uchiha)?|\u3046\u3061\u306f\s*\u30b5\u30b9\u30b1|\u30b5\u30b9\u30b1|\u4f50\u52a9|\uc0ac\uc2a4\ucf00)/i.test(t);
+  if(character==="Hatsune Miku")return /(?:hatsune\s*miku|\u521d\u97f3\u30df\u30af|\u521d\u97f3\u672a\u6765|\u521d\u97f3\u672a\u4f86|\ud558\uce20\ub124\s*\ubbf8\ucfe0)/i.test(t);
+  const group=MULTILINGUAL_CHARACTER_ALIASES.find(g=>g.character===character);
+  return !!group?.aliases?.some(a=>strictEntityAliasMatch(normalizedSearchPhrase(t),a));
+}
 function directCharacterTitleEvidence(p,intent){
   if(!intentRequiresCharacterConstraint(intent))return true;
-  const title=String(discoveryTitle(p)||"").normalize("NFKC");
-  for(const c of (intent?.characters||[])){
-    if(c==="Pikachu"&&/(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(title))return true;
-    if(c==="Monkey D. Luffy"&&/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(title))return true;
-    if(c==="Roronoa Zoro"&&/(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(title))return true;
-    if(c==="Naruto Uzumaki"&&/(?:naruto\s*uzumaki|uzumaki\s*naruto|\u3046\u305a\u307e\u304d\s*\u30ca\u30eb\u30c8|\u6f29\u6da1\u9cf4\u4eba|\u6f29\u6e26\u9cf4\u4eba)/i.test(title))return true;
-    if(c==="Sasuke Uchiha"&&/(?:sasuke(?:\s*uchiha)?|\u3046\u3061\u306f\s*\u30b5\u30b9\u30b1|\u30b5\u30b9\u30b1|\u4f50\u52a9|\uc0ac\uc2a4\ucf00)/i.test(title))return true;
-    if(c==="Hatsune Miku"&&/(?:hatsune\s*miku|\u521d\u97f3\u30df\u30af|\u521d\u97f3\u672a\u6765|\u521d\u97f3\u672a\u4f86|\ud558\uce20\ub124\s*\ubbf8\ucfe0)/i.test(title))return true;
-  }
-  return false;
+  // v3.7.75 â the displayed/primary canonical title is the final identity gate.
+  // Do NOT allow a stale character_names field or a contaminated secondary English name
+  // to make another-character SKU pass (e.g. Luffy request -> FZ027 Bins).
+  const primary=String(cleanNullishValue(p?.canonical_name_ja)||cleanNullishValue(p?.canonical_name_en)||"").normalize("NFKC");
+  if(!primary)return false;
+  return (intent?.characters||[]).some(c=>directCharacterPatternMatches(c,primary));
 }
 
 async function canonicalizeFocusedEbayNarutoTshirt(env,intent,limit=12){
@@ -4840,7 +4848,13 @@ async function preflightPaidProduct(env,url){
   if(!rows.length)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false,detail:narutoTshirtFastPath?"No NARUTO T-shirt candidate satisfying the explicit franchise and apparel constraints is present in the canonical catalog. No payment is requested.":"No sufficiently related product candidate exists in the canonical catalog yet. No payment is requested.",free_search_url:`${url.origin}/v1/search?query=${encodeURIComponent(query)}`}};
 
   const exact=rows.filter(p=>exactPaidIdentityMatch(query,p));
-  if(exact.length===1)return {ok:true,product:exact[0],resolution:"exact_query",selection:{method:"exact_query",automatic:false,commercial_default:false,shopping_intent:shoppingIntent,recommended_paid_endpoint:naturalPaidRoute(shoppingIntent,query),alternatives:[]}};
+  if(exact.length===1){
+    const exactCompat=intentCompatibility(exact[0],shoppingIntent);
+    const exactCharacterEvidence=directCharacterTitleEvidence(exact[0],shoppingIntent);
+    if(exactCompat.ok&&exactCharacterEvidence){
+      return {ok:true,product:exact[0],resolution:"exact_query",selection:{method:"exact_query",automatic:false,commercial_default:false,shopping_intent:shoppingIntent,recommended_paid_endpoint:naturalPaidRoute(shoppingIntent,query),alternatives:[]}};
+    }
+  }
   if(timingNeedsExactIdentity(url.pathname,shoppingIntent,query)){
     return {ok:false,status:409,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"exact_product_required_for_buy_wait",charged:false,detail:"BUY-WAIT decisions require an exact collectible identity (canonical id, JAN/model, or an exact catalog title). A category or broad franchise request is not enough for timing advice."}};
   }
@@ -4956,7 +4970,7 @@ async function preflightPaidProduct(env,url){
       method:"commercial_default_recommendation",
       automatic:true,
       commercial_default:true,
-      policy_version:"3.7.68",
+      policy_version:"3.7.75",
       policy:"Select the strongest compatible candidate using hard franchise/character/type/subtype constraints first. Canonical product attributes such as color, size, age, exclusivity and premium must have evidence or the request stops before payment. Seller/listing attributes such as shipping, sealed/new/used condition and live availability are deferred to live purchase-route verification rather than guessed from the canonical catalog. Affiliate readiness never substitutes for semantic or preference relevance.",
       shopping_intent:shoppingIntent,
       recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),
@@ -5239,7 +5253,13 @@ function auditProductHardMatch(p,intent,c){
   const compat=intentCompatibility(p,intent);
   if(!compat?.ok)return false;
   if(c.franchise&&!candidateMatchesIntentFranchises(p,[c.franchise]))return false;
-  if(c.character&&!candidateMatchesIntentCharacters(p,[c.character]))return false;
+  if(c.character){
+    if(!candidateMatchesIntentCharacters(p,[c.character]))return false;
+    // Production-quality audit: character hard-match must be visible in the primary
+    // canonical title, not merely inherited from metadata/character_names.
+    const strictIntent={...intent,characters:[c.character]};
+    if(!directCharacterTitleEvidence(p,strictIntent))return false;
+  }
   if(c.type&&!candidateMatchesIntentTypes(p,[c.type]))return false;
   if(c.subtype){const sub=merchSubtypeHints(discoveryTitle(p));if(!sub.includes(c.subtype))return false;}
   return true;
