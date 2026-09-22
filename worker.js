@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.81";
+const VERSION="3.7.82";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -3502,6 +3502,99 @@ function normalizeBuyerCountry(v="JP"){
   return /^[A-Z]{2}$/.test(c)?c:"JP";
 }
 
+const GOODSMILE_EUROPE_COUNTRIES=new Set(["AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IS","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME","NL","MK","NO","PL","PT","RO","SM","RS","SK","SI","ES","SE","CH","UA","GB","UK","VA"]);
+const GOODSMILE_OCEANIA_COUNTRIES=new Set(["AU","NZ","FJ","PG","SB","VU","WS","TO"]);
+const GOODSMILE_SE_ASIA_COUNTRIES=new Set(["BN","KH","ID","LA","MY","MM","PH","SG","TH","TL","VN"]);
+const GOODSMILE_LATAM_COUNTRIES=new Set(["AR","BO","BR","CL","CO","CR","CU","DO","EC","SV","GT","HT","HN","NI","PA","PY","PE","UY","VE"]);
+const GOODSMILE_MIDDLE_EAST_COUNTRIES=new Set(["BH","IQ","IL","JO","KW","LB","OM","QA","SA","AE","YE"]);
+const GOODSMILE_AFRICA_COUNTRIES=new Set(["DZ","AO","BJ","BW","BF","BI","CM","CV","CF","TD","KM","CG","CD","CI","DJ","EG","GQ","ER","SZ","ET","GA","GM","GH","GN","GW","KE","LS","LR","LY","MG","MW","ML","MR","MU","MA","MZ","NA","NE","NG","RW","ST","SN","SC","SL","SO","ZA","SS","SD","TZ","TG","TN","UG","ZM","ZW"]);
+
+function goodSmileShippingUsdForCountry(country="US"){
+  const c=normalizeBuyerCountry(country);
+  if(c==="JP"||c==="TW")return null;
+  if(c==="US")return 46;
+  if(c==="CA")return 12;
+  if(c==="KR"||c==="HK")return 15;
+  if(GOODSMILE_EUROPE_COUNTRIES.has(c)||GOODSMILE_OCEANIA_COUNTRIES.has(c))return 15;
+  if(GOODSMILE_SE_ASIA_COUNTRIES.has(c)||c==="MX"||c==="IN"||GOODSMILE_MIDDLE_EAST_COUNTRIES.has(c))return 8;
+  if(GOODSMILE_LATAM_COUNTRIES.has(c))return 10;
+  if(GOODSMILE_AFRICA_COUNTRIES.has(c))return 12;
+  return 18;
+}
+
+function isGoodSmileProduct(product){
+  const blob=[product?.manufacturer,product?.brand,product?.canonical_name_ja,product?.canonical_name_en,product?.official_url,product?.metadata?.official_english_url].filter(Boolean).join(" ").toLowerCase();
+  return /good\s*smile|ã°ããã¹ãã¤ã«/.test(blob)||/goodsmile\.com/.test(blob);
+}
+
+function goodSmileOfficialUrl(product){
+  const candidates=[product?.metadata?.official_english_url,product?.official_url].filter(Boolean).map(String);
+  return candidates.find(x=>/https?:\/\/(?:www\.)?goodsmile\.com\//i.test(x))||null;
+}
+
+function officialPurchaseOffersForProduct(product,fxInfo={}){
+  const offers=[];
+  if(isGoodSmileProduct(product)){
+    const exactUrl=goodSmileOfficialUrl(product);
+    const msrp=Number(product?.msrp_jpy);
+    offers.push({
+      source:"goodsmile_official",
+      seller:"Good Smile Company Online Store",
+      title:cleanOfficialTitle(product?.canonical_name_en||product?.canonical_name_ja||"Good Smile product"),
+      asking_price_jpy:null,
+      shipping_jpy:null,
+      total_price_jpy:null,
+      price_jpy:null,
+      reference_price_jpy:Number.isFinite(msrp)&&msrp>0?msrp:null,
+      price_basis:Number.isFinite(msrp)&&msrp>0?"jp_msrp_reference_not_destination_checkout_price":"destination_checkout_price_not_verified",
+      currency:null,
+      original_currency:null,
+      url:exactUrl||"https://www.goodsmile.com/en/",
+      condition:"new",
+      availability:"destination_region_login_confirmation_required",
+      observed_at:new Date().toISOString(),
+      fetched_at:new Date().toISOString(),
+      affiliate:false,
+      affiliate_source:null,
+      match_score:exactUrl?100:85,
+      match_basis:exactUrl?"official_exact_product_url":"official_manufacturer_route",
+      practical_route_only:true,
+      market_metadata:{
+        merchant:"goodsmile_official",
+        exact_product_url:!!exactUrl,
+        international_store:true,
+        checkout_currency_non_jp:"USD",
+        payment_methods_non_jp:["credit_card","paypal"],
+        account_required:true,
+        region_product_availability_confirmation_required:true,
+        shipping_policy_source:"https://www.goodsmile.com/en/usersguide07",
+        payment_policy_source:"https://www.goodsmile.com/en/usersguide03",
+        account_policy_source:"https://www.goodsmile.com/en/usersguide01",
+        policy_checked_at:"2026-09-22",
+        fx_rate_usdjpy:Number.isFinite(Number(fxInfo?.rate))?Number(fxInfo.rate):null,
+        fx_source:fxInfo?.source||null
+      }
+    });
+  }
+  return offers;
+}
+
+function materializeDestinationOffer(offer,buyerCountry="JP"){
+  if(!offer)return offer;
+  const country=normalizeBuyerCountry(buyerCountry);
+  if(String(offer.source||"").toLowerCase()!=="goodsmile_official")return {...offer};
+  const fx=Number(offer?.market_metadata?.fx_rate_usdjpy);
+  if(country==="JP"){
+    const reference=Number(offer.reference_price_jpy);
+    const shipping=660;
+    return {...offer,shipping_jpy:shipping,shipping_original:660,shipping_currency:"JPY",asking_price_jpy:Number.isFinite(reference)?reference:null,total_price_jpy:Number.isFinite(reference)?reference+shipping:null,price_jpy:Number.isFinite(reference)?reference+shipping:null,price_basis:Number.isFinite(reference)?"jp_official_msrp_plus_standard_shipping_reference":"jp_checkout_price_not_verified"};
+  }
+  const shippingUsd=goodSmileShippingUsdForCountry(country);
+  const shippingJpy=Number.isFinite(shippingUsd)&&Number.isFinite(fx)?Math.round(shippingUsd*fx):null;
+  // For non-Japan accounts Good Smile charges the product in USD. Do not pretend the JP MSRP is the checkout item price.
+  return {...offer,shipping_jpy:shippingJpy,shipping_original:shippingUsd,shipping_currency:"USD",asking_price_jpy:null,total_price_jpy:null,price_jpy:null,price_basis:"non_jp_checkout_item_price_not_verified",market_metadata:{...(offer.market_metadata||{}),destination_country:country,regional_shipping_usd:shippingUsd}};
+}
+
 function sourcePurchaseProfile(source,buyerCountry="JP"){
   const country=normalizeBuyerCountry(buyerCountry),src=String(source||"unknown").toLowerCase();
   const isJP=country==="JP";
@@ -3519,6 +3612,11 @@ function sourcePurchaseProfile(source,buyerCountry="JP"){
     return isJP
       ? {source:src,country_fit:"medium",country_fit_score:72,direct_shipping:"listing_specific_not_verified",language_support:"international_english",payment_compatibility:"international_friendly",account_difficulty:"low_medium",proxy_required:false,purchase_ease_score:76,trust_score:78,route_type:"direct_if_listing_ships_to_destination",destination_confirmation_required:true}
       : {source:src,country_fit:"high",country_fit_score:88,direct_shipping:"listing_specific_not_verified",language_support:"international_english",payment_compatibility:"international_friendly",account_difficulty:"low_medium",proxy_required:false,purchase_ease_score:86,trust_score:78,route_type:"direct_if_listing_ships_to_destination",destination_confirmation_required:true};
+  }
+  if(src==="goodsmile_official"){
+    return isJP
+      ? {source:src,country_fit:"high",country_fit_score:98,direct_shipping:"domestic",language_support:"japanese_and_english",payment_compatibility:"major_cards_and_store_checkout",account_difficulty:"low_medium_account_required",proxy_required:false,purchase_ease_score:92,trust_score:98,route_type:"official_direct",destination_confirmation_required:false}
+      : {source:src,country_fit:"high",country_fit_score:96,direct_shipping:"verified_by_merchant_region_policy",language_support:"english",payment_compatibility:"credit_card_and_paypal",account_difficulty:"low_medium_account_required",proxy_required:false,purchase_ease_score:91,trust_score:98,route_type:"official_direct_international",destination_confirmation_required:true};
   }
   if(src==="official"){
     return {source:src,country_fit:isJP?"high":"medium",country_fit_score:isJP?90:60,direct_shipping:isJP?"domestic":"site_specific_not_verified",language_support:"site_specific",payment_compatibility:"site_specific",account_difficulty:"site_specific",proxy_required:!isJP,purchase_ease_score:isJP?82:50,trust_score:95,route_type:isJP?"direct_domestic":"official_site_destination_check_required",destination_confirmation_required:!isJP};
@@ -3563,8 +3661,10 @@ function rakutenToPurchaseOffer(x){
 function uniquePurchaseOffers(offers=[]){
   const out=[],seen=new Set();
   for(const o of offers){
-    if(!o||!Number.isFinite(Number(o.total_price_jpy))||Number(o.total_price_jpy)<=0)continue;
-    const key=String(o.url||`${o.source}|${o.seller||""}|${o.title||""}|${o.total_price_jpy}`);
+    if(!o)continue;
+    const total=Number(o.total_price_jpy);
+    if((!Number.isFinite(total)||total<=0)&&!o.practical_route_only)continue;
+    const key=String(o.url||`${o.source}|${o.seller||""}|${o.title||""}|${Number.isFinite(total)?total:"unpriced"}`);
     if(seen.has(key))continue;seen.add(key);out.push(o);
   }
   return out;
@@ -3593,27 +3693,35 @@ function assessPurchaseRoute(offer,buyerCountry="JP",cheapestKnown=null){
   if(profile.proxy_required)blockers.push("proxy_or_forwarder_may_be_required");
   if(profile.destination_confirmation_required)blockers.push("destination_shipping_must_be_confirmed");
   if(offer.shipping_jpy==null)blockers.push("destination_shipping_cost_not_verified");
+  if(offer.market_metadata?.region_product_availability_confirmation_required)blockers.push("product_region_availability_must_be_confirmed");
+  if(String(offer.price_basis||"").includes("not_verified"))blockers.push("destination_checkout_item_price_not_verified");
   if(country!=="JP")blockers.push("destination_tax_duty_or_brokerage_not_verified");
   const directness=profile.proxy_required?"proxy_likely":profile.destination_confirmation_required?"direct_if_destination_supported":"direct";
-  return {...offer,buyer_country:country,purchase_route:{country_fit:profile.country_fit,country_fit_score:profile.country_fit_score,direct_shipping:profile.direct_shipping,directness,language_support:profile.language_support,payment_compatibility:profile.payment_compatibility,account_difficulty:profile.account_difficulty,proxy_required:profile.proxy_required,purchase_ease_score:profile.purchase_ease_score,trust_score:profile.trust_score,route_type:profile.route_type,destination_confirmation_required:profile.destination_confirmation_required,price_score:priceScore,overall_score:overall,verification_blockers:blockers,known_total_price_jpy:Number.isFinite(total)?total:null,landed_total_verified:country==="JP"&&!profile.proxy_required&&Number.isFinite(total),recommended_action:profile.proxy_required?"Use a proxy/forwarder only after comparing its fees against direct international routes.":profile.destination_confirmation_required?`Confirm this exact listing ships to ${country} and accepts the buyer's payment method before checkout.`:"Direct purchase route; verify stock and checkout total before paying."}};
+  let recommendedAction=profile.proxy_required?"Use a proxy/forwarder only after comparing its fees against direct international routes.":profile.destination_confirmation_required?`Confirm this exact listing ships to ${country} and accepts the buyer's payment method before checkout.`:"Direct purchase route; verify stock and checkout total before paying.";
+  if(String(offer.source||"").toLowerCase()==="goodsmile_official"&&country!=="JP")recommendedAction=`Use the Good Smile international checkout for ${country}; sign in to confirm this product is available in-region. Shipping policy is known, but the destination checkout item price and import charges must be confirmed before paying.`;
+  return {...offer,buyer_country:country,purchase_route:{country_fit:profile.country_fit,country_fit_score:profile.country_fit_score,direct_shipping:profile.direct_shipping,directness,language_support:profile.language_support,payment_compatibility:profile.payment_compatibility,account_difficulty:profile.account_difficulty,proxy_required:profile.proxy_required,purchase_ease_score:profile.purchase_ease_score,trust_score:profile.trust_score,route_type:profile.route_type,destination_confirmation_required:profile.destination_confirmation_required,price_score:priceScore,overall_score:overall,verification_blockers:blockers,known_total_price_jpy:Number.isFinite(total)?total:null,landed_total_verified:country==="JP"&&!profile.proxy_required&&Number.isFinite(total),recommended_action:recommendedAction}};
 }
 
-function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP"){
+function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP",officialOffers=[]){
   const country=normalizeBuyerCountry(buyerCountry),cutoff=Date.now()-PIPELINE.marketFreshDays*86400000;
   const fresh=obs.filter(o=>{const t=Date.parse(o.observed_at||"");return Number.isFinite(t)&&t>=cutoff;});
   const latest=[...latestObservationMap(fresh).values()].map(observationToPurchaseOffer).filter(Boolean);
   const rakutenOffers=(rakuten?.offers||[]).map(rakutenToPurchaseOffer).filter(Boolean);
-  const raw=uniquePurchaseOffers([...latest,...rakutenOffers]).filter(o=>o.availability!=="unavailable");
-  const cheapestRaw=raw.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
+  const rawBase=uniquePurchaseOffers([...latest,...rakutenOffers,...(officialOffers||[])]).filter(o=>o.availability!=="unavailable");
+  const raw=rawBase.map(o=>materializeDestinationOffer(o,country));
+  const pricedRaw=raw.filter(o=>Number.isFinite(Number(o.total_price_jpy))&&Number(o.total_price_jpy)>0);
+  const cheapestRaw=pricedRaw.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
   const cheapestValue=cheapestRaw?Number(cheapestRaw.total_price_jpy):null;
-  const assessed=raw.map(o=>assessPurchaseRoute(o,country,cheapestValue)).sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||Number(a.total_price_jpy)-Number(b.total_price_jpy));
+  const numOrInf=v=>Number.isFinite(Number(v))?Number(v):Number.POSITIVE_INFINITY;
+  const assessed=raw.map(o=>assessPurchaseRoute(o,country,cheapestValue)).sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy));
   const best=assessed[0]||null;
   const cheapest=cheapestRaw?assessPurchaseRoute(cheapestRaw,country,cheapestValue):null;
-  const easiest=assessed.slice().sort((a,b)=>(b.purchase_route?.purchase_ease_score||0)-(a.purchase_route?.purchase_ease_score||0)||(b.purchase_route?.country_fit_score||0)-(a.purchase_route?.country_fit_score||0)||Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
+  const easiest=assessed.slice().sort((a,b)=>(b.purchase_route?.purchase_ease_score||0)-(a.purchase_route?.purchase_ease_score||0)||(b.purchase_route?.country_fit_score||0)-(a.purchase_route?.country_fit_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy))[0]||null;
   const directCandidates=assessed.filter(x=>!x.purchase_route?.proxy_required&&x.purchase_route?.country_fit_score>=60);
-  const lowestPractical=directCandidates.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||best;
+  const knownTotalDirect=directCandidates.filter(x=>Number.isFinite(Number(x.total_price_jpy))&&Number(x.total_price_jpy)>0);
+  const lowestPractical=knownTotalDirect.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
   if(best)best.purchase_route.tradeoff=purchaseRouteTradeoff(best,cheapest,country);
-  return {buyer_country:country,selection_policy:"purchase_feasibility_then_ease_then_known_cost",best_purchase_route:best,cheapest_offer:cheapest,easiest_purchase_route:easiest,lowest_known_practical_route:lowestPractical,alternatives:assessed.slice(0,5),candidate_count:assessed.length,notes:["Cheapest apparent price is not automatically the recommended route for overseas buyers.","Destination shipping, taxes/duties and payment acceptance are not invented when listing-specific evidence is unavailable.","Japanese domestic marketplaces may be cheaper but can require a proxy/forwarder for non-Japan buyers."]};
+  return {buyer_country:country,selection_policy:"purchase_feasibility_then_ease_then_known_cost",best_purchase_route:best,cheapest_offer:cheapest,easiest_purchase_route:easiest,lowest_known_practical_route:lowestPractical,alternatives:assessed.slice(0,7),candidate_count:assessed.length,practical_direct_candidate_count:directCandidates.length,notes:["Cheapest apparent price is not automatically the recommended route for overseas buyers.","Destination shipping, taxes/duties and payment acceptance are not invented when listing-specific evidence is unavailable.","Japanese domestic marketplaces may be cheaper but can require a proxy/forwarder for non-Japan buyers.","Supported official-store routes can outrank a cheaper domestic marketplace when they are materially easier for the buyer's country."]};
 }
 
 function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
@@ -3633,7 +3741,7 @@ function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
 async function buildIntelligence(env,product,refresh=false,lang="en",options={}){
   let obs=await getObservations(env,product.id);const initialMarket=marketView(product,obs),autoRefresh=options.autoRefresh===true&&(initialMarket.age_hours==null||initialMarket.age_hours>PIPELINE.marketAutoRefreshHours),refreshRequested=refresh||autoRefresh;let refresh_log=[];if(refreshRequested){refresh_log=await refreshLiveMarketForProduct(env,product,obs);obs=await getObservations(env,product.id);}const market=marketView(product,obs),rarity=rarityAnalysis(product,market),authenticity=authenticityRisk(product,market,obs),buyWait=buyWaitDecision(product,market,rarity,authenticity,lang),quality=identityQualityReasons(product),priceHistory=priceHistoryView(product,obs),deadline=purchaseDeadlineView(product),listingMatch=listingMatchView(product,obs,options.listingUrl||"",options.listingTitle||"");
   let rakuten;try{rakuten=await rakutenSearch(env,product);}catch(e){rakuten={configured:rakutenConfigured(env),mode:"affiliate_link_only",web_service_api:false,offers:[],best:null,search_url:rakutenPublicSearchUrl(product),affiliate_ready:false,error:safeError(e)};}
-  const buyerCountry=normalizeBuyerCountry(options.buyerCountry||"JP"),purchaseRouting=countryAwarePurchaseRouting(obs,rakuten,buyerCountry),purchaseBest=purchaseRouting.best_purchase_route||market.best_place||null;
+  const buyerCountry=normalizeBuyerCountry(options.buyerCountry||"JP"),fxInfo=await resolveUsdJpy(env),officialOffers=officialPurchaseOffersForProduct(product,fxInfo),purchaseRouting=countryAwarePurchaseRouting(obs,rakuten,buyerCountry,officialOffers),purchaseBest=purchaseRouting.best_purchase_route||market.best_place||null;
   const landedCost=landedCostView(purchaseBest,buyerCountry,options.postalCode||"");
   return {language:lang,product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),manufacturer:product.manufacturer,brand:product.brand,series:product.series,franchise:product.franchise,characters:product.character_names,jan_code:product.jan_code,model_number:product.model_number,product_type:product.product_type,specialist_attributes:productSpecialistProfile(product),identity_quality:quality.score,identification_confidence:product.identification_confidence??identificationConfidenceFor(product),scale:product.scale,edition:product.edition,limited_type:product.limited_type,msrp_jpy:product.msrp_jpy,release_date:product.original_release_date,latest_official_schedule_date:product.metadata?.latest_official_schedule_date||product.metadata?.calendar?.date||null,release_date_type:product.metadata?.release_date_type||product.metadata?.calendar?.date_type||null,rerelease:!!product.metadata?.rerelease,rerelease_generation:product.metadata?.rerelease_generation||product.metadata?.calendar?.rerelease_generation||null,possible_release_delay:!!product.metadata?.possible_release_delay,status:product.product_status,official_url:product.official_url,official_english_url:product.metadata?.official_english_url||null,image_url:product.official_image_url},market,price_history:priceHistory,deadline,listing_match:listingMatch,landed_cost:landedCost,rarity,authenticity_risk:authenticity,buy_wait:buyWait,best_place:purchaseBest,purchase_routing:purchaseRouting,routing:{buyer_country:buyerCountry,policy:purchaseRouting.selection_policy,yahoo:purchaseRouting.alternatives.find(x=>x.source==="yahoo_shopping")||null,ebay:purchaseRouting.alternatives.find(x=>x.source==="ebay")||null,rakuten:{configured:rakuten.configured,mode:rakuten.mode,affiliate_ready:rakuten.affiliate_ready,offers:rakuten.offers||[],best:purchaseRouting.alternatives.find(x=>x.source==="rakuten")||null,search_url:rakuten.search_url,pricing_source:rakuten.pricing_source},cheapest_offer:purchaseRouting.cheapest_offer,easiest_purchase_route:purchaseRouting.easiest_purchase_route,lowest_known_practical_route:purchaseRouting.lowest_known_practical_route},freshness:{product_last_checked:product.source_last_checked_at||null,market_observations:obs.length,newest_market_observation:market.newest_observed_at,market_age_hours:market.age_hours,market_status:market.freshness_status,auto_refresh_threshold_hours:PIPELINE.marketAutoRefreshHours,refresh_requested:refreshRequested,refresh_log},affiliate:{rakuten_configured:rakuten.configured,rakuten_mode:rakuten.mode,rakuten_affiliate_ready:rakuten.affiliate_ready,rakuten_candidates:rakuten.offers||[],rakuten_search_url:rakuten.search_url},provenance:product.metadata?.field_provenance||null,generated_at:new Date().toISOString()};
 }
@@ -6290,6 +6398,10 @@ function compactPurchaseRouteAuditView(route){
     total_price_jpy:Number.isFinite(Number(route.total_price_jpy))?Number(route.total_price_jpy):null,
     asking_price_jpy:Number.isFinite(Number(route.asking_price_jpy))?Number(route.asking_price_jpy):null,
     shipping_jpy:route.shipping_jpy==null?null:Number(route.shipping_jpy),
+    shipping_original:route.shipping_original==null?null:Number(route.shipping_original),
+    shipping_currency:route.shipping_currency||null,
+    reference_price_jpy:route.reference_price_jpy==null?null:Number(route.reference_price_jpy),
+    price_basis:route.price_basis||null,
     url:route.url||null,
     country_fit:pr.country_fit||null,
     country_fit_score:pr.country_fit_score??null,
@@ -6335,20 +6447,23 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
   try{market_refresh_log=await refreshLiveMarketForProduct(env,product,obs);}catch(e){market_refresh_log=[{source:"market_refresh",ok:false,error:safeError(e)}];}
   try{obs=await getObservations(env,product.id);}catch{}
   let rakuten;try{rakuten=await rakutenSearch(env,product);}catch(e){rakuten={configured:rakutenConfigured(env),mode:"affiliate_link_only",offers:[],best:null,error:safeError(e)};}
+  const fxInfo=await resolveUsdJpy(env),officialOffers=officialPurchaseOffersForProduct(product,fxInfo);
   const countries=["JP","US","NL"];
   const results=[];
   for(const country of countries){
-    const routing=countryAwarePurchaseRouting(obs,rakuten,country);
+    const routing=countryAwarePurchaseRouting(obs,rakuten,country,officialOffers);
     const landed=landedCostView(routing.best_purchase_route,country,"");
     const hasDirectAlternative=(routing.alternatives||[]).some(x=>!x?.purchase_route?.proxy_required&&(x?.purchase_route?.country_fit_score||0)>=60);
     const bestIsPractical=!routing.best_purchase_route||!hasDirectAlternative||(!routing.best_purchase_route?.purchase_route?.proxy_required&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=60);
     const noInventedCrossBorderTotal=country==="JP"||landed.estimated_landed_total_jpy==null;
     const hasCandidate=Number(routing.candidate_count||0)>0;
+    const overseasPractical=country==="JP"||!!(routing.best_purchase_route&&!routing.best_purchase_route?.purchase_route?.proxy_required&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=70);
     results.push({
       buyer_country:country,
       candidate_count:routing.candidate_count,
+      practical_direct_candidate_count:routing.practical_direct_candidate_count||0,
       selection_policy:routing.selection_policy,
-      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,no_invented_cross_border_landed_total:noInventedCrossBorderTotal},
+      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,overseas_best_route_is_practical_direct:overseasPractical,no_invented_cross_border_landed_total:noInventedCrossBorderTotal},
       cheapest_offer:compactPurchaseRouteAuditView(routing.cheapest_offer),
       best_purchase_route:compactPurchaseRouteAuditView(routing.best_purchase_route),
       easiest_purchase_route:compactPurchaseRouteAuditView(routing.easiest_purchase_route),
@@ -6357,12 +6472,12 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
       alternatives:(routing.alternatives||[]).slice(0,5).map(compactPurchaseRouteAuditView)
     });
   }
-  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.no_invented_cross_border_landed_total);
+  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.overseas_best_route_is_practical_direct&&r.checks.no_invented_cross_border_landed_total);
   return {
     service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,real_payment_test_required:false,query:q,query_repaired_from_mojibake:q!==raw&&!!raw,
     product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),franchise:product.franchise||null,characters:product.character_names||[],product_type:product.product_type||null},
-    observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,market_refresh_log,all_pass:allPass,results,
-    interpretation:"This audit performs a live Yahoo/eBay market refresh before comparing JP/US/NL. It only passes when current purchase candidates exist. Compare cheapest_offer with best_purchase_route/easiest_purchase_route/lowest_known_practical_route. For overseas buyers, a cheaper Japan-domestic route may remain visible as cheapest while a more practical direct route is ranked best. Unknown destination taxes, duties, proxy fees and listing-specific shipping are not invented."
+    observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
+    interpretation:"This audit refreshes Yahoo/eBay and also evaluates supported official-store routes before comparing JP/US/NL. For overseas buyers it now requires the selected best route to be a practical non-proxy route; a cheaper Japan-domestic offer may remain visible only as cheapest_offer. Good Smile international shipping/payment policy is modeled conservatively, while destination checkout item price, product-region availability and import charges remain unverified until checkout."
   };
 }
 
