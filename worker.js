@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.88";
+const VERSION="3.7.89";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -3730,7 +3730,8 @@ function sourcePurchaseProfile(source,buyerCountry="JP"){
 }
 
 function freeShippingEvidence(title=""){
-  return /éæç¡æ|éæè¾¼|free\s*shipping/i.test(String(title||""));
+  const t=String(title||"").normalize("NFKC").replace(/[\u00A0\u2000-\u200B\u3000]/g," ");
+  return /éæç¡æ|éæè¾¼(?:ã¿)?|free\s*shipping/i.test(t);
 }
 function priceFreshnessLabel(observedAt,livePrice=false){
   if(!livePrice)return "manual_or_registered";
@@ -3885,9 +3886,11 @@ function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP
   const raw=uniquePurchaseOffers([...rawBase,...proxyOffers]).map(o=>materializeDestinationOffer(o,country));
   const pricedRaw=raw.filter(o=>Number.isFinite(Number(o.total_price_jpy))&&Number(o.total_price_jpy)>0);
   const confidenceRank={high:4,medium:3,medium_low:2,low:1};
-  const comparablePriced=pricedRaw.filter(o=>(confidenceRank[String(o.price_confidence||"medium")]||0)>=3&&o.shipping_known===true);
-  const cheapestRaw=(comparablePriced.length?comparablePriced:pricedRaw).slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
-  const cheapestValue=cheapestRaw?Number(cheapestRaw.total_price_jpy):null;
+  // "cheapest_offer" means the lowest currently observed exact-match listing price, not the lowest verified landed total.
+  // Shipping confidence is handled separately when choosing Best and lowest_known_practical_route.
+  const cheapestRaw=pricedRaw.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
+  const bestPriceReferencePool=pricedRaw.filter(o=>(confidenceRank[String(o.price_confidence||"medium")]||0)>=3);
+  const cheapestValue=(bestPriceReferencePool.length?bestPriceReferencePool:pricedRaw).slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]?.total_price_jpy??null;
   const numOrInf=v=>Number.isFinite(Number(v))?Number(v):Number.POSITIVE_INFINITY;
   const assessed=raw.map(o=>assessPurchaseRoute(o,country,cheapestValue)).sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy));
   const cheapest=cheapestRaw?assessPurchaseRoute(cheapestRaw,country,cheapestValue):null;
@@ -3898,7 +3901,7 @@ function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP
   const best=country==="JP"?(assessed[0]||null):(practicalCandidates[0]||null);
   const easiestPool=country==="JP"?assessed:practicalCandidates;
   const easiest=easiestPool.slice().sort((a,b)=>(b.purchase_route?.purchase_ease_score||0)-(a.purchase_route?.purchase_ease_score||0)||(b.purchase_route?.country_fit_score||0)-(a.purchase_route?.country_fit_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy))[0]||null;
-  const knownTotalPractical=practicalCandidates.filter(x=>Number.isFinite(Number(x.total_price_jpy))&&Number(x.total_price_jpy)>0);
+  const knownTotalPractical=practicalCandidates.filter(x=>x.shipping_known===true&&Number.isFinite(Number(x.total_price_jpy))&&Number(x.total_price_jpy)>0);
   const lowestPractical=knownTotalPractical.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
   if(best)best.purchase_route.tradeoff=purchaseRouteTradeoff(best,cheapest,country);
   return {buyer_country:country,selection_policy:"purchase_feasibility_then_ease_then_known_cost",best_purchase_route:best,cheapest_offer:cheapest,easiest_purchase_route:easiest,lowest_known_practical_route:lowestPractical,alternatives:assessed.slice(0,7),candidate_count:assessed.length,practical_direct_candidate_count:verifiedDirectCandidates.length,verified_proxy_candidate_count:verifiedProxyCandidates.length,practical_route_candidate_count:practicalCandidates.length,notes:["Cheapest apparent price is not automatically the recommended route for overseas buyers.","Destination shipping, taxes/duties and payment acceptance are not invented when listing-specific evidence is unavailable.","For overseas buyers, an exact Japanese listing can be converted into a verified multilingual proxy-shopping route instead of being recommended as a raw Japanese-only checkout.","Supported official/direct international routes outrank proxy routes when sufficiently practical; verified proxy routes are used when no good direct route exists."]};
@@ -3917,7 +3920,9 @@ function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
   if(profile.proxy_required)unknown.push("proxy/forwarder service fee");
   if(!domesticJP)unknown.push("destination-specific import duty/tax","destination-specific carrier/brokerage fee");
   const verifiedProxy=profile.route_type==="verified_proxy_international";
-  return {buyer_country:country,postal_code:postalCode||null,source:best.source||null,seller:best.seller||null,item_price_jpy:Number.isFinite(item)?item:null,known_shipping_jpy:Number.isFinite(shipping)?shipping:null,known_total_jpy:Number.isFinite(known)?known:null,estimated_landed_total_jpy:domesticJP&&Number.isFinite(known)?known:null,domestic_japan_route:domesticJP,direct_shipping_status:profile.direct_shipping||null,proxy_required:!!profile.proxy_required,language_support:profile.language_support||null,payment_compatibility:profile.payment_compatibility||null,account_difficulty:profile.account_difficulty||null,purchase_ease_score:profile.purchase_ease_score??null,country_fit_score:profile.country_fit_score??null,import_duty_estimate_jpy:domesticJP?0:null,import_tax_estimate_jpy:domesticJP?0:null,confidence:domesticJP?(shipping==null?"medium":"high"):(verifiedProxy?"medium_low":profile.proxy_required?"low":"medium_low"),unknown_components:[...new Set(unknown)],purchase_url:best.url||null,source_product_url:best.source_product_url||null,recommended_action:profile.recommended_action||null,note:domesticJP?"For a Japan buyer using a domestic Yahoo/Rakuten route, the displayed matched marketplace total is used as the known landed total; marketplace tax treatment is not independently decomposed.":verifiedProxy?"This is a verified proxy-assisted international route for the exact Japanese listing. The Japanese item price can be shown as a reference, but proxy fee, international shipping and import charges are not treated as a landed total until quoted.":"For cross-border routes, ANIME INTELLIGENCE ranks purchase feasibility and ease before apparent price. Destination eligibility, taxes, duties, brokerage and proxy fees are not invented when source data is unavailable."};
+  const shippingKnown=best.shipping_known===true||Number.isFinite(shipping);
+  const knownTotal=shippingKnown&&Number.isFinite(known)?known:null;
+  return {buyer_country:country,postal_code:postalCode||null,source:best.source||null,seller:best.seller||null,item_price_jpy:Number.isFinite(item)?item:null,known_shipping_jpy:Number.isFinite(shipping)?shipping:null,known_total_jpy:knownTotal,estimated_landed_total_jpy:domesticJP&&knownTotal!=null?knownTotal:null,domestic_japan_route:domesticJP,direct_shipping_status:profile.direct_shipping||null,proxy_required:!!profile.proxy_required,language_support:profile.language_support||null,payment_compatibility:profile.payment_compatibility||null,account_difficulty:profile.account_difficulty||null,purchase_ease_score:profile.purchase_ease_score??null,country_fit_score:profile.country_fit_score??null,import_duty_estimate_jpy:domesticJP?0:null,import_tax_estimate_jpy:domesticJP?0:null,confidence:domesticJP?(shippingKnown?"high":"medium"):(verifiedProxy?"medium_low":profile.proxy_required?"low":"medium_low"),unknown_components:[...new Set(unknown)],purchase_url:best.url||null,source_product_url:best.source_product_url||null,recommended_action:profile.recommended_action||null,note:domesticJP?(shippingKnown?"For a Japan buyer using a domestic Yahoo/Rakuten route, the verified item-plus-shipping total is used as the known landed total; marketplace tax treatment is not independently decomposed.":"For a Japan buyer, the item price is known but shipping is not verified, so no landed total is claimed until checkout."):verifiedProxy?"This is a verified proxy-assisted international route for the exact Japanese listing. The Japanese item price can be shown as a reference, but proxy fee, international shipping and import charges are not treated as a landed total until quoted.":"For cross-border routes, ANIME INTELLIGENCE ranks purchase feasibility and ease before apparent price. Destination eligibility, taxes, duties, brokerage and proxy fees are not invented when source data is unavailable."};
 }
 
 async function buildIntelligence(env,product,refresh=false,lang="en",options={}){
@@ -6647,6 +6652,7 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
     const bestExactIdentity=!!(!routing.best_purchase_route||String(routing.best_purchase_route?.source||"").toLowerCase()!=="ebay"||ebayStrongIdentityAnalysis(product,{title:routing.best_purchase_route?.title||""}).accepted);
     const bestIsPractical=!routing.best_purchase_route||!hasDirectAlternative||bestPracticalDirect;
     const noInventedCrossBorderTotal=country==="JP"||landed.estimated_landed_total_jpy==null;
+    const noInventedLandedTotal=landed.estimated_landed_total_jpy==null||landed.known_total_jpy!=null;
     const hasCandidate=Number(routing.candidate_count||0)>0;
     const overseasPractical=country==="JP"||bestPracticalDirect||bestVerifiedProxy;
     results.push({
@@ -6656,7 +6662,7 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
       verified_proxy_candidate_count:routing.verified_proxy_candidate_count||0,
       practical_route_candidate_count:routing.practical_route_candidate_count||0,
       selection_policy:routing.selection_policy,
-      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,overseas_best_route_is_practical:overseasPractical,best_route_is_verified_proxy:bestVerifiedProxy,exact_product_identity:bestExactIdentity,no_invented_cross_border_landed_total:noInventedCrossBorderTotal},
+      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,overseas_best_route_is_practical:overseasPractical,best_route_is_verified_proxy:bestVerifiedProxy,exact_product_identity:bestExactIdentity,no_invented_cross_border_landed_total:noInventedCrossBorderTotal,no_invented_landed_total:noInventedLandedTotal},
       cheapest_offer:compactPurchaseRouteAuditView(routing.cheapest_offer),
       best_purchase_route:compactPurchaseRouteAuditView(routing.best_purchase_route),
       easiest_purchase_route:compactPurchaseRouteAuditView(routing.easiest_purchase_route),
@@ -6665,12 +6671,12 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
       alternatives:(routing.alternatives||[]).slice(0,5).map(compactPurchaseRouteAuditView)
     });
   }
-  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.overseas_best_route_is_practical&&r.checks.exact_product_identity&&r.checks.no_invented_cross_border_landed_total);
+  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.overseas_best_route_is_practical&&r.checks.exact_product_identity&&r.checks.no_invented_cross_border_landed_total&&r.checks.no_invented_landed_total);
   return {
     service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,real_payment_test_required:false,query:q,query_repaired_from_mojibake:q!==raw&&!!raw,
     product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),franchise:product.franchise||null,characters:product.character_names||[],product_type:product.product_type||null},
     observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,rakuten_market:{mode:rakuten?.mode||null,live_price_api_configured:!!rakuten?.live_price_api_configured,affiliate_only:!!rakuten?.affiliate_only,web_service_api:!!rakuten?.web_service_api,application_id_present:!!rakuten?.application_id_present,access_key_present:!!rakuten?.access_key_present,affiliate_id_present:!!rakuten?.affiliate_id_present,live_returned:rakuten?.live_returned||0,live_matches:rakuten?.live_matches||0,registered_offer_count:rakuten?.registered_offer_count||0,live_attempts:rakuten?.live_attempts||[],live_error:rakuten?.live_error||rakuten?.error||null,pricing_source:rakuten?.pricing_source||null,note:rakuten?.note||null},official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
-    interpretation:"This audit refreshes Yahoo/eBay and, when Rakuten Web Service credentials are configured, live Rakuten Ichiba offers too. It rejects sibling/variant mismatches and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. For Japan buyers, Yahoo/Rakuten compete on current matched offers rather than source preference. For overseas buyers, raw Japanese-only checkout is not considered sufficient: best_purchase_route must be either a practical direct international route or a verified proxy route. Unknown shipping, proxy fees, taxes and duties are never invented."
+    interpretation:"This audit refreshes Yahoo/eBay and, when Rakuten Web Service credentials are configured, live Rakuten Ichiba offers too. It rejects sibling/variant mismatches and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. cheapest_offer is the lowest observed exact-match listing price, while best_purchase_route additionally considers purchase feasibility, price evidence and shipping confidence. For Japan buyers, Yahoo/Rakuten compete without source preference. For overseas buyers, raw Japanese-only checkout is not considered sufficient. Unknown shipping, proxy fees, taxes and duties are never invented, and a landed total is not claimed when shipping remains unknown."
   };
 }
 
