@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.89";
+const VERSION="3.7.90";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2735,11 +2735,49 @@ function isAdminE2ETestEvent(x,env){
   return !!(x?.payer_hash&&configured.has(String(x.payer_hash)));
 }
 
+async function kpiApiEventsCount(env){
+  try{
+    const r=await fetch(sbBase(env)+"/api_events?select=event_type",{headers:sbHeaders(env,{Prefer:"count=planned",Range:"0-0"})});
+    const raw=await r.text();
+    if(!r.ok)throw new Error(`Supabase api_events count ${r.status}: ${raw.slice(0,600)}`);
+    const cr=r.headers.get("content-range")||"";
+    const m=cr.match(/\/(\d+)$/);
+    return {ok:true,count:m?Number(m[1]):null,error:null};
+  }catch(e){return {ok:false,count:null,error:safeError(e)};}
+}
+
+async function readKpiEvents(env,funnelTypes){
+  const limit=Math.max(1,Number(PIPELINE.kpiEventReadLimit)||5000);
+  const filter=encodeURIComponent(`(${funnelTypes.join(",")})`);
+  const primaryPath=`/api_events?select=*&event_type=in.${filter}&order=occurred_at.desc&limit=${limit}`;
+  let primaryError=null,fallbackError=null;
+  try{
+    const rows=await sb(env,primaryPath);
+    if(Array.isArray(rows)&&rows.length){
+      const count=await kpiApiEventsCount(env);
+      return {ok:true,rows,read_mode:"filtered_query",primary_error:null,fallback_error:null,api_events_rows_seen:rows.length,table_has_events:true,total_event_count_estimate:count.count,count_error:count.error};
+    }
+  }catch(e){primaryError=safeError(e);}
+
+  // A filtered query can fail or return an unexpected empty set after schema/query changes.
+  // Fall back to a broad recent read and filter in JavaScript so telemetry failure is never disguised as zero traffic.
+  try{
+    const broad=await sb(env,`/api_events?select=*&order=occurred_at.desc&limit=${limit}`);
+    const broadRows=Array.isArray(broad)?broad:[];
+    const allowed=new Set(funnelTypes);
+    const rows=broadRows.filter(x=>allowed.has(String(x?.event_type||"")));
+    const count=await kpiApiEventsCount(env);
+    return {ok:true,rows,read_mode:primaryError?"broad_fallback_after_filtered_error":"broad_fallback_after_filtered_empty",primary_error:primaryError,fallback_error:null,api_events_rows_seen:broadRows.length,table_has_events:broadRows.length>0,total_event_count_estimate:count.count,count_error:count.error};
+  }catch(e){fallbackError=safeError(e);}
+
+  const count=await kpiApiEventsCount(env);
+  return {ok:false,rows:[],read_mode:"unavailable",primary_error:primaryError,fallback_error:fallbackError,api_events_rows_seen:0,table_has_events:count.ok?(Number(count.count||0)>0):null,total_event_count_estimate:count.count,count_error:count.error,error:fallbackError||primaryError||count.error||"unknown telemetry read failure"};
+}
+
 async function revenueMetrics(env){
   const funnelTypes=["api_call","x402_gate_entered","x402_configuration_error","payment_required","payment_attempt","payment_invalid_header","payment_verify_failed","payment_verified","paid_call","payment_settlement_failed","x402_failed","product_intent","canonical_product_selected","product_requested","product_not_found","service_execution_failed","disambiguation_required","identity_preflight_failed","affiliate_link_served","affiliate_click","affiliate_link_registered","ranked_product_auto_selected"];
-  const filter=encodeURIComponent(`(${funnelTypes.join(",")})`);
-  const rows=await sbOptional(env,`/api_events?select=*&event_type=in.${filter}&order=occurred_at.desc&limit=${PIPELINE.kpiEventReadLimit}`);
-  const allEvents=Array.isArray(rows)?rows:[];
+  const telemetry=await readKpiEvents(env,funnelTypes);
+  const allEvents=telemetry.rows;
   const versionEvents=allEvents.filter(x=>String(x?.metadata?.version||"")===VERSION);
   const events=versionEvents.length?versionEvents:allEvents;
   const byType={};for(const x of events)byType[x.event_type]=(byType[x.event_type]||0)+1;
@@ -2783,13 +2821,14 @@ async function revenueMetrics(env){
   const paymentView=x=>x?{occurred_at:x.occurred_at||null,endpoint:x.endpoint||null,amount_usdc:Number(x.amount_usdc||0),amount_atomic:x.amount_atomic!=null?Number(x.amount_atomic):null,network:x.payment_network||null,transaction_hash:x.transaction_hash||null,payer_hash:x.payer_hash||null}:null;
   const latestExternal=externalPaid.length?externalPaid[0]:null,firstExternal=externalPaid.length?externalPaid[externalPaid.length-1]:null;
   const recentLatestExternal=recentHistoryExternalPaid.length?recentHistoryExternalPaid[0]:null,recentFirstExternal=recentHistoryExternalPaid.length?recentHistoryExternalPaid[recentHistoryExternalPaid.length-1]:null;
-  const stage=(calls.length===0)?"no_external_api_traffic":(queryCalls.length===0)?"discovered_or_probed_but_no_product_intent":(selected.length===0)?"product_intent_but_no_canonical_selection":(gateEntered.length===0)?"canonical_selected_but_x402_gate_not_entered":(paymentRequired.length===0)?(configErrors.length?"x402_configuration_error_before_402":"x402_gate_entered_but_402_not_issued"):(attempts.length===0)?"402_issued_but_no_payment_retry":(verified.length===0)?"payment_retry_received_but_not_verified":(paid.length===0)?"payment_verified_but_not_settled":"revenue_confirmed";
+  const stage=!telemetry.ok?"telemetry_unavailable":(calls.length===0)?(telemetry.table_has_events?"no_x402_funnel_events_in_window":"no_external_api_traffic"):(queryCalls.length===0)?"discovered_or_probed_but_no_product_intent":(selected.length===0)?"product_intent_but_no_canonical_selection":(gateEntered.length===0)?"canonical_selected_but_x402_gate_not_entered":(paymentRequired.length===0)?(configErrors.length?"x402_configuration_error_before_402":"x402_gate_entered_but_402_not_issued"):(attempts.length===0)?"402_issued_but_no_payment_retry":(verified.length===0)?"payment_retry_received_but_not_verified":(paid.length===0)?"payment_verified_but_not_settled":"revenue_confirmed";
   const selectedByRequest=new Map(selected.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
   const requiredByRequest=new Map(paymentRequired.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
   const attemptByRequest=new Map(attempts.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
   const query_intent_samples=realShoppingIntentCalls.slice(0,20).map(x=>{const rid=String(x.metadata?.request_id||"");const sel=selectedByRequest.get(rid),req=requiredByRequest.get(rid),att=attemptByRequest.get(rid);return {occurred_at:x.occurred_at||null,endpoint:x.endpoint||null,source_class:x.metadata?.source_class||null,source_fingerprint:x.metadata?.source_fingerprint||null,user_agent:x.metadata?.user_agent||null,client_name:x.metadata?.client_name||null,referer:x.metadata?.referer||null,origin:x.metadata?.origin||null,country:x.metadata?.country||null,query:String(x.metadata?.intent_query||x.metadata?.query_text||"").slice(0,180)||null,canonical_product_id:sel?.product_id||sel?.metadata?.canonical_product_id||null,payment_required:!!req,payment_attempted:!!att,payment_header_name:att?.metadata?.payment_header_name||null};});
   const query_source_fingerprints=countBy(realShoppingIntentCalls,x=>x.metadata?.source_fingerprint||x.metadata?.source_class);
   return {
+    telemetry_read_ok:telemetry.ok,telemetry_read_mode:telemetry.read_mode,telemetry_read_error:telemetry.ok?null:(telemetry.error||null),telemetry_primary_error:telemetry.primary_error||null,telemetry_fallback_error:telemetry.fallback_error||null,telemetry_api_events_rows_seen:telemetry.api_events_rows_seen,telemetry_api_events_total_estimate:telemetry.total_event_count_estimate,telemetry_count_error:telemetry.count_error||null,telemetry_table_has_events:telemetry.table_has_events,
     event_window:versionEvents.length?`current_version_${VERSION}_events_within_latest_${PIPELINE.kpiEventReadLimit}`:`latest_${PIPELINE.kpiEventReadLimit}_x402_funnel_events_fallback`,events_in_window:events.length,all_recent_events_seen:allEvents.length,funnel_stage:stage,
     first_revenue_confirmed:paid.length>0,recent_history_revenue_confirmed:recentHistoryPaid.length>0,
     first_external_revenue_confirmed:externalPaid.length>0,recent_history_external_revenue_confirmed:recentHistoryExternalPaid.length>0,
@@ -6676,7 +6715,7 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
     service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,real_payment_test_required:false,query:q,query_repaired_from_mojibake:q!==raw&&!!raw,
     product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),franchise:product.franchise||null,characters:product.character_names||[],product_type:product.product_type||null},
     observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,rakuten_market:{mode:rakuten?.mode||null,live_price_api_configured:!!rakuten?.live_price_api_configured,affiliate_only:!!rakuten?.affiliate_only,web_service_api:!!rakuten?.web_service_api,application_id_present:!!rakuten?.application_id_present,access_key_present:!!rakuten?.access_key_present,affiliate_id_present:!!rakuten?.affiliate_id_present,live_returned:rakuten?.live_returned||0,live_matches:rakuten?.live_matches||0,registered_offer_count:rakuten?.registered_offer_count||0,live_attempts:rakuten?.live_attempts||[],live_error:rakuten?.live_error||rakuten?.error||null,pricing_source:rakuten?.pricing_source||null,note:rakuten?.note||null},official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
-    interpretation:"This audit refreshes Yahoo/eBay and, when Rakuten Web Service credentials are configured, live Rakuten Ichiba offers too. It rejects sibling/variant mismatches and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. cheapest_offer is the lowest observed exact-match listing price, while best_purchase_route additionally considers purchase feasibility, price evidence and shipping confidence. For Japan buyers, Yahoo/Rakuten compete without source preference. For overseas buyers, raw Japanese-only checkout is not considered sufficient. Unknown shipping, proxy fees, taxes and duties are never invented, and a landed total is not claimed when shipping remains unknown."
+    interpretation:"This audit refreshes Yahoo/eBay live market offers; Rakuten remains affiliate-only unless separately configured. It rejects sibling/variant mismatches and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. cheapest_offer is the lowest observed exact-match listing price, while best_purchase_route additionally considers purchase feasibility, price evidence and shipping confidence. For Japan buyers, Yahoo/Rakuten compete without source preference. For overseas buyers, raw Japanese-only checkout is not considered sufficient. Unknown shipping, proxy fees, taxes and duties are never invented, and a landed total is not claimed when shipping remains unknown."
   };
 }
 
