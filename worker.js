@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.85";
+const VERSION="3.7.86";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -6563,7 +6563,7 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
   for(const country of countries){
     const routing=countryAwarePurchaseRouting(obs,rakuten,country,officialOffers,product);
     const landed=landedCostView(routing.best_purchase_route,country,"");
-    const hasDirectAlternative=(routing.alternatives||[]).some(x=>!x?.purchase_route?.proxy_required&&(x?.purchase_route?.country_fit_score||0)>=60);
+    const hasDirectAlternative=(routing.alternatives||[]).some(x=>!x?.purchase_route?.proxy_required&&(x?.purchase_route?.country_fit_score||0)>=60&&x?.purchase_route?.destination_confirmation_required===false);
     const bestRouteType=routing.best_purchase_route?.purchase_route?.route_type||null;
     const bestPracticalDirect=!!(routing.best_purchase_route&&!routing.best_purchase_route?.purchase_route?.proxy_required&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=70&&routing.best_purchase_route?.purchase_route?.destination_confirmation_required===false);
     const bestVerifiedProxy=!!(routing.best_purchase_route&&bestRouteType==="verified_proxy_international"&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=80);
