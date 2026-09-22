@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.83";
+const VERSION="3.7.84";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -3738,7 +3738,8 @@ function purchaseRouteTradeoff(route,cheapest,buyerCountry){
 function assessPurchaseRoute(offer,buyerCountry="JP",cheapestKnown=null){
   if(!offer)return null;
   const country=normalizeBuyerCountry(buyerCountry),profile=sourcePurchaseProfile(offer.source,country);
-  const total=Number(offer.total_price_jpy??offer.price_jpy),cheapest=Number(cheapestKnown);
+  const totalRaw=offer.total_price_jpy??offer.price_jpy,cheapestRaw=cheapestKnown;
+  const total=totalRaw==null?null:Number(totalRaw),cheapest=cheapestRaw==null?null:Number(cheapestRaw);
   let priceScore=50;
   if(Number.isFinite(total)&&total>0&&Number.isFinite(cheapest)&&cheapest>0){
     const ratio=total/cheapest;
@@ -3791,7 +3792,8 @@ function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
   const best=bestPlace||null;
   if(!best)return {buyer_country:country,postal_code:postalCode||null,status:"no_current_offer",known_total_jpy:null,estimated_landed_total_jpy:null,confidence:"low",unknown_components:["item offer","shipping","tax/duty"],note:"No current matched purchase route is available."};
   const source=String(best.source||"").toLowerCase(),profile=best.purchase_route||sourcePurchaseProfile(source,country),domesticJP=country==="JP"&&(source==="yahoo_shopping"||source==="rakuten");
-  const item=Number(best.asking_price_jpy??best.price_jpy??best.reference_price_jpy),shipping=best.shipping_jpy==null?null:Number(best.shipping_jpy),known=Number(best.total_price_jpy??best.price_jpy);
+  const itemRaw=best.asking_price_jpy??best.price_jpy??best.reference_price_jpy,knownRaw=best.total_price_jpy??best.price_jpy;
+  const item=itemRaw==null?null:Number(itemRaw),shipping=best.shipping_jpy==null?null:Number(best.shipping_jpy),known=knownRaw==null?null:Number(knownRaw);
   const unknown=[];
   if(shipping==null)unknown.push("destination-specific shipping if not included in the marketplace total");
   if(profile.destination_confirmation_required)unknown.push("listing-specific shipping eligibility to buyer country");
@@ -6458,8 +6460,8 @@ function compactPurchaseRouteAuditView(route){
     source:route.source||null,
     seller:route.seller||null,
     title:route.title||null,
-    total_price_jpy:Number.isFinite(Number(route.total_price_jpy))?Number(route.total_price_jpy):null,
-    asking_price_jpy:Number.isFinite(Number(route.asking_price_jpy))?Number(route.asking_price_jpy):null,
+    total_price_jpy:route.total_price_jpy==null?null:(Number.isFinite(Number(route.total_price_jpy))?Number(route.total_price_jpy):null),
+    asking_price_jpy:route.asking_price_jpy==null?null:(Number.isFinite(Number(route.asking_price_jpy))?Number(route.asking_price_jpy):null),
     shipping_jpy:route.shipping_jpy==null?null:Number(route.shipping_jpy),
     shipping_original:route.shipping_original==null?null:Number(route.shipping_original),
     shipping_currency:route.shipping_currency||null,
