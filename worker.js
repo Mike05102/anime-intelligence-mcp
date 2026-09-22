@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.87";
+const VERSION="3.7.88";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2918,7 +2918,8 @@ async function rakutenSearch(env,product){
   const byKey=new Map();
   for(const o of [...live.offers,...registered]){const key=String(o.item_code||o.affiliate_url||`${o.seller}|${o.title}`);const prev=byKey.get(key);if(!prev||Number(o.total_price_jpy||Infinity)<Number(prev.total_price_jpy||Infinity))byKey.set(key,o);}
   const offers=[...byKey.values()].sort((a,b)=>(a.total_price_jpy||Infinity)-(b.total_price_jpy||Infinity)).slice(0,12);
-  return {configured:apiConfigured||affiliateIdPresent||registered.length>0,mode:apiConfigured?"live_web_service_plus_affiliate":"affiliate_link_only",web_service_api:apiConfigured,application_id_present:!!String(env.RAKUTEN_APPLICATION_ID||"").trim(),access_key_present:!!String(env.RAKUTEN_ACCESS_KEY||"").trim(),affiliate_id_present:affiliateIdPresent,live_returned:live.returned||0,live_matches:(live.offers||[]).length,live_attempts:live.attempts||[],live_error:live.error||null,registered_offer_count:registered.length,offers,best:offers[0]||null,search_url:rakutenPublicSearchUrl(product),affiliate_ready:offers.some(o=>o.affiliate_ready),pricing_source:apiConfigured?"Rakuten Ichiba live API + Yahoo Shopping + eBay + stored market observations":"Yahoo Shopping + eBay + stored market observations",note:apiConfigured?"Live Rakuten Ichiba pricing is included in purchase routing. Affiliate URLs are used when Rakuten returns them.":(registered.length?"Official pre-generated Rakuten affiliate link available for this product.":"Rakuten live pricing is not active because RAKUTEN_APPLICATION_ID and RAKUTEN_ACCESS_KEY are not both configured.")};
+  const affiliateOnly=!apiConfigured&&(affiliateIdPresent||registered.length>0);
+  return {configured:apiConfigured||affiliateOnly,mode:apiConfigured?"live_web_service_plus_affiliate":(affiliateOnly?"affiliate_only":"not_configured"),live_price_api_configured:apiConfigured,affiliate_only:affiliateOnly,web_service_api:apiConfigured,application_id_present:!!String(env.RAKUTEN_APPLICATION_ID||"").trim(),access_key_present:!!String(env.RAKUTEN_ACCESS_KEY||"").trim(),affiliate_id_present:affiliateIdPresent,live_returned:live.returned||0,live_matches:(live.offers||[]).length,live_attempts:live.attempts||[],live_error:live.error||null,registered_offer_count:registered.length,offers,best:offers[0]||null,search_url:rakutenPublicSearchUrl(product),affiliate_ready:offers.some(o=>o.affiliate_ready),pricing_source:apiConfigured?"Rakuten Ichiba live API + Yahoo Shopping + eBay + stored market observations":"Yahoo Shopping + eBay live pricing; Rakuten registered affiliate links are purchase links only and their stored prices are lower-confidence",note:apiConfigured?"Live Rakuten Ichiba pricing is included in purchase routing. Affiliate URLs are used when Rakuten returns them.":(registered.length?"Registered Rakuten affiliate links remain usable, but their stored prices are not treated as live market prices.":"Rakuten live pricing is inactive; Yahoo/eBay remain the live market-price sources.")};
 }
 
 function base64UrlEncode(v=""){const bytes=new TextEncoder().encode(String(v));let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");}
@@ -3728,38 +3729,47 @@ function sourcePurchaseProfile(source,buyerCountry="JP"){
   return {source:src||"unknown",country_fit:"unknown",country_fit_score:50,direct_shipping:"unknown",language_support:"unknown",payment_compatibility:"unknown",account_difficulty:"unknown",proxy_required:false,purchase_ease_score:50,trust_score:60,route_type:"unknown",destination_confirmation_required:true};
 }
 
+function freeShippingEvidence(title=""){
+  return /éæç¡æ|éæè¾¼|free\s*shipping/i.test(String(title||""));
+}
+function priceFreshnessLabel(observedAt,livePrice=false){
+  if(!livePrice)return "manual_or_registered";
+  const t=Date.parse(observedAt||"");
+  if(!Number.isFinite(t))return "live_timestamp_unknown";
+  const age=(Date.now()-t)/3600000;
+  if(age<=24)return "live_recent";
+  if(age<=PIPELINE.marketFreshDays*24)return "live_within_market_window";
+  return "stale";
+}
+function priceConfidenceFromEvidence({livePrice=false,shippingKnown=false,observedAt=null}={}){
+  const freshness=priceFreshnessLabel(observedAt,livePrice);
+  if(freshness==="stale")return "low";
+  if(livePrice&&shippingKnown)return "high";
+  if(livePrice)return "medium";
+  if(shippingKnown)return "medium_low";
+  return "low";
+}
 function observationToPurchaseOffer(o){
   if(!o)return null;
-  const total=observationEffectivePrice(o);
+  const title=o.listing_title||null,freeShip=freeShippingEvidence(title);
+  const asking=o.price_jpy==null?null:Number(o.price_jpy);
+  const rawShipping=o.shipping_jpy==null?null:Number(o.shipping_jpy);
+  const shippingKnown=rawShipping!=null||freeShip;
+  const shipping=rawShipping!=null?rawShipping:(freeShip?0:null);
+  const total=Number.isFinite(asking)&&asking>0?asking+(Number.isFinite(shipping)?Math.max(0,shipping):0):null;
   if(total==null||o.in_stock===false)return null;
-  return {
-    source:o.metadata?.market_source||"unknown",
-    seller:o.seller_name||null,
-    title:o.listing_title||null,
-    asking_price_jpy:o.price_jpy==null?null:Number(o.price_jpy),
-    shipping_jpy:o.shipping_jpy==null?null:Number(o.shipping_jpy),
-    total_price_jpy:total,
-    price_jpy:total,
-    currency:"JPY",
-    original_currency:o.currency||null,
-    url:o.listing_url||null,
-    condition:o.item_condition||null,
-    availability:o.in_stock===false?"unavailable":"available",
-    observed_at:o.observed_at||null,
-    fetched_at:o.observed_at||null,
-    affiliate:!!o.metadata?.affiliate,
-    affiliate_source:o.metadata?.affiliate_source||null,
-    match_score:o.metadata?.match_score??null,
-    match_basis:o.metadata?.match_basis||null,
-    market_metadata:o.metadata||null
-  };
+  const livePrice=true,priceFreshness=priceFreshnessLabel(o.observed_at,livePrice),priceConfidence=priceConfidenceFromEvidence({livePrice,shippingKnown,observedAt:o.observed_at});
+  return {source:o.metadata?.market_source||"unknown",seller:o.seller_name||null,title,asking_price_jpy:asking,shipping_jpy:shipping,total_price_jpy:total,price_jpy:total,live_price:true,price_freshness:priceFreshness,shipping_known:shippingKnown,price_confidence:priceConfidence,price_evidence:freeShip&&rawShipping==null?"listing_title_free_shipping_evidence":"marketplace_observation",currency:"JPY",original_currency:o.currency||null,url:o.listing_url||null,condition:o.item_condition||null,availability:o.in_stock===false?"unavailable":"available",observed_at:o.observed_at||null,fetched_at:o.observed_at||null,affiliate:!!o.metadata?.affiliate,affiliate_source:o.metadata?.affiliate_source||null,match_score:o.metadata?.match_score??null,match_basis:o.metadata?.match_basis||null,market_metadata:o.metadata||null};
 }
 
 function rakutenToPurchaseOffer(x){
   if(!x)return null;
-  const total=Number(x.total_price_jpy??x.price_jpy);
+  const asking=Number(x.price_jpy),rawShipping=x.shipping_jpy==null?null:Number(x.shipping_jpy),freeShip=freeShippingEvidence(x.title||"");
+  const shippingKnown=rawShipping!=null||freeShip,shipping=rawShipping!=null?rawShipping:(freeShip?0:null);
+  const total=Number.isFinite(asking)&&asking>0?asking+(Number.isFinite(shipping)?Math.max(0,shipping):0):Number(x.total_price_jpy??x.price_jpy);
   if(!Number.isFinite(total)||total<=0)return null;
-  return {source:"rakuten",seller:x.seller||"Rakuten Ichiba",title:x.title||null,asking_price_jpy:Number.isFinite(Number(x.price_jpy))?Number(x.price_jpy):null,shipping_jpy:x.shipping_jpy==null?null:Number(x.shipping_jpy),total_price_jpy:total,price_jpy:total,currency:"JPY",original_currency:"JPY",url:x.affiliate_url||null,condition:null,availability:"available",observed_at:null,fetched_at:new Date().toISOString(),affiliate:!!x.affiliate_ready,affiliate_source:x.affiliate_ready?"rakuten_affiliate":null,match_score:x.match_score??100,match_basis:x.match_basis||"rakuten_live_or_registered_offer",market_metadata:{live_api:!!x.live_api,item_code:x.item_code||null,link_source:x.link_source||null}};
+  const livePrice=!!x.live_api,observedAt=x.observed_at||null,priceFreshness=priceFreshnessLabel(observedAt,livePrice),priceConfidence=priceConfidenceFromEvidence({livePrice,shippingKnown,observedAt});
+  return {source:"rakuten",seller:x.seller||"Rakuten Ichiba",title:x.title||null,asking_price_jpy:Number.isFinite(asking)?asking:null,shipping_jpy:shipping,total_price_jpy:total,price_jpy:total,live_price:livePrice,price_freshness:priceFreshness,shipping_known:shippingKnown,price_confidence:priceConfidence,price_evidence:livePrice?(freeShip&&rawShipping==null?"live_rakuten_title_free_shipping_evidence":"live_rakuten_item_price"):(freeShip&&rawShipping==null?"registered_link_title_free_shipping_evidence":"registered_affiliate_price_unverified"),currency:"JPY",original_currency:"JPY",url:x.affiliate_url||null,condition:null,availability:"available",observed_at:observedAt,fetched_at:new Date().toISOString(),affiliate:!!x.affiliate_ready,affiliate_source:x.affiliate_ready?"rakuten_affiliate":null,match_score:x.match_score??100,match_basis:x.match_basis||"rakuten_live_or_registered_offer",market_metadata:{live_api:livePrice,item_code:x.item_code||null,link_source:x.link_source||null}};
 }
 
 function zenMarketProxyOfferForDomesticOffer(offer,buyerCountry="US"){
@@ -3844,8 +3854,9 @@ function assessPurchaseRoute(offer,buyerCountry="JP",cheapestKnown=null){
     const ratio=total/cheapest;
     priceScore=ratio<=1?100:ratio<=1.05?92:ratio<=1.10?84:ratio<=1.20?72:ratio<=1.35?58:ratio<=1.50?45:30;
   }
-  const completeness=(offer.shipping_jpy!=null?8:0)+(offer.url?4:0)+(offer.seller?3:0);
-  const overall=Math.round(clamp(profile.country_fit_score*.52+profile.purchase_ease_score*.23+profile.trust_score*.10+priceScore*.15+completeness));
+  const confidenceMap={high:100,medium:72,medium_low:52,low:30},priceEvidenceScore=confidenceMap[String(offer.price_confidence||"medium")]??55;
+  const shippingEvidenceScore=offer.shipping_known===true?100:40;
+  const overall=Math.round(clamp(profile.country_fit_score*.45+profile.purchase_ease_score*.20+profile.trust_score*.10+priceScore*.12+priceEvidenceScore*.10+shippingEvidenceScore*.03));
   const blockers=[];
   if(profile.proxy_required)blockers.push(profile.route_type==="verified_proxy_international"?"proxy_service_required":"proxy_or_forwarder_may_be_required");
   if(profile.destination_confirmation_required)blockers.push("destination_shipping_must_be_confirmed");
@@ -3873,7 +3884,9 @@ function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP
   const proxyOffers=domesticProxySeeds.map(o=>zenMarketProxyOfferForDomesticOffer(o,country)).filter(Boolean);
   const raw=uniquePurchaseOffers([...rawBase,...proxyOffers]).map(o=>materializeDestinationOffer(o,country));
   const pricedRaw=raw.filter(o=>Number.isFinite(Number(o.total_price_jpy))&&Number(o.total_price_jpy)>0);
-  const cheapestRaw=pricedRaw.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
+  const confidenceRank={high:4,medium:3,medium_low:2,low:1};
+  const comparablePriced=pricedRaw.filter(o=>(confidenceRank[String(o.price_confidence||"medium")]||0)>=3&&o.shipping_known===true);
+  const cheapestRaw=(comparablePriced.length?comparablePriced:pricedRaw).slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
   const cheapestValue=cheapestRaw?Number(cheapestRaw.total_price_jpy):null;
   const numOrInf=v=>Number.isFinite(Number(v))?Number(v):Number.POSITIVE_INFINITY;
   const assessed=raw.map(o=>assessPurchaseRoute(o,country,cheapestValue)).sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy));
@@ -6567,6 +6580,11 @@ function compactPurchaseRouteAuditView(route){
     total_price_jpy:route.total_price_jpy==null?null:(Number.isFinite(Number(route.total_price_jpy))?Number(route.total_price_jpy):null),
     asking_price_jpy:route.asking_price_jpy==null?null:(Number.isFinite(Number(route.asking_price_jpy))?Number(route.asking_price_jpy):null),
     shipping_jpy:route.shipping_jpy==null?null:Number(route.shipping_jpy),
+    shipping_known:route.shipping_known===true,
+    live_price:route.live_price===true,
+    price_freshness:route.price_freshness||null,
+    price_confidence:route.price_confidence||null,
+    price_evidence:route.price_evidence||null,
     shipping_original:route.shipping_original==null?null:Number(route.shipping_original),
     shipping_currency:route.shipping_currency||null,
     reference_price_jpy:route.reference_price_jpy==null?null:Number(route.reference_price_jpy),
@@ -6651,7 +6669,7 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
   return {
     service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,real_payment_test_required:false,query:q,query_repaired_from_mojibake:q!==raw&&!!raw,
     product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),franchise:product.franchise||null,characters:product.character_names||[],product_type:product.product_type||null},
-    observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,rakuten_market:{mode:rakuten?.mode||null,web_service_api:!!rakuten?.web_service_api,application_id_present:!!rakuten?.application_id_present,access_key_present:!!rakuten?.access_key_present,affiliate_id_present:!!rakuten?.affiliate_id_present,live_returned:rakuten?.live_returned||0,live_matches:rakuten?.live_matches||0,registered_offer_count:rakuten?.registered_offer_count||0,live_attempts:rakuten?.live_attempts||[],live_error:rakuten?.live_error||rakuten?.error||null},official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
+    observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,rakuten_market:{mode:rakuten?.mode||null,live_price_api_configured:!!rakuten?.live_price_api_configured,affiliate_only:!!rakuten?.affiliate_only,web_service_api:!!rakuten?.web_service_api,application_id_present:!!rakuten?.application_id_present,access_key_present:!!rakuten?.access_key_present,affiliate_id_present:!!rakuten?.affiliate_id_present,live_returned:rakuten?.live_returned||0,live_matches:rakuten?.live_matches||0,registered_offer_count:rakuten?.registered_offer_count||0,live_attempts:rakuten?.live_attempts||[],live_error:rakuten?.live_error||rakuten?.error||null,pricing_source:rakuten?.pricing_source||null,note:rakuten?.note||null},official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
     interpretation:"This audit refreshes Yahoo/eBay and, when Rakuten Web Service credentials are configured, live Rakuten Ichiba offers too. It rejects sibling/variant mismatches and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. For Japan buyers, Yahoo/Rakuten compete on current matched offers rather than source preference. For overseas buyers, raw Japanese-only checkout is not considered sufficient: best_purchase_route must be either a practical direct international route or a verified proxy route. Unknown shipping, proxy fees, taxes and duties are never invented."
   };
 }
