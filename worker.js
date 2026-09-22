@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.84";
+const VERSION="3.7.85";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2531,6 +2531,45 @@ function identityAnchorMatched(anchor,text=""){
   return h.includes(normalize(anchor));
 }
 
+function ebayVariantMarkers(product){
+  const names=[product?.canonical_name_en||"",product?.canonical_name_ja||""];
+  const generic=new Set(["ver","version","edition","figure","nendoroid","figma","scale","complete","completed","painted","action","goods","set","new","reissue","rerelease","limited","special"]);
+  const markers=[];
+  const add=(v)=>{const n=normalize(v).trim();if(!n||n.length<3||generic.has(n)||markers.includes(n))return;markers.push(n);};
+  for(const name of names){
+    const raw=String(name||"");
+    for(const m of raw.matchAll(/[\(\uff08\[\u3010]([^\)\uff09\]\u3011]{2,80})[\)\uff09\]\u3011]/g)){
+      const inside=String(m[1]||"").trim();
+      for(const t of tokens(inside))add(t);
+      add(inside);
+    }
+  }
+  const ed=productSpecialistProfile(product)?.edition;
+  if(ed)add(ed);
+  // Common bilingual variant aliases that must not be confused with one another.
+  const aliasGroups=[
+    ["lightness","\u30e9\u30a4\u30c8\u30cd\u30b9"],
+    ["darkness","\u30c0\u30fc\u30af\u30cd\u30b9"],
+    ["white","\u30db\u30ef\u30a4\u30c8","\u767d"],
+    ["black","\u30d6\u30e9\u30c3\u30af","\u9ed2"],
+    ["red","\u30ec\u30c3\u30c9","\u8d64"],
+    ["blue","\u30d6\u30eb\u30fc","\u9752"]
+  ];
+  const canonical=normalize(names.join(" "));
+  const requiredGroups=[];
+  for(const group of aliasGroups){if(group.some(x=>canonical.includes(normalize(x))))requiredGroups.push(group.map(normalize));}
+  return {markers,requiredGroups};
+}
+function ebayVariantIdentityAnalysis(product,title=""){
+  const h=normalize(title),{markers,requiredGroups}=ebayVariantMarkers(product);
+  const groupMatched=requiredGroups.length===0||requiredGroups.every(g=>g.some(x=>h.includes(x)));
+  // Bracket/edition markers are treated as variant-sensitive only when at least one is visibly present
+  // in the canonical identity. Requiring any matching marker blocks sibling variants such as
+  // DecoMiku Lightness vs Darkness without forcing generic manufacturer/release text.
+  const markerMatched=markers.length===0||markers.some(m=>h.includes(m));
+  return {accepted:groupMatched&&markerMatched,markers,requiredGroups,groupMatched,markerMatched};
+}
+
 function ebayStrongIdentityAnalysis(product,item){
   const title=String(item?.title||""),hay=normalize(title);
   const identity=[...new Set([...ebayIdentityTokens(product.canonical_name_en||""),...ebayIdentityTokens(product.canonical_name_ja||"")])];
@@ -2541,11 +2580,12 @@ function ebayStrongIdentityAnalysis(product,item){
   const legacyNonFigure=figureFamily.has(String(product.product_type||""))&&EBAY_NON_FIGURE_TERMS.some(x=>hay.includes(normalize(x)));
   const nonFigure=legacyNonFigure||productTypeConflict(product,title);
   const specialist=specialistIdentityAnalysis(product,title);
+  const variant=ebayVariantIdentityAnalysis(product,title);
   const model=normalize(product.model_number||"");const modelMatched=!!model&&hay.includes(model);
   const tokenEnough=matched.length>=(identity.length>=2?2:1);
   const specialistEnough=specialist.score>=18;
-  const accepted=!nonFigure&&!specialist.conflict&&anchorMatched&&(modelMatched||tokenEnough||specialistEnough)&&!EBAY_SUSPICIOUS_TERMS.test(title);
-  return {accepted,matched_identity_tokens:matched,required_anchors:anchors,anchor_matched:anchorMatched,non_figure_conflict:nonFigure,model_matched:modelMatched,specialist};
+  const accepted=!nonFigure&&!specialist.conflict&&variant.accepted&&anchorMatched&&(modelMatched||tokenEnough||specialistEnough)&&!EBAY_SUSPICIOUS_TERMS.test(title);
+  return {accepted,matched_identity_tokens:matched,required_anchors:anchors,anchor_matched:anchorMatched,non_figure_conflict:nonFigure,model_matched:modelMatched,specialist,variant};
 }
 
 function ebaySearchCandidates(product){
@@ -2606,12 +2646,12 @@ async function ebaySearch(env,product,limit=20){
     try{
       const data=await ebayBrowseRequest(env,{q:candidate.query,limit:Math.min(20,limit)});const items=Array.isArray(data.itemSummaries)?data.itemSummaries:[];returned+=items.length;
       const analyses=items.map(item=>({item,a:ebayStrongIdentityAnalysis(product,item)}));
-      const accepted=analyses.filter(x=>x.a.accepted).map(x=>({item:x.item,score:80,match_basis:"strict_product_identity",verification:{anchor_matched:x.a.anchor_matched,matched_identity_tokens:x.a.matched_identity_tokens,specialist_match:x.a.specialist||null}}));
+      const accepted=analyses.filter(x=>x.a.accepted).map(x=>({item:x.item,score:80,match_basis:"strict_product_identity",verification:{anchor_matched:x.a.anchor_matched,matched_identity_tokens:x.a.matched_identity_tokens,specialist_match:x.a.specialist||null,variant_identity:x.a.variant||null}}));
       attempts.push({method:candidate.method,query:candidate.query,returned:items.length,accepted:accepted.length,rejected_non_figure:analyses.filter(x=>x.a.non_figure_conflict).length,rejected_anchor:analyses.filter(x=>!x.a.anchor_matched).length,rejected_identity:analyses.filter(x=>!x.a.accepted&&!x.a.non_figure_conflict&&x.a.anchor_matched).length});
       if(accepted.length)return {hits:accepted.slice(0,12),query:candidate.query,method:candidate.method,ebay_returned:returned,queries_tried:attempts};
       if(detailBudget>0){
         const plausible=analyses.filter(x=>x.a.matched_identity_tokens.length>=1&&x.a.anchor_matched&&!x.a.non_figure_conflict).slice(0,detailBudget);const rescued=[];
-        for(const x of plausible){if(detailBudget<=0)break;detailBudget--;try{const detail=await ebayItemDetail(env,x.item.itemId);const jan=cleanJan(product.jan_code);const gtinMatch=jan&&ebayDetailGtins(detail).includes(jan);const structured=ebayStrongIdentityAnalysis(product,{title:ebayDetailText(detail)});if(gtinMatch||structured.accepted)rescued.push({item:x.item,score:gtinMatch?100:85,match_basis:gtinMatch?"detail_gtin":"structured_item_specifics",verification:{detail_gtin_match:!!gtinMatch,structured_identity_verified:structured.accepted,specialist_match:structured.specialist||null}});}catch{}}
+        for(const x of plausible){if(detailBudget<=0)break;detailBudget--;try{const detail=await ebayItemDetail(env,x.item.itemId);const jan=cleanJan(product.jan_code);const gtinMatch=jan&&ebayDetailGtins(detail).includes(jan);const structured=ebayStrongIdentityAnalysis(product,{title:ebayDetailText(detail)});if(gtinMatch||structured.accepted)rescued.push({item:x.item,score:gtinMatch?100:85,match_basis:gtinMatch?"detail_gtin":"structured_item_specifics",verification:{detail_gtin_match:!!gtinMatch,structured_identity_verified:structured.accepted,specialist_match:structured.specialist||null,variant_identity:structured.variant||null}});}catch{}}
         if(rescued.length)return {hits:rescued,query:candidate.query,method:`${candidate.method}+detail`,ebay_returned:returned,queries_tried:attempts};
       }
     }catch(e){attempts.push({method:candidate.method,query:candidate.query,error:safeError(e)});}
@@ -3761,9 +3801,12 @@ function assessPurchaseRoute(offer,buyerCountry="JP",cheapestKnown=null){
   return {...offer,buyer_country:country,purchase_route:{country_fit:profile.country_fit,country_fit_score:profile.country_fit_score,direct_shipping:profile.direct_shipping,directness,language_support:profile.language_support,payment_compatibility:profile.payment_compatibility,account_difficulty:profile.account_difficulty,proxy_required:profile.proxy_required,purchase_ease_score:profile.purchase_ease_score,trust_score:profile.trust_score,route_type:profile.route_type,destination_confirmation_required:profile.destination_confirmation_required,price_score:priceScore,overall_score:overall,verification_blockers:blockers,known_total_price_jpy:Number.isFinite(total)?total:null,landed_total_verified:country==="JP"&&!profile.proxy_required&&Number.isFinite(total),recommended_action:recommendedAction}};
 }
 
-function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP",officialOffers=[]){
+function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP",officialOffers=[],product=null){
   const country=normalizeBuyerCountry(buyerCountry),cutoff=Date.now()-PIPELINE.marketFreshDays*86400000;
-  const fresh=obs.filter(o=>{const t=Date.parse(o.observed_at||"");return Number.isFinite(t)&&t>=cutoff;});
+  const fresh=obs.filter(o=>{const t=Date.parse(o.observed_at||"");return Number.isFinite(t)&&t>=cutoff;}).filter(o=>{
+    if(!product||String(o?.metadata?.market_source||"").toLowerCase()!=="ebay")return true;
+    return ebayStrongIdentityAnalysis(product,{title:o?.listing_title||""}).accepted;
+  });
   const latest=[...latestObservationMap(fresh).values()].map(observationToPurchaseOffer).filter(Boolean);
   const rakutenOffers=(rakuten?.offers||[]).map(rakutenToPurchaseOffer).filter(Boolean);
   const rawBase=uniquePurchaseOffers([...latest,...rakutenOffers,...(officialOffers||[])]).filter(o=>o.availability!=="unavailable");
@@ -3775,16 +3818,18 @@ function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP
   const cheapestValue=cheapestRaw?Number(cheapestRaw.total_price_jpy):null;
   const numOrInf=v=>Number.isFinite(Number(v))?Number(v):Number.POSITIVE_INFINITY;
   const assessed=raw.map(o=>assessPurchaseRoute(o,country,cheapestValue)).sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy));
-  const best=assessed[0]||null;
   const cheapest=cheapestRaw?assessPurchaseRoute(cheapestRaw,country,cheapestValue):null;
-  const easiest=assessed.slice().sort((a,b)=>(b.purchase_route?.purchase_ease_score||0)-(a.purchase_route?.purchase_ease_score||0)||(b.purchase_route?.country_fit_score||0)-(a.purchase_route?.country_fit_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy))[0]||null;
-  const directCandidates=assessed.filter(x=>!x.purchase_route?.proxy_required&&x.purchase_route?.country_fit_score>=60);
+  const verifiedDirectCandidates=assessed.filter(x=>!x.purchase_route?.proxy_required&&x.purchase_route?.country_fit_score>=70&&x.purchase_route?.destination_confirmation_required===false);
   const verifiedProxyCandidates=assessed.filter(x=>x.purchase_route?.route_type==="verified_proxy_international"&&x.purchase_route?.country_fit_score>=80);
-  const practicalCandidates=[...directCandidates,...verifiedProxyCandidates];
+  const practicalCandidates=[...verifiedDirectCandidates,...verifiedProxyCandidates].sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy));
+  // Overseas best/easiest must be executable now. Unverified eBay destination eligibility remains an alternative, never Best.
+  const best=country==="JP"?(assessed[0]||null):(practicalCandidates[0]||null);
+  const easiestPool=country==="JP"?assessed:practicalCandidates;
+  const easiest=easiestPool.slice().sort((a,b)=>(b.purchase_route?.purchase_ease_score||0)-(a.purchase_route?.purchase_ease_score||0)||(b.purchase_route?.country_fit_score||0)-(a.purchase_route?.country_fit_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy))[0]||null;
   const knownTotalPractical=practicalCandidates.filter(x=>Number.isFinite(Number(x.total_price_jpy))&&Number(x.total_price_jpy)>0);
   const lowestPractical=knownTotalPractical.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
   if(best)best.purchase_route.tradeoff=purchaseRouteTradeoff(best,cheapest,country);
-  return {buyer_country:country,selection_policy:"purchase_feasibility_then_ease_then_known_cost",best_purchase_route:best,cheapest_offer:cheapest,easiest_purchase_route:easiest,lowest_known_practical_route:lowestPractical,alternatives:assessed.slice(0,7),candidate_count:assessed.length,practical_direct_candidate_count:directCandidates.length,verified_proxy_candidate_count:verifiedProxyCandidates.length,practical_route_candidate_count:practicalCandidates.length,notes:["Cheapest apparent price is not automatically the recommended route for overseas buyers.","Destination shipping, taxes/duties and payment acceptance are not invented when listing-specific evidence is unavailable.","For overseas buyers, an exact Japanese listing can be converted into a verified multilingual proxy-shopping route instead of being recommended as a raw Japanese-only checkout.","Supported official/direct international routes outrank proxy routes when sufficiently practical; verified proxy routes are used when no good direct route exists."]};
+  return {buyer_country:country,selection_policy:"purchase_feasibility_then_ease_then_known_cost",best_purchase_route:best,cheapest_offer:cheapest,easiest_purchase_route:easiest,lowest_known_practical_route:lowestPractical,alternatives:assessed.slice(0,7),candidate_count:assessed.length,practical_direct_candidate_count:verifiedDirectCandidates.length,verified_proxy_candidate_count:verifiedProxyCandidates.length,practical_route_candidate_count:practicalCandidates.length,notes:["Cheapest apparent price is not automatically the recommended route for overseas buyers.","Destination shipping, taxes/duties and payment acceptance are not invented when listing-specific evidence is unavailable.","For overseas buyers, an exact Japanese listing can be converted into a verified multilingual proxy-shopping route instead of being recommended as a raw Japanese-only checkout.","Supported official/direct international routes outrank proxy routes when sufficiently practical; verified proxy routes are used when no good direct route exists."]};
 }
 
 function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
@@ -3806,7 +3851,7 @@ function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
 async function buildIntelligence(env,product,refresh=false,lang="en",options={}){
   let obs=await getObservations(env,product.id);const initialMarket=marketView(product,obs),autoRefresh=options.autoRefresh===true&&(initialMarket.age_hours==null||initialMarket.age_hours>PIPELINE.marketAutoRefreshHours),refreshRequested=refresh||autoRefresh;let refresh_log=[];if(refreshRequested){refresh_log=await refreshLiveMarketForProduct(env,product,obs);obs=await getObservations(env,product.id);}const market=marketView(product,obs),rarity=rarityAnalysis(product,market),authenticity=authenticityRisk(product,market,obs),buyWait=buyWaitDecision(product,market,rarity,authenticity,lang),quality=identityQualityReasons(product),priceHistory=priceHistoryView(product,obs),deadline=purchaseDeadlineView(product),listingMatch=listingMatchView(product,obs,options.listingUrl||"",options.listingTitle||"");
   let rakuten;try{rakuten=await rakutenSearch(env,product);}catch(e){rakuten={configured:rakutenConfigured(env),mode:"affiliate_link_only",web_service_api:false,offers:[],best:null,search_url:rakutenPublicSearchUrl(product),affiliate_ready:false,error:safeError(e)};}
-  const buyerCountry=normalizeBuyerCountry(options.buyerCountry||"JP"),fxInfo=await resolveUsdJpy(env),officialOffers=officialPurchaseOffersForProduct(product,fxInfo),purchaseRouting=countryAwarePurchaseRouting(obs,rakuten,buyerCountry,officialOffers),purchaseBest=purchaseRouting.best_purchase_route||market.best_place||null;
+  const buyerCountry=normalizeBuyerCountry(options.buyerCountry||"JP"),fxInfo=await resolveUsdJpy(env),officialOffers=officialPurchaseOffersForProduct(product,fxInfo),purchaseRouting=countryAwarePurchaseRouting(obs,rakuten,buyerCountry,officialOffers,product),purchaseBest=purchaseRouting.best_purchase_route||market.best_place||null;
   const landedCost=landedCostView(purchaseBest,buyerCountry,options.postalCode||"");
   return {language:lang,product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),manufacturer:product.manufacturer,brand:product.brand,series:product.series,franchise:product.franchise,characters:product.character_names,jan_code:product.jan_code,model_number:product.model_number,product_type:product.product_type,specialist_attributes:productSpecialistProfile(product),identity_quality:quality.score,identification_confidence:product.identification_confidence??identificationConfidenceFor(product),scale:product.scale,edition:product.edition,limited_type:product.limited_type,msrp_jpy:product.msrp_jpy,release_date:product.original_release_date,latest_official_schedule_date:product.metadata?.latest_official_schedule_date||product.metadata?.calendar?.date||null,release_date_type:product.metadata?.release_date_type||product.metadata?.calendar?.date_type||null,rerelease:!!product.metadata?.rerelease,rerelease_generation:product.metadata?.rerelease_generation||product.metadata?.calendar?.rerelease_generation||null,possible_release_delay:!!product.metadata?.possible_release_delay,status:product.product_status,official_url:product.official_url,official_english_url:product.metadata?.official_english_url||null,image_url:product.official_image_url},market,price_history:priceHistory,deadline,listing_match:listingMatch,landed_cost:landedCost,rarity,authenticity_risk:authenticity,buy_wait:buyWait,best_place:purchaseBest,purchase_routing:purchaseRouting,routing:{buyer_country:buyerCountry,policy:purchaseRouting.selection_policy,yahoo:purchaseRouting.alternatives.find(x=>x.source==="yahoo_shopping")||null,ebay:purchaseRouting.alternatives.find(x=>x.source==="ebay")||null,rakuten:{configured:rakuten.configured,mode:rakuten.mode,affiliate_ready:rakuten.affiliate_ready,offers:rakuten.offers||[],best:purchaseRouting.alternatives.find(x=>x.source==="rakuten")||null,search_url:rakuten.search_url,pricing_source:rakuten.pricing_source},cheapest_offer:purchaseRouting.cheapest_offer,easiest_purchase_route:purchaseRouting.easiest_purchase_route,lowest_known_practical_route:purchaseRouting.lowest_known_practical_route},freshness:{product_last_checked:product.source_last_checked_at||null,market_observations:obs.length,newest_market_observation:market.newest_observed_at,market_age_hours:market.age_hours,market_status:market.freshness_status,auto_refresh_threshold_hours:PIPELINE.marketAutoRefreshHours,refresh_requested:refreshRequested,refresh_log},affiliate:{rakuten_configured:rakuten.configured,rakuten_mode:rakuten.mode,rakuten_affiliate_ready:rakuten.affiliate_ready,rakuten_candidates:rakuten.offers||[],rakuten_search_url:rakuten.search_url},provenance:product.metadata?.field_provenance||null,generated_at:new Date().toISOString()};
 }
@@ -6516,12 +6561,13 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
   const countries=["JP","US","NL"];
   const results=[];
   for(const country of countries){
-    const routing=countryAwarePurchaseRouting(obs,rakuten,country,officialOffers);
+    const routing=countryAwarePurchaseRouting(obs,rakuten,country,officialOffers,product);
     const landed=landedCostView(routing.best_purchase_route,country,"");
     const hasDirectAlternative=(routing.alternatives||[]).some(x=>!x?.purchase_route?.proxy_required&&(x?.purchase_route?.country_fit_score||0)>=60);
     const bestRouteType=routing.best_purchase_route?.purchase_route?.route_type||null;
-    const bestPracticalDirect=!!(routing.best_purchase_route&&!routing.best_purchase_route?.purchase_route?.proxy_required&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=70);
+    const bestPracticalDirect=!!(routing.best_purchase_route&&!routing.best_purchase_route?.purchase_route?.proxy_required&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=70&&routing.best_purchase_route?.purchase_route?.destination_confirmation_required===false);
     const bestVerifiedProxy=!!(routing.best_purchase_route&&bestRouteType==="verified_proxy_international"&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=80);
+    const bestExactIdentity=!!(!routing.best_purchase_route||String(routing.best_purchase_route?.source||"").toLowerCase()!=="ebay"||ebayStrongIdentityAnalysis(product,{title:routing.best_purchase_route?.title||""}).accepted);
     const bestIsPractical=!routing.best_purchase_route||!hasDirectAlternative||bestPracticalDirect;
     const noInventedCrossBorderTotal=country==="JP"||landed.estimated_landed_total_jpy==null;
     const hasCandidate=Number(routing.candidate_count||0)>0;
@@ -6533,7 +6579,7 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
       verified_proxy_candidate_count:routing.verified_proxy_candidate_count||0,
       practical_route_candidate_count:routing.practical_route_candidate_count||0,
       selection_policy:routing.selection_policy,
-      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,overseas_best_route_is_practical:overseasPractical,best_route_is_verified_proxy:bestVerifiedProxy,no_invented_cross_border_landed_total:noInventedCrossBorderTotal},
+      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,overseas_best_route_is_practical:overseasPractical,best_route_is_verified_proxy:bestVerifiedProxy,exact_product_identity:bestExactIdentity,no_invented_cross_border_landed_total:noInventedCrossBorderTotal},
       cheapest_offer:compactPurchaseRouteAuditView(routing.cheapest_offer),
       best_purchase_route:compactPurchaseRouteAuditView(routing.best_purchase_route),
       easiest_purchase_route:compactPurchaseRouteAuditView(routing.easiest_purchase_route),
@@ -6542,12 +6588,12 @@ async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
       alternatives:(routing.alternatives||[]).slice(0,5).map(compactPurchaseRouteAuditView)
     });
   }
-  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.overseas_best_route_is_practical&&r.checks.no_invented_cross_border_landed_total);
+  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.overseas_best_route_is_practical&&r.checks.exact_product_identity&&r.checks.no_invented_cross_border_landed_total);
   return {
     service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,real_payment_test_required:false,query:q,query_repaired_from_mojibake:q!==raw&&!!raw,
     product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),franchise:product.franchise||null,characters:product.character_names||[],product_type:product.product_type||null},
     observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
-    interpretation:"This audit refreshes Yahoo/eBay and evaluates official direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. For overseas buyers, raw Japanese-only checkout is not considered sufficient: best_purchase_route must be either a practical direct international route or a verified proxy route. The Japanese item price may remain visible as cheapest_offer/reference, while proxy fees, international shipping, taxes and duties are never invented."
+    interpretation:"This audit refreshes Yahoo/eBay, rejects sibling/variant mismatches, and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. For overseas buyers, raw Japanese-only checkout is not considered sufficient: best_purchase_route must be either a practical direct international route or a verified proxy route. The Japanese item price may remain visible as cheapest_offer/reference, while proxy fees, international shipping, taxes and duties are never invented."
   };
 }
 
