@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.97";
+const VERSION="3.7.98";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -2749,6 +2749,24 @@ function isAdminE2ETestEvent(x,env){
   return !!(x?.payer_hash&&configured.has(String(x.payer_hash)));
 }
 
+// v3.7.98 â exact known self-test signature. This is intentionally narrower than a permanent
+// fingerprint blacklist: the fingerprint alone is not enough. The UA, country and literal query
+// must also match the test runner signature observed in our own historical/admin tests.
+const KNOWN_SELF_TEST_SIGNATURES=[{
+  fingerprint:"03ed7b5e9a95f7f08a07af23",
+  user_agent:"node",
+  country:"NL",
+  query:"\u521d\u97f3\u30df\u30af"
+}];
+function isKnownSelfTestSignatureEvent(x){
+  const m=x?.metadata||{};
+  const fp=String(m.source_fingerprint||"");
+  const ua=String(m.user_agent||"").trim().toLowerCase();
+  const country=String(m.country||"").trim().toUpperCase();
+  const query=String(m.intent_query||m.query_text||"").trim();
+  return KNOWN_SELF_TEST_SIGNATURES.some(sig=>fp===sig.fingerprint&&ua===sig.user_agent&&country===sig.country&&query===sig.query);
+}
+
 async function kpiApiEventsCount(env){
   try{
     const r=await fetch(sbBase(env)+"/api_events?select=event_type",{headers:sbHeaders(env,{Prefer:"count=planned",Range:"0-0"})});
@@ -2821,8 +2839,16 @@ async function revenueMetrics(env){
   const affiliateServed=affiliateEvents.filter(x=>x.event_type==="affiliate_link_served"),affiliateClicks=affiliateEvents.filter(x=>x.event_type==="affiliate_click");
   const gateEntered=events.filter(x=>x.event_type==="x402_gate_entered"),configErrors=events.filter(x=>x.event_type==="x402_configuration_error"),paymentRequired=events.filter(x=>x.event_type==="payment_required"),attempts=events.filter(x=>x.event_type==="payment_attempt"),verified=events.filter(x=>x.event_type==="payment_verified");
   const crawlerClasses=new Set(["bot_or_monitor","x402scan","402_index","402_ad","agent402","coinbase_or_cdp","admin_or_test"]);
-  const isExternalCommercialEvent=x=>{const source=String(x?.metadata?.source_class||"");return !crawlerClasses.has(source)&&source!=="unknown"&&!isAdminE2ETestEvent(x,env);};
-  const queryCalls=calls.filter(x=>x.metadata?.query_present||x.metadata?.id_present),crawlerCalls=calls.filter(x=>crawlerClasses.has(String(x.metadata?.source_class||""))),unclassifiedCalls=calls.filter(x=>String(x.metadata?.source_class||"")==="unclassified_client"),adminOrTestCalls=calls.filter(x=>isAdminE2ETestEvent(x,env));
+  const queryCalls=calls.filter(x=>x.metadata?.query_present||x.metadata?.id_present);
+  const knownSelfTestQueryCalls=queryCalls.filter(isKnownSelfTestSignatureEvent);
+  const knownSelfTestRequestIds=new Set(knownSelfTestQueryCalls.map(x=>String(x?.metadata?.request_id||"")).filter(Boolean));
+  const isKnownSelfTestEvent=x=>{
+    if(isKnownSelfTestSignatureEvent(x))return true;
+    const rid=String(x?.metadata?.request_id||"");
+    return !!(rid&&knownSelfTestRequestIds.has(rid));
+  };
+  const isExternalCommercialEvent=x=>{const source=String(x?.metadata?.source_class||"");return !crawlerClasses.has(source)&&source!=="unknown"&&!isAdminE2ETestEvent(x,env)&&!isKnownSelfTestEvent(x);};
+  const crawlerCalls=calls.filter(x=>crawlerClasses.has(String(x.metadata?.source_class||""))),unclassifiedCalls=calls.filter(x=>String(x.metadata?.source_class||"")==="unclassified_client"),adminOrTestCalls=calls.filter(x=>isAdminE2ETestEvent(x,env)||isKnownSelfTestEvent(x));
   const syntheticOrContextlessProbeCalls=queryCalls.filter(x=>isExternalCommercialEvent(x)&&isContextlessSyntheticShoppingCall(x));
   const realShoppingIntentCalls=queryCalls.filter(x=>isExternalCommercialEvent(x)&&!isContextlessSyntheticShoppingCall(x));
   const canonicalIdCalls=calls.filter(x=>x.metadata?.id_present),queryOnlyCalls=calls.filter(x=>x.metadata?.query_present&&!x.metadata?.id_present);
@@ -2887,8 +2913,8 @@ async function revenueMetrics(env){
     recent_history_paid_calls:recentHistoryPaid.length,recent_history_unique_payers:recentHistoryPayers.size,recent_history_revenue_usdc:Number(recentHistoryRevenue.toFixed(6)),
     recent_history_external_paid_calls:recentHistoryExternalPaid.length,recent_history_external_unique_payers:recentHistoryExternalPayers.size,recent_history_external_revenue_usdc:Number(recentHistoryExternalRevenue.toFixed(6)),
     recent_history_test_paid_calls:recentHistoryTestPaid.length,recent_history_test_unique_payers:recentHistoryTestPayers.size,recent_history_test_revenue_usdc:Number(recentHistoryTestRevenue.toFixed(6)),
-    total_api_calls:calls.length,query_bearing_calls:queryCalls.length,query_only_calls:queryOnlyCalls.length,canonical_id_calls:canonicalIdCalls.length,crawler_or_monitor_calls:crawlerCalls.length,unclassified_client_calls:unclassifiedCalls.length,admin_or_test_calls:adminOrTestCalls.length,synthetic_or_contextless_probe_calls:syntheticOrContextlessProbeCalls.length,real_shopping_intent_calls:realShoppingIntentCalls.length,query_source_fingerprints,query_intent_samples,
-    legacy_self_test_fingerprints_excluded:Object.keys(LEGACY_SELF_TEST_FINGERPRINT_CUTOFFS),
+    total_api_calls:calls.length,query_bearing_calls:queryCalls.length,query_only_calls:queryOnlyCalls.length,canonical_id_calls:canonicalIdCalls.length,crawler_or_monitor_calls:crawlerCalls.length,unclassified_client_calls:unclassifiedCalls.length,admin_or_test_calls:adminOrTestCalls.length,known_self_test_signature_calls:knownSelfTestQueryCalls.length,synthetic_or_contextless_probe_calls:syntheticOrContextlessProbeCalls.length,real_shopping_intent_calls:realShoppingIntentCalls.length,confirmed_external_shopping_intent_calls:realShoppingIntentCalls.length,query_source_fingerprints,query_intent_samples,
+    legacy_self_test_fingerprints_excluded:Object.keys(LEGACY_SELF_TEST_FINGERPRINT_CUTOFFS),known_self_test_signatures_excluded:KNOWN_SELF_TEST_SIGNATURES.map(x=>({source_fingerprint:x.fingerprint,user_agent:x.user_agent,country:x.country,query:x.query})),
     canonical_product_selected:selected.length,canonical_product_selected_by_source:canonicalSelectedBySource,x402_gate_entered:gateEntered.length,x402_configuration_errors:configErrors.length,payment_required_responses:paymentRequired.length,payment_required_with_query:paymentRequiredWithQuery,payment_required_with_canonical_id:paymentRequiredWithCanonicalId,payment_required_without_query_or_id:paymentRequiredWithoutIntent,payment_required_by_source:paymentRequiredBySource,payment_required_by_endpoint:paymentRequiredByEndpoint,payment_required_by_source_and_endpoint:paymentRequiredBySourceAndEndpoint,payment_attempts:attempts.length,payment_attempts_by_source:paymentAttemptsBySource,payment_verified:verified.length,
     external_canonical_product_selected:externalSelected.length,external_x402_gate_entered:externalGateEntered.length,external_x402_configuration_errors:externalConfigErrors.length,external_payment_required_responses:externalPaymentRequired.length,external_payment_attempts:externalAttempts.length,external_payment_verified:externalVerified.length,
     non_test_probe_x402_gate_entered:nonTestProbeGateEntered.length,non_test_probe_payment_required_responses:nonTestProbePaymentRequired.length,
@@ -2900,7 +2926,7 @@ async function revenueMetrics(env){
     conversion_query_to_canonical_selection:realShoppingIntentCalls.length?Number((externalSelected.length/realShoppingIntentCalls.length).toFixed(4)):0,conversion_canonical_selection_to_payment_attempt:externalSelected.length?Number((externalAttempts.length/externalSelected.length).toFixed(4)):0,conversion_query_to_payment_attempt:realShoppingIntentCalls.length?Number((externalAttempts.length/realShoppingIntentCalls.length).toFixed(4)):0,conversion_payment_attempt_to_paid:externalAttempts.length?Number((externalPaid.length/externalAttempts.length).toFixed(4)):0,
     conversion_identify_to_paid:Number(identifyToPaidRate.toFixed(4)),conversion_identify_to_paid_percent:Number((identifyToPaidRate*100).toFixed(1)),conversion_identify_payment_attempt_to_paid:Number(identifyPaymentSuccessRate.toFixed(4)),identify_to_higher_tier_payer_conversion:Number(identifyToHigherTierRate.toFixed(4)),identify_to_higher_tier_payer_conversion_percent:Number((identifyToHigherTierRate*100).toFixed(1)),
     products_requested:products.length,unique_products_requested:new Set(products.map(x=>x.product_id).filter(Boolean)).size,affiliate_telemetry_read_ok:affiliateTelemetry.ok,affiliate_telemetry_read_error:affiliateTelemetry.error||null,affiliate_links_served:affiliateServed.length,affiliate_links_served_by_source:affiliateServed.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),affiliate_clicks:affiliateClicks.length,affiliate_clicks_by_source:affiliateClicks.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),settlement_failures:settlementFailures.length,settlement_successes:paid.length,
-    measurement_note:"Confirmed external shopping funnel requires a resolvable query/canonical-id signal (or the same request_id), excludes crawler/discovery probes, explicit admin/self-tests, configured test payers, bounded legacy self-tests, and contextless synthetic benchmark prompts such as 'this exact figure' without an identifier. Bare non-test x402 probes are reported separately as non_test_probe_*. Affiliate impressions/clicks are read from a dedicated telemetry query so high x402 volume cannot hide them. payment_attempt requires a payment-signature retry.",generated_at:new Date().toISOString()
+    measurement_note:"Confirmed external shopping funnel requires a resolvable query/canonical-id signal (or the same request_id), excludes crawler/discovery probes, explicit admin/self-tests, configured test payers, bounded legacy self-tests, the exact known Node/NL/Hatsune-Miku self-test signature (including request-linked events), and contextless synthetic benchmark prompts such as 'this exact figure' without an identifier. Bare non-test x402 probes are reported separately as non_test_probe_*. Affiliate impressions/clicks are read from a dedicated telemetry query so high x402 volume cannot hide them. payment_attempt requires a payment-signature retry.",generated_at:new Date().toISOString()
   };
 }
 
