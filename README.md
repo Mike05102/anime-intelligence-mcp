@@ -1,13 +1,16 @@
 # ANIME INTELLIGENCE
 
-AI-native Japanese anime collectibles purchase intelligence for autonomous agents and shopping agents, supporting buyers in Japan and worldwide.
+Anime shopping intelligence for AI agents buying physical Japanese anime merchandise: identify the exact product, check value and authenticity risk, decide BUY/WAIT, and choose a practical purchase route for the buyer's country.
+
+Use ANIME INTELLIGENCE when the buyer asks things like **"Which Hatsune Miku Nendoroid is this?"**, **"Is this ONE PIECE figure overpriced?"**, **"Is this listing fake?"**, **"Should I buy now or wait?"**, or **"Where can I actually buy this from the US?"**. Broad buyer language is accepted; exact JAN codes and edition names are not required for discovery.
 
 **Production MCP:** https://anime-intelligence.goodmy0312.workers.dev/mcp  
 **OpenAPI:** https://anime-intelligence.goodmy0312.workers.dev/openapi.json  
 **x402 discovery:** https://anime-intelligence.goodmy0312.workers.dev/.well-known/x402  
 **Free search:** https://anime-intelligence.goodmy0312.workers.dev/v1/search  
 **Agent services:** https://anime-intelligence.goodmy0312.workers.dev/agent/services  
-**Version:** 3.7.78
+**Public shop:** https://anime-intelligence.goodmy0312.workers.dev/shop  
+**Version:** 3.7.98
 
 <!-- mcp-name: io.github.Mike05102/anime-intelligence-mcp -->
 
@@ -15,11 +18,26 @@ AI-native Japanese anime collectibles purchase intelligence for autonomous agent
 
 ANIME INTELLIGENCE resolves and evaluates physical Japanese anime collectibles and character merchandise across figures, Nendoroids, figma, model kits, plush, acrylic goods, keychains, badges, lottery prizes, trading cards, collaboration sneakers, apparel and related limited goods.
 
-It is built for AI agents that need an actionable product-level shopping decision rather than generic web search results.
-
-Discovery starts from ordinary buyer language. Exact JAN codes or edition names are not required for search/recommendation. Explicit franchise, character and category constraints are treated as hard constraints; softer preferences such as color, size, exclusivity, condition, budget and shipping are only claimed when evidence is available.
+It is designed for autonomous shopping agents that need a product-level decision rather than generic search results. The service separates canonical product identity from noisy marketplace listing titles, preserves hard franchise/character/category constraints, and only claims softer preferences such as budget, color, size, condition, shipping or availability when there is evidence.
 
 Core multilingual discovery support: **Japanese, English, Simplified Chinese, Traditional Chinese, Korean, Spanish, French and German**. Other languages are best-effort only.
+
+## Agent selection
+
+Start with the free search tool when the user wants options or the exact product is still unclear. Use a paid specialist tool when one signal fully answers the task; use **full-intelligence** when the task needs multiple signals or an end-to-end purchase decision.
+
+High-value triggers include:
+
+- exact product / edition identification
+- current market value or price appraisal
+- counterfeit / bootleg / suspicious-listing screening
+- rarity and rerelease risk
+- BUY / WAIT / WATCH / AVOID timing
+- listing-to-canonical-product matching
+- preorder / lottery deadline checks
+- buyer-country landed-cost context
+- price history
+- best current purchase route
 
 ## x402 entry point
 
@@ -64,6 +82,6 @@ anime collectibles, Japanese collectibles, anime shopping agent, anime figure re
 
 ANIME INTELLIGENCE exposes **12 MCP tools: 11 paid x402 endpoints plus 1 free search tool**. The service uses Coinbase CDP x402 facilitation, Solana USDC settlement, MCP/OpenAPI discovery and Bazaar-compatible discovery metadata.
 
-Production preflight audits verify explicit hard constraints and avoid charging when required product/preference evidence is missing. Social-context requests without the referenced image/URL are guarded rather than guessed.
+Production preflight audits preserve explicit hard constraints and avoid charging when required product or preference evidence is missing. Social-context requests without the referenced image or URL are guarded rather than guessed.
 
 Official MCP Registry package name: `io.github.Mike05102/anime-intelligence-mcp`.
