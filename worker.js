@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.7.98";
+const VERSION="3.8.0";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -26,7 +26,8 @@ const PRICES={
   deadline:"10000",
   landedCost:"20000",
   priceHistory:"20000",
-  full:"50000"
+  full:"50000",
+  shoppingIntelligence:"50000"
 };
 
 const ROTATION=["mass","official","yahoo","ebay","mass","backfill","yahoo","ebay"];
@@ -2827,14 +2828,14 @@ async function readAffiliateTelemetry(env){
 }
 
 async function revenueMetrics(env){
-  const funnelTypes=["api_call","x402_gate_entered","x402_configuration_error","payment_required","payment_attempt","payment_invalid_header","payment_verify_failed","payment_verified","paid_call","payment_settlement_failed","x402_failed","product_intent","canonical_product_selected","product_requested","product_not_found","service_execution_failed","disambiguation_required","identity_preflight_failed","affiliate_link_served","affiliate_click","affiliate_link_registered","ranked_product_auto_selected"];
+  const funnelTypes=["api_call","x402_gate_entered","x402_configuration_error","payment_required","payment_attempt","payment_invalid_header","payment_verify_failed","payment_verified","paid_call","payment_settlement_failed","x402_failed","product_intent","canonical_product_selected","product_requested","product_not_found","service_execution_failed","disambiguation_required","identity_preflight_failed","affiliate_link_served","affiliate_click","affiliate_link_registered","ranked_product_auto_selected","purchase_intent_created","merchant_selected","purchase_url_served","checkout_started","purchase_confirmed"];
   const telemetry=await readKpiEvents(env,funnelTypes);
   const affiliateTelemetry=await readAffiliateTelemetry(env);
   const allEvents=telemetry.rows;
   const versionEvents=allEvents.filter(x=>String(x?.metadata?.version||"")===VERSION);
   const events=versionEvents.length?versionEvents:allEvents;
   const byType={};for(const x of events)byType[x.event_type]=(byType[x.event_type]||0)+1;
-  const calls=events.filter(x=>x.event_type==="api_call"),paid=events.filter(x=>x.event_type==="paid_call"),products=events.filter(x=>x.event_type==="product_requested"),selected=events.filter(x=>x.event_type==="canonical_product_selected"),settlementFailures=events.filter(x=>x.event_type==="payment_settlement_failed");
+  const calls=events.filter(x=>x.event_type==="api_call"),paid=events.filter(x=>x.event_type==="paid_call"),products=events.filter(x=>x.event_type==="product_requested"),selected=events.filter(x=>x.event_type==="canonical_product_selected"),settlementFailures=events.filter(x=>x.event_type==="payment_settlement_failed"),purchaseIntents=events.filter(x=>x.event_type==="purchase_intent_created"),merchantSelections=events.filter(x=>x.event_type==="merchant_selected"),checkoutStarts=events.filter(x=>x.event_type==="checkout_started"),purchaseConfirmed=events.filter(x=>x.event_type==="purchase_confirmed");
   const affiliateEvents=affiliateTelemetry.ok?affiliateTelemetry.rows:events.filter(x=>x.event_type==="affiliate_link_served"||x.event_type==="affiliate_click");
   const affiliateServed=affiliateEvents.filter(x=>x.event_type==="affiliate_link_served"),affiliateClicks=affiliateEvents.filter(x=>x.event_type==="affiliate_click");
   const gateEntered=events.filter(x=>x.event_type==="x402_gate_entered"),configErrors=events.filter(x=>x.event_type==="x402_configuration_error"),paymentRequired=events.filter(x=>x.event_type==="payment_required"),attempts=events.filter(x=>x.event_type==="payment_attempt"),verified=events.filter(x=>x.event_type==="payment_verified");
@@ -2925,7 +2926,7 @@ async function revenueMetrics(env){
     calls_by_endpoint:callsByEndpoint,query_calls_by_endpoint:queryByEndpoint,paid_calls_by_endpoint:paidByEndpoint,event_counts:byType,
     conversion_query_to_canonical_selection:realShoppingIntentCalls.length?Number((externalSelected.length/realShoppingIntentCalls.length).toFixed(4)):0,conversion_canonical_selection_to_payment_attempt:externalSelected.length?Number((externalAttempts.length/externalSelected.length).toFixed(4)):0,conversion_query_to_payment_attempt:realShoppingIntentCalls.length?Number((externalAttempts.length/realShoppingIntentCalls.length).toFixed(4)):0,conversion_payment_attempt_to_paid:externalAttempts.length?Number((externalPaid.length/externalAttempts.length).toFixed(4)):0,
     conversion_identify_to_paid:Number(identifyToPaidRate.toFixed(4)),conversion_identify_to_paid_percent:Number((identifyToPaidRate*100).toFixed(1)),conversion_identify_payment_attempt_to_paid:Number(identifyPaymentSuccessRate.toFixed(4)),identify_to_higher_tier_payer_conversion:Number(identifyToHigherTierRate.toFixed(4)),identify_to_higher_tier_payer_conversion_percent:Number((identifyToHigherTierRate*100).toFixed(1)),
-    products_requested:products.length,unique_products_requested:new Set(products.map(x=>x.product_id).filter(Boolean)).size,affiliate_telemetry_read_ok:affiliateTelemetry.ok,affiliate_telemetry_read_error:affiliateTelemetry.error||null,affiliate_links_served:affiliateServed.length,affiliate_links_served_by_source:affiliateServed.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),affiliate_clicks:affiliateClicks.length,affiliate_clicks_by_source:affiliateClicks.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),settlement_failures:settlementFailures.length,settlement_successes:paid.length,
+    products_requested:products.length,unique_products_requested:new Set(products.map(x=>x.product_id).filter(Boolean)).size,affiliate_telemetry_read_ok:affiliateTelemetry.ok,affiliate_telemetry_read_error:affiliateTelemetry.error||null,affiliate_links_served:affiliateServed.length,affiliate_links_served_by_source:affiliateServed.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),affiliate_clicks:affiliateClicks.length,affiliate_clicks_by_source:affiliateClicks.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),purchase_intents:purchaseIntents.length,merchant_selections:merchantSelections.length,checkout_starts:checkoutStarts.length,purchases_confirmed:purchaseConfirmed.length,conversion_purchase_intent_to_click:purchaseIntents.length?Number((affiliateClicks.length/purchaseIntents.length).toFixed(4)):0,conversion_click_to_purchase:affiliateClicks.length?Number((purchaseConfirmed.length/affiliateClicks.length).toFixed(4)):0,settlement_failures:settlementFailures.length,settlement_successes:paid.length,
     measurement_note:"Confirmed external shopping funnel requires a resolvable query/canonical-id signal (or the same request_id), excludes crawler/discovery probes, explicit admin/self-tests, configured test payers, bounded legacy self-tests, the exact known Node/NL/Hatsune-Miku self-test signature (including request-linked events), and contextless synthetic benchmark prompts such as 'this exact figure' without an identifier. Bare non-test x402 probes are reported separately as non_test_probe_*. Affiliate impressions/clicks are read from a dedicated telemetry query so high x402 volume cannot hide them. payment_attempt requires a payment-signature retry.",generated_at:new Date().toISOString()
   };
 }
@@ -4064,6 +4065,261 @@ function compactProductResponse(product){
   };
 }
 
+
+/* =========================================================
+   AGENT COMMERCE CORE v3.8.0
+   - Agent-neutral purchase-decision layer
+   - Anime collectibles are production-active
+   - Large-market domains are declared as planned adapters
+========================================================= */
+
+const COMMERCE_DOMAIN_REGISTRY={
+  active:[
+    {
+      domain:"anime_collectibles",
+      status:"full",
+      priority:1,
+      capabilities:[
+        "identity",
+        "offer_matching",
+        "market_value",
+        "authenticity_risk",
+        "rarity",
+        "buy_wait",
+        "landed_cost",
+        "purchase_routing"
+      ]
+    }
+  ],
+  planned:[
+    {
+      domain:"travel",
+      priority:2,
+      market_role:"consumer_high_frequency_high_gmv",
+      why:"Large global market, digital inventory, high comparison complexity and transaction-ready booking flows.",
+      capabilities:[
+        "flight_search",
+        "hotel_search",
+        "bundle_optimization",
+        "cancellation_policy",
+        "baggage_and_fees",
+        "total_trip_cost",
+        "booking_route"
+      ]
+    },
+    {
+      domain:"consumer_electronics",
+      priority:3,
+      market_role:"consumer_large_gmv",
+      why:"Large global market with model, specification, warranty and price-dispersion complexity.",
+      capabilities:["model_identity","spec_fit","price","warranty","seller_risk","total_cost"]
+    },
+    {
+      domain:"automotive_parts",
+      priority:4,
+      market_role:"consumer_and_b2b_large_aftermarket",
+      why:"Fitment mistakes are expensive and OEM cross-reference can materially improve purchase quality.",
+      capabilities:["vehicle_fitment","oe_cross_reference","seller_risk","landed_cost"]
+    },
+    {
+      domain:"enterprise_procurement",
+      priority:5,
+      market_role:"b2b_very_large_gmv",
+      why:"Enterprise purchasing rewards supplier, lifecycle, lead-time and total-cost optimization.",
+      capabilities:["requirements","supplier_comparison","lead_time","commercial_terms","lifecycle","tco"]
+    },
+    {
+      domain:"mro_and_industrial_components",
+      priority:6,
+      market_role:"b2b_high_repeat_procurement",
+      why:"Specification equivalence and downtime cost often dominate unit price.",
+      capabilities:["spec_match","approved_substitute","lead_time","supplier_risk","downtime_cost"]
+    },
+    {
+      domain:"electronic_components",
+      priority:7,
+      market_role:"b2b_high_value_supply_chain",
+      why:"Exact part identity, lifecycle, counterfeit risk and lead time are purchase-critical.",
+      capabilities:["mpn_identity","parametric_match","lifecycle","counterfeit_risk","lead_time"]
+    },
+    {
+      domain:"enterprise_it_hardware",
+      priority:8,
+      market_role:"b2b_large_gmv",
+      why:"Configuration, support and lifecycle drive total cost of ownership.",
+      capabilities:["configuration","support","lifecycle","availability","tco"]
+    },
+    {
+      domain:"pc_components",
+      priority:9,
+      market_role:"consumer_and_prosumer",
+      why:"Compatibility is purchase-critical and price/performance changes quickly.",
+      capabilities:["compatibility","performance_per_cost","warranty","seller_risk","availability"]
+    },
+    {
+      domain:"appliances_and_hvac",
+      priority:10,
+      market_role:"consumer_large_ticket",
+      why:"Installation, energy cost and long-term ownership materially affect value.",
+      capabilities:["fit","energy_cost","installation","warranty","total_cost"]
+    },
+    {
+      domain:"datacenter_power_and_cooling",
+      priority:11,
+      market_role:"b2b_infrastructure",
+      why:"Capacity, efficiency, compatibility and lead time are high-value purchase variables.",
+      capabilities:["capacity_match","efficiency","compatibility","lead_time","tco"]
+    },
+    {
+      domain:"industrial_automation",
+      priority:12,
+      market_role:"b2b_capital_and_mro",
+      why:"Compatibility, certification and obsolescence are critical.",
+      capabilities:["compatibility","certification","lifecycle","replacement_cross_reference"]
+    },
+    {
+      domain:"laboratory_equipment",
+      priority:13,
+      market_role:"b2b_specialty",
+      why:"Measurement specifications, calibration and service determine real purchase value.",
+      capabilities:["spec_fit","calibration","service","consumables","tco"]
+    },
+    {
+      domain:"power_tools_and_equipment",
+      priority:14,
+      market_role:"consumer_and_b2b",
+      why:"Battery platform, accessories, duty cycle and durability affect purchase quality.",
+      capabilities:["platform_compatibility","duty_cycle","warranty","total_cost"]
+    },
+    {
+      domain:"software_and_saas",
+      priority:15,
+      market_role:"b2b_recurring_spend",
+      why:"License, security, integration and contract terms drive total cost.",
+      capabilities:["license_fit","integration","security","contract_terms","tco"]
+    }
+  ],
+  excluded_initially:[
+    {domain:"prescription_drugs",reason:"regulated_high_stakes"},
+    {domain:"weapons",reason:"regulated_or_high_risk"},
+    {domain:"financial_products",reason:"high_stakes_and_not_core_procurement"}
+  ]
+};
+
+function commerceDomainsResponse(){
+  return {
+    service:"ANIME INTELLIGENCE",
+    commerce_layer:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    architecture:"domain_adapter",
+    active:COMMERCE_DOMAIN_REGISTRY.active,
+    planned:COMMERCE_DOMAIN_REGISTRY.planned,
+    excluded_initially:COMMERCE_DOMAIN_REGISTRY.excluded_initially,
+    expansion_priority:"market_size_x_transaction_frequency_x_decision_complexity_x_ai_automation_fit_x_monetization",
+    principle:"Expand first into large markets where identity, compatibility, authenticity, lifecycle, fees, lead time, booking terms, landed cost or total cost of ownership materially affect the decision."
+  };
+}
+
+function shoppingDecisionAction(intel){
+  const raw=String(intel?.buy_wait?.decision||intel?.buy_wait?.action||"").toUpperCase();
+  if(raw==="BUY"||raw==="BUY_NOW")return "BUY_NOW";
+  if(raw==="WAIT")return "WAIT_PRICE_DROP";
+  if(raw==="WATCH")return "WAIT_RESTOCK";
+  if(raw==="AVOID")return "NO_SAFE_OFFER";
+  return intel?.best_place?"OPEN_PURCHASE_URL":"ASK_USER";
+}
+
+function shoppingReasonCodes(intel){
+  const src=[
+    ...(Array.isArray(intel?.buy_wait?.reasons)?intel.buy_wait.reasons:[]),
+    ...(Array.isArray(intel?.authenticity_risk?.reasons)?intel.authenticity_risk.reasons:[])
+  ];
+  return [...new Set(
+    src.map(x=>String(typeof x==="string"?x:(x?.code||x?.reason||"")).trim()).filter(Boolean)
+  )].slice(0,12);
+}
+
+function shoppingIntelligenceView(intel,origin){
+  const product=compactProductResponse(intel.product);
+  const best=intel.best_place||intel.market?.best_place||null;
+  const purchasePageUrl=product?.id?origin+"/shop/product/"+encodeURIComponent(product.id):null;
+  return {
+    schema_version:"commerce-intelligence.v1",
+    domain:"anime_collectibles",
+    domain_status:"full",
+    product,
+    recommendation:{
+      decision:String(intel?.buy_wait?.decision||intel?.buy_wait?.action||"UNKNOWN").toUpperCase(),
+      next_action:shoppingDecisionAction(intel),
+      confidence:intel?.buy_wait?.confidence??intel?.recommendation_confidence??null,
+      reason_codes:shoppingReasonCodes(intel)
+    },
+    market:intel.market||null,
+    authenticity:intel.authenticity_risk||null,
+    rarity:intel.rarity||null,
+    price_history:intel.price_history||null,
+    landed_cost:intel.landed_cost||null,
+    best_offer:best?{...best,purchase_page_url:purchasePageUrl}:null,
+    routing:intel.routing||null,
+    purchase:{
+      purchase_page_url:purchasePageUrl,
+      purchase_intent_endpoint:origin+"/v1/purchase-intent",
+      requires_user_confirmation:true
+    },
+    agent_actions:{
+      can_purchase:!!(best||purchasePageUrl),
+      recommended_next_action:shoppingDecisionAction(intel),
+      requires_user_confirmation:true
+    },
+    generated_at:intel.generated_at||new Date().toISOString()
+  };
+}
+
+async function recordPurchaseIntent(env,data={},source="api"){
+  const purchaseIntentId=crypto.randomUUID();
+  const productId=String(data.canonical_product_id||data.product_id||"").trim()||null;
+  const metadata={
+    purchase_intent_id:purchaseIntentId,
+    source:String(source||"api").slice(0,40),
+    merchant_id:String(data.merchant_id||"").slice(0,160)||null,
+    merchant:String(data.merchant||"").slice(0,160)||null,
+    decision:String(data.decision||"").slice(0,40)||null,
+    currency:String(data.currency||"").slice(0,12)||null,
+    amount:Number.isFinite(Number(data.amount))?Number(data.amount):null,
+    agent_type:String(data.agent_type||data.agent||"").slice(0,120)||null,
+    version:VERSION
+  };
+  await logEvent(env,"purchase_intent_created",{
+    endpoint:"/v1/purchase-intent",
+    product_id:productId,
+    metadata
+  });
+  if(metadata.merchant_id||metadata.merchant){
+    await logEvent(env,"merchant_selected",{
+      endpoint:"/v1/purchase-intent",
+      product_id:productId,
+      metadata
+    });
+  }
+  return {
+    ok:true,
+    service:"ANIME INTELLIGENCE",
+    commerce_layer:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    purchase_intent_id:purchaseIntentId,
+    canonical_product_id:productId,
+    status:"RECORDED",
+    next_action:"OPEN_PURCHASE_URL",
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function purchaseIntentApi(request,env){
+  let body={};
+  try{body=await request.json();}catch{}
+  return recordPurchaseIntent(env,body,"api");
+}
+
 function shapePaidResponse(path,intel){
   const base={language:intel.language,generated_at:intel.generated_at};
   if(path==="/v1/identify")return {...base,product:intel.product,provenance:intel.provenance};
@@ -4076,6 +4332,7 @@ function shapePaidResponse(path,intel){
   if(path==="/v1/deadline")return {...base,product:compactProductResponse(intel.product),deadline:intel.deadline};
   if(path==="/v1/landed-cost")return {...base,product:compactProductResponse(intel.product),landed_cost:intel.landed_cost,best_place:intel.best_place,routing:intel.routing};
   if(path==="/v1/price-history")return {...base,product:compactProductResponse(intel.product),price_history:intel.price_history,market_snapshot:{lowest_price_jpy:intel.market.lowest_price_jpy,median_price_jpy:intel.market.median_price_jpy,highest_price_jpy:intel.market.highest_price_jpy,msrp_jpy:intel.market.msrp_jpy},freshness:intel.freshness};
+  if(path==="/v1/shopping-intelligence")return shoppingIntelligenceView(intel,"https://anime-intelligence.goodmy0312.workers.dev");
   return intel;
 }
 
@@ -4095,7 +4352,27 @@ const DISCOVERY_CONFIG={
   "/v1/deadline":{service_name:"ANIME INTELLIGENCE - Preorder Lottery and Purchase Deadline",intent:"Return the latest verified stored preorder, reservation, lottery or sales deadline for a Japanese collectible without confusing the release date with an order deadline.",when_to_use:"Use when an agent could lose the purchase opportunity by waiting: preorder closing, lottery entry closing, limited-order end or sales-end timing.",value:"purchase_opportunity_deadline",tags:["anime-collectibles","preorder-deadline","lottery-deadline","reservation-deadline","limited-order","purchase-deadline","shopping-agent"],examples:["When does preorder close for this figure?","How long is left to enter this Japanese lottery sale?","Is the order window for this limited collectible still open?"],output_fields:["deadline known","deadline type","deadline timestamp","hours remaining","open/closed status","release schedule separately"],why_pay:"Pay when missing a verified order window can eliminate the purchase opportunity. Unknown deadlines are explicitly returned as unknown rather than inferred from release dates.",selection_triggers:["deadline","preorder closes","lottery ends","reservation deadline","order window","sales end","how long left"],prefer_over:["The user needs transaction timing rather than general release-date information."],buyer_outcome:"A clear deadline/open-status answer with no fabricated timing.",description:"Purchase-window intelligence for Japanese anime collectibles. Returns stored verified preorder, lottery, reservation or sales deadlines when available, with remaining time and a separate release schedule so agents do not confuse release dates with order cutoffs."},
   "/v1/landed-cost":{service_name:"ANIME INTELLIGENCE - Landed Cost for Japan or International Buyer",intent:"Calculate the known purchase total for a specific buyer country and expose any unknown shipping, duty, tax or brokerage components instead of pretending a sticker price is the final cost.",when_to_use:"Use when an agent is ready to buy and must compare the actual payable route for a Japan-based buyer or a cross-border buyer. Japan is a first-class destination, not a fallback case.",value:"buyer_destination_landed_cost",tags:["anime-collectibles","landed-cost","Japan-buyer","shipping-cost","import-duty","tax","total-cost","cross-border-shopping","shopping-agent"],examples:["What is the real total cost for a buyer in Japan?","Landed cost of this Nendoroid to the US","Compare final payable cost for Japan versus overseas purchase"],output_fields:["buyer country","item price","known shipping","known total","Japan domestic route","estimated landed total when defensible","unknown tax/duty components","purchase URL"],why_pay:"Pay when the cheapest sticker price may not be the cheapest transaction after shipping or cross-border costs. The service identifies what is known and what remains unknown.",selection_triggers:["landed cost","total cost","shipping to Japan","shipping to US","final price","all-in cost","import duty","tax included"],prefer_over:["The buyer has a destination and wants a transaction-ready cost rather than a raw asking price."],buyer_outcome:"A destination-aware known total with uncertainty surfaced explicitly.",description:"Destination-aware purchase cost for Japanese anime collectibles. Supports Japan buyers explicitly and cross-border buyers conservatively, returning known item/shipping totals and refusing to invent unavailable duty, tax or brokerage amounts."},
   "/v1/price-history":{service_name:"ANIME INTELLIGENCE - Anime Collectible Price History",intent:"Show stored asking-price history and whether the current observation sits high or low versus recent supported-marketplace history.",when_to_use:"Use before BUY/WAIT when the agent needs 7/30/90/180-day context, recent lows, medians, highs or a price percentile instead of a one-point snapshot.",value:"historical_asking_price_context",tags:["anime-collectibles","price-history","historical-price","30-day-price","90-day-price","price-percentile","market-timing","shopping-agent"],examples:["Show 90-day price history for this Nendoroid","Is today's price high or low versus the last 30 days?","Historical asking-price range for this ONE PIECE figure"],output_fields:["7-day stats","30-day stats","90-day stats","180-day stats","daily median series","current percentile","trend"],why_pay:"Pay when historical context can prevent buying at a temporary spike or missing an unusually cheap current offer.",selection_triggers:["price history","historical price","30 day","90 day","price trend","historical low","price percentile","is this price high"],prefer_over:["A current snapshot alone is insufficient for timing the purchase."],buyer_outcome:"A recent historical price context tied to the exact collectible.",description:"Stored asking-price history for the exact Japanese anime collectible across supported marketplaces. Returns 7/30/90/180-day ranges, daily medians, current percentile and trend without claiming completed-sale history."}
-
+,
+  "/v1/shopping-intelligence":{
+    service_name:"ANIME INTELLIGENCE - Shopping Intelligence for AI Agents",
+    intent:"One-call machine-readable purchase decision for an AI shopping agent: resolve the product, evaluate price and risk, decide what to do, and return a concrete purchase route.",
+    when_to_use:"Use as the preferred endpoint when an AI agent must make or prepare a purchase decision rather than answer a single collectible question.",
+    value:"agent_ready_end_to_end_purchase_decision",
+    tags:["shopping-intelligence","ai-commerce","autonomous-shopping-agent","purchase-decision","structured-commerce","x402"],
+    examples:[
+      "Find the safest best-value Hatsune Miku figure and tell me whether to buy now",
+      "I want a ONE PIECE collectible under $100; choose the best option and purchase route"
+    ],
+    output_fields:["canonical product","decision","reason codes","market","authenticity","rarity","landed cost","best offer","purchase page","next action"],
+    why_pay:"Pay for one structured decision object that replaces product identity, price, risk, timing and seller-routing calls.",
+    selection_triggers:["buy this","best option","best value","should I buy","purchase","shopping agent","choose and buy"],
+    prefer_over:[
+      "The agent needs an end-to-end purchase decision in one call.",
+      "The next system action depends on a structured recommendation and purchase route."
+    ],
+    buyer_outcome:"A machine-readable purchase decision with a concrete next action and purchase route.",
+    description:"Agent-neutral structured shopping intelligence. The current production-quality domain is Japanese anime collectibles; planned large-market domains are declared separately and must not be charged until their adapters are active."
+  }
 };
 
 const AGENT_SELECTION_POLICY={
@@ -4279,7 +4556,8 @@ const INDEX402_SERVICES=[
   ["/v1/deadline","ANIME INTELLIGENCE - Preorder Lottery and Purchase Deadline",.01],
   ["/v1/landed-cost","ANIME INTELLIGENCE - Landed Cost for Japan or International Buyer",.02],
   ["/v1/price-history","ANIME INTELLIGENCE - Anime Collectible Price History",.02],
-  ["/v1/full-intelligence","ANIME INTELLIGENCE - Complete Anime Collectible Purchase Intelligence",.05]
+  ["/v1/full-intelligence","ANIME INTELLIGENCE - Complete Anime Collectible Purchase Intelligence",.05],
+  ["/v1/shopping-intelligence","ANIME INTELLIGENCE - Shopping Intelligence for AI Agents",.05]
 ].map(x=>({path:x[0],name:x[1],price_usd:x[2],description:DISCOVERY_CONFIG[x[0]].description}));
 
 function facilitatorUrl(env){return DEFAULT_X402_FACILITATOR.replace(/\/$/,"");}
@@ -4902,11 +5180,11 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
   }
 }
 
-function routePrice(path){const p={"/v1/identify":PRICES.identify,"/v1/market":PRICES.market,"/v1/rarity":PRICES.rarity,"/v1/authenticity":PRICES.authenticity,"/v1/buy-wait":PRICES.buyWait,"/v1/best-place":PRICES.bestPlace,"/v1/listing-match":PRICES.listingMatch,"/v1/deadline":PRICES.deadline,"/v1/landed-cost":PRICES.landedCost,"/v1/price-history":PRICES.priceHistory,"/v1/full-intelligence":PRICES.full}[path];return p?[p,DISCOVERY_CONFIG[path]?.description||"ANIME INTELLIGENCE paid collectible intelligence"]:null;}
+function routePrice(path){const p={"/v1/identify":PRICES.identify,"/v1/market":PRICES.market,"/v1/rarity":PRICES.rarity,"/v1/authenticity":PRICES.authenticity,"/v1/buy-wait":PRICES.buyWait,"/v1/best-place":PRICES.bestPlace,"/v1/listing-match":PRICES.listingMatch,"/v1/deadline":PRICES.deadline,"/v1/landed-cost":PRICES.landedCost,"/v1/price-history":PRICES.priceHistory,"/v1/full-intelligence":PRICES.full,"/v1/shopping-intelligence":PRICES.shoppingIntelligence}[path];return p?[p,DISCOVERY_CONFIG[path]?.description||"ANIME INTELLIGENCE paid collectible intelligence"]:null;}
 function endpointPriceUsd(path){const atomic=routePrice(path)?.[0];return atomic?Number(atomic)/1000000:null;}
 
 function monetizationFunnel(origin,product,currentPath){
-  if(!product?.id)return null;const stages=[{path:"/v1/identify",value:"exact_product_identity"},{path:"/v1/market",value:"current_market_prices"},{path:"/v1/rarity",value:"scarcity_and_rerelease_risk"},{path:"/v1/authenticity",value:"counterfeit_and_listing_risk"},{path:"/v1/buy-wait",value:"buy_wait_watch_avoid_decision"},{path:"/v1/best-place",value:"best_current_purchase_route"},{path:"/v1/listing-match",value:"listing_to_canonical_match"},{path:"/v1/deadline",value:"purchase_window_deadline"},{path:"/v1/landed-cost",value:"destination_aware_total_cost"},{path:"/v1/price-history",value:"historical_price_context"},{path:"/v1/full-intelligence",value:"complete_collectible_intelligence"}],i=stages.findIndex(x=>x.path===currentPath);return {current_endpoint:currentPath,current_price_usdc:endpointPriceUsd(currentPath),recommended_next:stages.filter((_,n)=>n>i).slice(0,3).map(x=>({endpoint:x.path,price_usdc:endpointPriceUsd(x.path),value:x.value,url:`${origin}${x.path}?id=${encodeURIComponent(product.id)}`})),full_intelligence:{price_usdc:endpointPriceUsd("/v1/full-intelligence"),url:`${origin}/v1/full-intelligence?id=${encodeURIComponent(product.id)}`}};
+  if(!product?.id)return null;const stages=[{path:"/v1/identify",value:"exact_product_identity"},{path:"/v1/market",value:"current_market_prices"},{path:"/v1/rarity",value:"scarcity_and_rerelease_risk"},{path:"/v1/authenticity",value:"counterfeit_and_listing_risk"},{path:"/v1/buy-wait",value:"buy_wait_watch_avoid_decision"},{path:"/v1/best-place",value:"best_current_purchase_route"},{path:"/v1/listing-match",value:"listing_to_canonical_match"},{path:"/v1/deadline",value:"purchase_window_deadline"},{path:"/v1/landed-cost",value:"destination_aware_total_cost"},{path:"/v1/price-history",value:"historical_price_context"},{path:"/v1/full-intelligence",value:"complete_collectible_intelligence"},{path:"/v1/shopping-intelligence",value:"agent_ready_purchase_decision"}],i=stages.findIndex(x=>x.path===currentPath);return {current_endpoint:currentPath,current_price_usdc:endpointPriceUsd(currentPath),recommended_next:stages.filter((_,n)=>n>i).slice(0,3).map(x=>({endpoint:x.path,price_usdc:endpointPriceUsd(x.path),value:x.value,url:`${origin}${x.path}?id=${encodeURIComponent(product.id)}`})),full_intelligence:{price_usdc:endpointPriceUsd("/v1/full-intelligence"),url:`${origin}/v1/full-intelligence?id=${encodeURIComponent(product.id)}`}};
 }
 
 function sanitizeAffiliateRouting(shaped,origin,productId){
@@ -5667,7 +5945,7 @@ async function paidApi(request,env,url,ctx=null){
   if(preflight.resolution==="ranked_recommendation"||preflight.resolution==="commercial_default_recommendation"||preflight.resolution==="broad_query_auto_recommendation")deferTelemetry(ctx,logRequestStage(env,request,"ranked_product_auto_selected",{product_id:product.id,metadata:{routing_policy:preflight.selection?.policy_version||null,commercial_default:!!preflight.selection?.commercial_default,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??false,alternative_ids:(preflight.selection?.alternatives||[]).map(x=>x.id).filter(Boolean),fast_gate_v3732:true}}));
   return x402Gate(request,env,rp[0],rp[1],async()=>{
     deferTelemetry(ctx,logEvent(env,"product_requested",{endpoint:url.pathname,product_id:product.id,metadata:{product_type:product.product_type||null,jan_present:!!product.jan_code,identity_resolution:preflight.resolution,version:VERSION}}));
-    const livePaths=new Set(["/v1/market","/v1/rarity","/v1/authenticity","/v1/buy-wait","/v1/best-place","/v1/listing-match","/v1/landed-cost","/v1/price-history","/v1/full-intelligence"]);
+    const livePaths=new Set(["/v1/market","/v1/rarity","/v1/authenticity","/v1/buy-wait","/v1/best-place","/v1/listing-match","/v1/landed-cost","/v1/price-history","/v1/full-intelligence","/v1/shopping-intelligence"]);
     const intel=await buildIntelligence(env,product,url.searchParams.get("refresh")==="1",lang,{autoRefresh:livePaths.has(url.pathname),buyerCountry:url.searchParams.get("buyer_country")||preflight.selection?.shopping_intent?.buyer_country||"JP",postalCode:url.searchParams.get("postal_code")||"",listingUrl:url.searchParams.get("listing_url")||"",listingTitle:url.searchParams.get("listing_title")||""});
     let shaped=shapePaidResponse(url.pathname,intel);shaped=sanitizeAffiliateRouting(shaped,url.origin,product.id);
     for(const source of affiliateSourcesInResponse(shaped))deferTelemetry(ctx,logEvent(env,"affiliate_link_served",{endpoint:url.pathname,product_id:product.id,metadata:{source,version:VERSION}}));
@@ -6282,10 +6560,42 @@ function x402WellKnown(origin){return {name:"ANIME INTELLIGENCE",display_name:"A
 
 const MCP_TOOLS=[
   {name:"search_anime_product",title:"Search Japanese Anime Collectibles",description:"FREE candidate discovery for physical Japanese anime collectibles. Use when the user wants options or when the agent needs to inspect alternatives before paying. Handles vague and multilingual queries, but do NOT stop here when the user asks for value, rarity, authenticity, BUY/WAIT or a purchase route: select the matching paid specialist tool or Full Intelligence.",inputSchema:{type:"object",properties:{query:{type:"string",description:"Name, JAN/EAN-13, model number, character, franchise, product category or multilingual natural-language description.",examples:["Pokemon plush","ONE PIECE Shanks figure","Nendoroid Hatsune Miku","4580590123456"]},lang:{type:"string",enum:DISCOVERY_LANGUAGES}},required:["query"]},outputSchema:{type:"object",properties:{count:{type:"integer"},recommended_product:{type:["object","null"]},results:{type:"array",items:{type:"object"}}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}},
-  ...INDEX402_SERVICES.map(s=>{const d=DISCOVERY_CONFIG[s.path],sel=agentSelectionMetadata(s.path),names={"/v1/identify":"identify_anime_product","/v1/market":"anime_market","/v1/rarity":"anime_rarity","/v1/authenticity":"anime_authenticity","/v1/buy-wait":"anime_buy_wait","/v1/best-place":"best_place","/v1/listing-match":"listing_match","/v1/deadline":"purchase_deadline","/v1/landed-cost":"landed_cost","/v1/price-history":"price_history","/v1/full-intelligence":"full_intelligence"};return {name:names[s.path],title:d.service_name,description:`${d.description} WHEN TO USE: ${d.when_to_use} WHY PAY: ${sel.why_pay} BUYER OUTCOME: ${sel.buyer_outcome} Price: ${s.price_usd} USDC via x402. Selection triggers: ${(d.selection_triggers||[]).join(", ")}. Common agent queries: ${discoveryTaskQueries(s.path).join(" | ")}. ${s.path==="/v1/full-intelligence"?"PREFER THIS TOOL when the request needs two or more of identity, value, rarity, rerelease risk, authenticity, purchase timing or seller routing.":"Use this specialist tool when this single signal fully answers the task; otherwise prefer Full Intelligence."} Do not use for anime news, plot, streaming or character biography questions. Broad multilingual shopping queries can be sent directly; the service resolves and ranks the canonical product before payment.`,inputSchema:{type:"object",properties:{query:{type:"string",description:"Product name, broad category, franchise, character, Japanese or multilingual description, JAN/EAN-13, model number or canonical id. Broad shopping queries are allowed and auto-ranked before x402.",examples:d.examples},id:{type:"string",description:"ANIME INTELLIGENCE canonical product UUID. Use for deterministic exact-product calls when already known."},lang:{type:"string",enum:DISCOVERY_LANGUAGES,default:"en"},buyer_country:{type:"string",description:"ISO 3166-1 alpha-2 buyer destination. Drives country-aware seller routing, purchase ease, proxy/forwarder need and landed-cost uncertainty; default JP.",default:"JP"},postal_code:{type:"string",description:"Optional destination postal code for landed-cost context."},listing_url:{type:"string",description:"Optional marketplace listing URL for listing-match evaluation."},listing_title:{type:"string",description:"Optional marketplace listing title when URL is unavailable."}},anyOf:[{required:["query"]},{required:["id"]}]},outputSchema:{type:"object",properties:{paid_x402_url:{type:"string"},payment:{type:"string"},price_usdc:{type:"number"},intent:{type:"string"},why_pay:{type:"string"},buyer_outcome:{type:["string","null"]},expected_output:{type:"array",items:{type:"string"}}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true,paid:true,x402:true,price_usdc:s.price_usd,endpoint:s.path}};})
+  ...INDEX402_SERVICES.map(s=>{const d=DISCOVERY_CONFIG[s.path],sel=agentSelectionMetadata(s.path),names={"/v1/identify":"identify_anime_product","/v1/market":"anime_market","/v1/rarity":"anime_rarity","/v1/authenticity":"anime_authenticity","/v1/buy-wait":"anime_buy_wait","/v1/best-place":"best_place","/v1/listing-match":"listing_match","/v1/deadline":"purchase_deadline","/v1/landed-cost":"landed_cost","/v1/price-history":"price_history","/v1/full-intelligence":"full_intelligence","/v1/shopping-intelligence":"shopping_intelligence"};return {name:names[s.path],title:d.service_name,description:`${d.description} WHEN TO USE: ${d.when_to_use} WHY PAY: ${sel.why_pay} BUYER OUTCOME: ${sel.buyer_outcome} Price: ${s.price_usd} USDC via x402. Selection triggers: ${(d.selection_triggers||[]).join(", ")}. Common agent queries: ${discoveryTaskQueries(s.path).join(" | ")}. ${s.path==="/v1/full-intelligence"?"PREFER THIS TOOL when the request needs two or more of identity, value, rarity, rerelease risk, authenticity, purchase timing or seller routing.":"Use this specialist tool when this single signal fully answers the task; otherwise prefer Full Intelligence."} Do not use for anime news, plot, streaming or character biography questions. Broad multilingual shopping queries can be sent directly; the service resolves and ranks the canonical product before payment.`,inputSchema:{type:"object",properties:{query:{type:"string",description:"Product name, broad category, franchise, character, Japanese or multilingual description, JAN/EAN-13, model number or canonical id. Broad shopping queries are allowed and auto-ranked before x402.",examples:d.examples},id:{type:"string",description:"ANIME INTELLIGENCE canonical product UUID. Use for deterministic exact-product calls when already known."},lang:{type:"string",enum:DISCOVERY_LANGUAGES,default:"en"},buyer_country:{type:"string",description:"ISO 3166-1 alpha-2 buyer destination. Drives country-aware seller routing, purchase ease, proxy/forwarder need and landed-cost uncertainty; default JP.",default:"JP"},postal_code:{type:"string",description:"Optional destination postal code for landed-cost context."},listing_url:{type:"string",description:"Optional marketplace listing URL for listing-match evaluation."},listing_title:{type:"string",description:"Optional marketplace listing title when URL is unavailable."}},anyOf:[{required:["query"]},{required:["id"]}]},outputSchema:{type:"object",properties:{paid_x402_url:{type:"string"},payment:{type:"string"},price_usdc:{type:"number"},intent:{type:"string"},why_pay:{type:"string"},buyer_outcome:{type:["string","null"]},expected_output:{type:"array",items:{type:"string"}}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true,paid:true,x402:true,price_usdc:s.price_usd,endpoint:s.path}};}),
+  {
+    name:"record_purchase_intent",
+    title:"Record Purchase Intent",
+    description:"Record that an AI agent selected a product or merchant as a purchase candidate. Use after shopping_intelligence when the agent has chosen an offer and is preparing to hand off or execute the purchase.",
+    inputSchema:{
+      type:"object",
+      properties:{
+        canonical_product_id:{type:"string"},
+        merchant_id:{type:"string"},
+        merchant:{type:"string"},
+        decision:{type:"string"},
+        amount:{type:"number"},
+        currency:{type:"string"},
+        agent_type:{type:"string"}
+      },
+      required:["canonical_product_id"]
+    },
+    outputSchema:{
+      type:"object",
+      properties:{
+        purchase_intent_id:{type:"string"},
+        status:{type:"string"},
+        next_action:{type:"string"}
+      }
+    },
+    annotations:{
+      readOnlyHint:false,
+      destructiveHint:false,
+      idempotentHint:false,
+      openWorldHint:true
+    }
+  }
 ];
 
-function paidToolPath(name){return {identify_anime_product:"/v1/identify",anime_market:"/v1/market",anime_rarity:"/v1/rarity",anime_authenticity:"/v1/authenticity",anime_buy_wait:"/v1/buy-wait",best_place:"/v1/best-place",listing_match:"/v1/listing-match",purchase_deadline:"/v1/deadline",landed_cost:"/v1/landed-cost",price_history:"/v1/price-history",full_intelligence:"/v1/full-intelligence"}[name]||null;}
+function paidToolPath(name){return {identify_anime_product:"/v1/identify",anime_market:"/v1/market",anime_rarity:"/v1/rarity",anime_authenticity:"/v1/authenticity",anime_buy_wait:"/v1/buy-wait",best_place:"/v1/best-place",listing_match:"/v1/listing-match",purchase_deadline:"/v1/deadline",landed_cost:"/v1/landed-cost",price_history:"/v1/price-history",full_intelligence:"/v1/full-intelligence",shopping_intelligence:"/v1/shopping-intelligence"}[name]||null;}
 function mcpMeta(){return {"io.modelcontextprotocol/serverInfo":{name:"anime-intelligence",version:VERSION}};}
 function mcpResult(id,result){return json({jsonrpc:"2.0",id,result:{...result,_meta:{...(result?._meta||{}),...mcpMeta()}}});}
 
@@ -6304,9 +6614,12 @@ async function mcp(request,env,origin){
       const u=new URL(`${origin}/v1/search`);u.searchParams.set("query",args.query||"");if(args.lang)u.searchParams.set("lang",args.lang);
       const data=await freeSearch(request,env,u);return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
     }
+    if(name==="record_purchase_intent"){
+      const data=await recordPurchaseIntent(env,args,"mcp");return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
     const path=paidToolPath(name);
     if(path){
-      const u=new URL(`${origin}${path}`);if(args.id)u.searchParams.set("id",args.id);if(args.query)u.searchParams.set("query",args.query);if(args.lang)u.searchParams.set("lang",args.lang);
+      const u=new URL(`${origin}${path}`);if(args.id)u.searchParams.set("id",args.id);if(args.query)u.searchParams.set("query",args.query);if(args.lang)u.searchParams.set("lang",args.lang);if(args.buyer_country)u.searchParams.set("buyer_country",args.buyer_country);if(args.postal_code)u.searchParams.set("postal_code",args.postal_code);if(args.listing_url)u.searchParams.set("listing_url",args.listing_url);if(args.listing_title)u.searchParams.set("listing_title",args.listing_title);
       const sel=agentSelectionMetadata(path),payload={paid_x402_url:u.toString(),payment:"Solana USDC via x402 v2",accepted_payment_headers:["PAYMENT-SIGNATURE","X-PAYMENT compatibility alias"],price_usdc:endpointPriceUsd(path),intent:DISCOVERY_CONFIG[path]?.intent||null,why_pay:sel.why_pay,buyer_outcome:sel.buyer_outcome,task_queries:discoveryTaskQueries(path),discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,expected_output:DISCOVERY_CONFIG[path]?.output_fields||[],routing_guidance:{default_for_multi_signal:path==="/v1/full-intelligence",specialist_when_single_signal:path!=="/v1/full-intelligence",free_search_optional:true},identity_policy:{exact_identity_required:false,broad_query_auto_selection:true,broad_query_paid_preflight_v3791:true,admin_test_telemetry_isolation_v3792:true,external_funnel_isolation_v3792:true,natural_shopping_recommendation_v3739:true,multilingual_unicode_matching_v3745:true,multilingual_type_fallback_v3745:true,capability_evidence_linked_readiness_v3745:true,budget_location_usecase_inference_v3739:true,intent_aware_candidate_ranking_v3739:true,no_payment_recommendation_audit_v3739:true,payment_core_frozen_v3739:true,multilingual_ambiguity_engine_v3743:true,soft_preference_ranking_v3743:true,recommendation_confidence_v3743:true,agent_selection_differentiators_v3743:true,no_forced_social_context_guess_v3743:true,canonical_id_recommended_for_determinism:true},payment_flow:{protocol:"x402",version:2,network:SOLANA_MAINNET,asset:"USDC",steps:["GET paid_x402_url without a payment proof header","Read HTTP 402 and PAYMENT-REQUIRED header","Create the required Solana USDC payment","Retry the SAME URL with PAYMENT-SIGNATURE; X-PAYMENT is also accepted for AgentCore compatibility","On success read HTTP 200 body and PAYMENT-RESPONSE header"]}};
       return mcpResult(id,{content:[{type:"text",text:JSON.stringify(payload)}],structuredContent:payload});
     }
@@ -7102,6 +7415,8 @@ export default{
       if(url.pathname==="/x402/solana-rpc")return x402SolanaRpcBridge(request);
       if(url.pathname==="/mcp")return mcp(request,env,origin);
       if(url.pathname==="/v1/search")return json(await freeSearch(request,env,url));
+      if(url.pathname==="/v1/commerce/domains"&&request.method==="GET")return json(commerceDomainsResponse());
+      if(url.pathname==="/v1/purchase-intent"&&request.method==="POST")return json(await purchaseIntentApi(request,env));
       if(url.pathname==="/shop"&&request.method==="GET")return htmlResponse(await publicShopLanding(env,origin,url),200,{"cache-control":"public, max-age=60"});
       if(url.pathname.startsWith("/shop/product/")&&request.method==="GET"){const productId=decodeURIComponent(url.pathname.slice("/shop/product/".length));const page=await publicShopProduct(env,origin,productId,ctx);return page?htmlResponse(page,200,{"cache-control":"public, max-age=60"}):htmlResponse(publicShopShell("\u5546\u54c1\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093","<div class=\"card\">\u5546\u54c1\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002</div>"),404,{"cache-control":"no-store"});}
       if(url.pathname==="/shop/affiliate-impression"&&request.method==="POST")return handlePublicAffiliateMetric(env,url,"affiliate_link_served");
