@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Mike05102/anime-intelligence-mcp",
   "title": "ANIME INTELLIGENCE / AI PURCHASE INTELLIGENCE",
-  "description": "AI commerce intelligence for anime collectibles and multi-provider travel shopping.",
+  "description": "AI commerce intelligence for anime, travel, retail, automotive and B2B buying.",
   "websiteUrl": "https://anime-intelligence.goodmy0312.workers.dev",
   "repository": {
     "url": "https://github.com/Mike05102/anime-intelligence-mcp",
     "source": "github"
   },
-  "version": "3.9.1",
+  "version": "3.9.2",
   "remotes": [
     {
       "type": "streamable-http",
