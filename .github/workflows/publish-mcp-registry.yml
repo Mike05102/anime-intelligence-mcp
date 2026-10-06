@@ -3,6 +3,10 @@ name: Publish MCP Registry metadata
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
+    paths:
+      - "server.json"
     tags:
       - "v*"
 
