@@ -1,5 +1,5 @@
 // @ts-nocheck
-const VERSION="3.9.2";
+const VERSION="3.10.2";
 
 const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
 const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
@@ -35,7 +35,8 @@ const PRICES={
   landedCost:"20000",
   priceHistory:"20000",
   full:"50000",
-  shoppingIntelligence:"50000"
+  shoppingIntelligence:"50000",
+  partsIntelligence:"50000"
 };
 
 const ROTATION=["mass","official","yahoo","ebay","mass","backfill","yahoo","ebay"];
@@ -132,6 +133,25 @@ const OFFICIAL_MASS_FEEDS=[
   {slug:"bandai-spirits",manufacturer:"BANDAI SPIRITS",listUrl:"https://www.bandaispirits.co.jp/products/",detailRegex:/https?:\/\/(?:www\.)?(?:bandaispirits\.co\.jp|tamashiiweb\.com|1kuji\.com|banpresto\.jp)\/[^?#]+/i},
   {slug:"megahouse",manufacturer:"MegaHouse",listUrl:"https://www.megahouse.co.jp/products/",detailRegex:/https?:\/\/(?:www\.)?megahouse\.co\.jp\/products\/[^?#]+/i},
   {slug:"kdcolle",manufacturer:"KADOKAWA",listUrl:"https://kdcolle.kadokawa.co.jp/product/",detailRegex:/https?:\/\/kdcolle\.kadokawa\.co\.jp\/product\/(?!20(?:1[0-9]|2[0-9])(?:\/|$))[^?#]+/i}
+];
+
+
+/* =========================================================
+   PARTS INTELLIGENCE OFFICIAL SOURCE REGISTRY v3.10.2
+   Public manufacturer sources only. No new external API keys.
+   Crawl is intentionally bounded and evidence-first.
+========================================================= */
+const DEFAULT_PARTS_SOURCES=[
+  {slug:"omron-fa",manufacturer:"OMRON",root_url:"https://www.fa.omron.co.jp/",category:"fa_controls"},
+  {slug:"mitsubishi-fa",manufacturer:"Mitsubishi Electric",root_url:"https://www.mitsubishielectric.co.jp/fa/",category:"fa_controls"},
+  {slug:"smc",manufacturer:"SMC",root_url:"https://www.smcworld.com/",category:"pneumatics"},
+  {slug:"idec",manufacturer:"IDEC",root_url:"https://jp.idec.com/",category:"fa_controls"},
+  {slug:"panasonic-industry",manufacturer:"Panasonic Industry",root_url:"https://industry.panasonic.com/jp/ja/",category:"industrial_components"},
+  {slug:"yaskawa",manufacturer:"Yaskawa",root_url:"https://www.e-mechatronics.com/",category:"servo_inverter"},
+  {slug:"oriental-motor",manufacturer:"Oriental Motor",root_url:"https://www.orientalmotor.co.jp/",category:"motors"},
+  {slug:"thk",manufacturer:"THK",root_url:"https://www.thk.com/",category:"linear_motion"},
+  {slug:"nsk",manufacturer:"NSK",root_url:"https://www.nsk.com/jp-ja/",category:"bearings"},
+  {slug:"azbil",manufacturer:"Azbil",root_url:"https://www.azbil.com/jp/",category:"sensors_controls"}
 ];
 
 /* =========================================================
@@ -2836,7 +2856,7 @@ async function readAffiliateTelemetry(env){
 }
 
 async function revenueMetrics(env){
-  const funnelTypes=["api_call","x402_gate_entered","x402_configuration_error","payment_challenge_issued","payment_required","payment_retry_received","payment_attempt","payment_invalid_header","payment_verify_failed","payment_verified","paid_call","payment_settlement_failed","x402_failed","product_intent","canonical_product_selected","product_requested","product_not_found","service_execution_failed","disambiguation_required","identity_preflight_failed","affiliate_link_served","affiliate_click","affiliate_link_registered","ranked_product_auto_selected","purchase_intent_created","merchant_selected","purchase_url_served","checkout_started","purchase_confirmed","travel_offer_selected","commerce_search","commerce_offer_selected"];
+  const funnelTypes=["api_call","x402_gate_entered","x402_configuration_error","payment_challenge_issued","payment_required","payment_retry_received","payment_attempt","payment_invalid_header","payment_verify_failed","payment_verified","paid_call","payment_settlement_failed","x402_failed","product_intent","canonical_product_selected","product_requested","product_not_found","service_execution_failed","disambiguation_required","identity_preflight_failed","affiliate_link_served","affiliate_click","affiliate_link_registered","ranked_product_auto_selected","purchase_intent_created","merchant_selected","purchase_url_served","checkout_started","purchase_confirmed","travel_offer_selected","commerce_search","commerce_offer_selected","parts_intelligence_served","parts_ingest_run"];
   const telemetry=await readKpiEvents(env,funnelTypes);
   const affiliateTelemetry=await readAffiliateTelemetry(env);
   const allEvents=telemetry.rows;
@@ -4919,6 +4939,380 @@ const COMMERCE_DOMAIN_REGISTRY={
   ]
 };
 
+
+
+
+/* =========================================================
+   PARTS INTELLIGENCE LIGHT INGEST v3.10.2
+   Deploy-safe version:
+   - No autonomous crawling in Worker runtime.
+   - No new external API keys.
+   - Keeps source registry, manual/admin upsert and PARTS DB.
+   - Initial bulk population is done through Supabase SQL/CSV import,
+     which is more reliable than large in-Worker crawling on mobile/dashboard.
+========================================================= */
+
+async function seedDefaultPartsSources(env){
+  const rows=DEFAULT_PARTS_SOURCES.map(x=>({
+    slug:x.slug,
+    manufacturer:x.manufacturer,
+    root_url:x.root_url,
+    category:x.category,
+    enabled:true,
+    crawl_priority:100,
+    crawl_cursor:null,
+    last_crawled_at:null,
+    metadata:{source_type:"official_public",version:VERSION},
+    updated_at:new Date().toISOString()
+  }));
+  await sb(env,"/parts_sources?on_conflict=slug",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return {ok:true,seeded:rows.length,sources:rows.map(x=>x.slug)};
+}
+
+async function partsIngestStatus(env){
+  const [catalog,sources,runs]=await Promise.all([
+    sbOptional(env,"/parts_catalog?select=id&limit=1"),
+    sbOptional(env,"/parts_sources?select=slug,manufacturer,enabled,last_crawled_at&order=crawl_priority.desc"),
+    sbOptional(env,"/parts_ingest_runs?select=*&order=finished_at.desc.nullslast&limit=5")
+  ]);
+  return {
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    catalog_initialized:Array.isArray(catalog),
+    sources:Array.isArray(sources)?sources:[],
+    recent_runs:Array.isArray(runs)?runs:[],
+    ingest_mode:"supabase_bulk_import_plus_admin_upsert",
+    autonomous_worker_crawl:false,
+    new_external_api_keys_required:false,
+    target_initial_catalog:"thousands_to_10000_high_quality_FA_and_industrial_parts",
+    compatibility_policy:"No substitute recommendation without explicit verified relation evidence."
+  };
+}
+
+async function runPartsIngest(env,{sources=1,pages=1}={}){
+  // Intentionally disabled in v3.10.2 to keep the Worker compact and deploy-safe.
+  // Use Supabase bulk import / CSV for initial population, then admin upsert for incremental updates.
+  return {
+    ok:true,
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    status:"disabled_in_worker",
+    reason:"v3.10.2 uses Supabase bulk import instead of autonomous crawling to reduce Worker bundle/runtime complexity.",
+    next_action:"Populate parts_catalog/parts_documents/parts_relations in Supabase; the API serves them immediately.",
+    requested:{sources,pages}
+  };
+}
+
+/* =========================================================
+   PARTS INTELLIGENCE v3.10.0
+   API-key independent core.
+   - Supabase is the system of record.
+   - Existing Yahoo/eBay connectors are optional enrichers only.
+   - Compatibility is NEVER inferred from title similarity alone.
+========================================================= */
+
+function normalizePartNumber(v=""){
+  return String(v||"").normalize("NFKC").toUpperCase().replace(/\s+/g,"").replace(/[ââââââ]/g,"-").trim();
+}
+
+function partRowShape(row){
+  if(!row)return null;
+  return {
+    id:row.id,
+    manufacturer:row.manufacturer||null,
+    brand:row.brand||null,
+    part_number:row.part_number||null,
+    normalized_part_number:row.normalized_part_number||normalizePartNumber(row.part_number||""),
+    name:row.name||null,
+    category:row.category||null,
+    lifecycle_status:row.lifecycle_status||"unknown",
+    discontinued_at:row.discontinued_at||null,
+    successor_part_number:row.successor_part_number||null,
+    aliases_text:row.aliases_text||null,
+    specifications:row.specifications||{},
+    dimensions:row.dimensions||{},
+    electrical:row.electrical||{},
+    mechanical:row.mechanical||{},
+    notes:row.notes||null,
+    official_url:row.official_url||null,
+    source_confidence:Number(row.source_confidence??0),
+    source_last_checked_at:row.source_last_checked_at||null,
+    created_at:row.created_at||null,
+    updated_at:row.updated_at||null
+  };
+}
+
+function partSearchScore(row,q,pn,manufacturer){
+  let score=0;
+  const rpn=normalizePartNumber(row?.part_number||row?.normalized_part_number||"");
+  const rq=normalize(String(q||""));
+  const hay=normalize([row?.manufacturer,row?.brand,row?.part_number,row?.name,row?.category,row?.aliases_text].filter(Boolean).join(" "));
+  if(pn&&rpn===normalizePartNumber(pn))score+=120;
+  else if(pn&&rpn.includes(normalizePartNumber(pn)))score+=70;
+  if(manufacturer&&normalize(row?.manufacturer||"")===normalize(manufacturer))score+=25;
+  if(rq&&hay.includes(rq))score+=30;
+  const toks=tokens(q||"").filter(Boolean);
+  if(toks.length){
+    const hit=toks.filter(t=>hay.includes(t)).length;
+    score+=Math.min(30,hit*8);
+  }
+  score+=Math.min(10,Number(row?.source_confidence||0)*10);
+  if(String(row?.lifecycle_status||"").toLowerCase()==="active")score+=3;
+  return score;
+}
+
+async function searchPartsCatalog(env,{query="",part_number="",manufacturer="",limit=20}={}){
+  const q=String(query||"").trim();
+  const pn=normalizePartNumber(part_number||"");
+  const m=String(manufacturer||"").trim();
+  const lim=Math.max(1,Math.min(100,Number(limit)||20));
+  let rows=[];
+
+  if(pn){
+    const encoded=encodeURIComponent(pn);
+    const exact=await sbOptional(env,`/parts_catalog?select=*&normalized_part_number=eq.${encoded}&limit=${lim}`);
+    if(Array.isArray(exact)&&exact.length)rows.push(...exact);
+  }
+
+  if(q||m){
+    const terms=[];
+    if(q){
+      const safe=q.replace(/[%*,()]/g," ").replace(/\s+/g," ").trim().slice(0,120);
+      if(safe){
+        terms.push(`name.ilike.*${safe}*`);
+        terms.push(`part_number.ilike.*${safe}*`);
+        terms.push(`manufacturer.ilike.*${safe}*`);
+        terms.push(`brand.ilike.*${safe}*`);
+        terms.push(`category.ilike.*${safe}*`);
+        terms.push(`aliases_text.ilike.*${safe}*`);
+      }
+    }
+    if(m){
+      const safeM=m.replace(/[%*,()]/g," ").replace(/\s+/g," ").trim().slice(0,100);
+      terms.push(`manufacturer.ilike.*${safeM}*`);
+      terms.push(`brand.ilike.*${safeM}*`);
+    }
+    if(terms.length){
+      const found=await sbOptional(env,`/parts_catalog?select=*&or=${encodeURIComponent(`(${terms.join(",")})`)}&limit=${Math.max(lim,50)}`);
+      if(Array.isArray(found))rows.push(...found);
+    }
+  }
+
+  const uniq=new Map();
+  for(const r of rows)if(r?.id&&!uniq.has(String(r.id)))uniq.set(String(r.id),r);
+  const ranked=[...uniq.values()].map(r=>({row:r,score:partSearchScore(r,q,pn,m)})).sort((a,b)=>b.score-a.score);
+  return ranked.slice(0,lim).map(x=>({...partRowShape(x.row),match_score:x.score}));
+}
+
+async function getPartRelations(env,partId){
+  const rows=await sbOptional(env,`/parts_relations?select=*&source_part_id=eq.${encodeURIComponent(String(partId))}&order=confidence.desc.nullslast&limit=100`);
+  if(!Array.isArray(rows)||!rows.length)return [];
+  const ids=[...new Set(rows.map(r=>String(r.target_part_id||"")).filter(Boolean))];
+  let targets=[];
+  if(ids.length){
+    const quoted=ids.map(x=>`"${x.replace(/"/g,'\\"')}"`).join(",");
+    const found=await sbOptional(env,`/parts_catalog?select=*&id=in.(${encodeURIComponent(quoted)})&limit=${ids.length}`);
+    targets=Array.isArray(found)?found:[];
+  }
+  const byId=new Map(targets.map(x=>[String(x.id),x]));
+  return rows.map(r=>({
+    relation_type:r.relation_type,
+    target_part:partRowShape(byId.get(String(r.target_part_id)))||{id:r.target_part_id},
+    confidence:Number(r.confidence??0),
+    verified:!!r.verified,
+    evidence_count:Number(r.evidence_count??0),
+    evidence_note:r.evidence_note||null,
+    source_url:r.source_url||null,
+    checked_at:r.checked_at||null
+  }));
+}
+
+async function getPartDocuments(env,partId){
+  const rows=await sbOptional(env,`/parts_documents?select=*&part_id=eq.${encodeURIComponent(String(partId))}&order=published_at.desc.nullslast&limit=50`);
+  if(!Array.isArray(rows))return [];
+  return rows.map(r=>({
+    document_type:r.document_type||"reference",
+    title:r.title||null,
+    url:r.url||null,
+    source_domain:r.source_domain||null,
+    official:!!r.official,
+    published_at:r.published_at||null,
+    checked_at:r.checked_at||null,
+    evidence_scope:r.evidence_scope||null
+  }));
+}
+
+async function getPartLocalOffers(env,partId){
+  const rows=await sbOptional(env,`/parts_offers?select=*&part_id=eq.${encodeURIComponent(String(partId))}&order=observed_at.desc&limit=100`);
+  if(!Array.isArray(rows))return [];
+  const latestByMerchant=new Map();
+  for(const r of rows){
+    const key=String(r.merchant||r.source||r.url||crypto.randomUUID());
+    if(!latestByMerchant.has(key))latestByMerchant.set(key,r);
+  }
+  return [...latestByMerchant.values()].map(r=>({
+    source:r.source||null,
+    merchant:r.merchant||null,
+    price:r.price!=null?Number(r.price):null,
+    currency:r.currency||null,
+    condition:r.condition||null,
+    stock_status:r.stock_status||null,
+    url:r.url||null,
+    observed_at:r.observed_at||null
+  }));
+}
+
+async function optionalPartMarketSearch(env,part){
+  const q=[part?.manufacturer,part?.part_number,part?.name].filter(Boolean).join(" ").trim();
+  if(!q)return {offers:[],provider_errors:[]};
+  const out=await genericCommerceSearch(env,{
+    domain:"mro_and_industrial_components",
+    query:q,
+    mpn:part?.part_number||"",
+    limit:12
+  });
+  if(!out?.ok)return {offers:[],provider_errors:out?.provider_errors||[]};
+  return {offers:Array.isArray(out.offers)?out.offers:[],provider_errors:out.provider_errors||[]};
+}
+
+function relationBuckets(relations=[]){
+  const keep=(t)=>relations.filter(r=>String(r.relation_type||"").toLowerCase()===t);
+  return {
+    successors:keep("successor"),
+    verified_substitutes:relations.filter(r=>["substitute","compatible"].includes(String(r.relation_type||"").toLowerCase())&&r.verified&&Number(r.confidence)>=0.8),
+    unverified_candidates:relations.filter(r=>["substitute","compatible"].includes(String(r.relation_type||"").toLowerCase())&&(!r.verified||Number(r.confidence)<0.8)),
+    incompatible:keep("incompatible"),
+    used_in:keep("used_in")
+  };
+}
+
+function partDecision(part,buckets){
+  const lifecycle=String(part?.lifecycle_status||"unknown").toLowerCase();
+  if(buckets.successors.length)return {
+    action:"CHECK_SUCCESSOR",
+    reason:lifecycle==="discontinued"?"Original part is discontinued and a successor is recorded.":"A successor relationship is recorded.",
+    target:buckets.successors[0].target_part
+  };
+  if(buckets.verified_substitutes.length)return {
+    action:"VERIFIED_SUBSTITUTE_AVAILABLE",
+    reason:"A verified substitute/compatibility relationship exists in the evidence table.",
+    target:buckets.verified_substitutes[0].target_part
+  };
+  if(lifecycle==="discontinued")return {
+    action:"SOURCE_ORIGINAL_OR_VERIFY_SUBSTITUTE",
+    reason:"Part is marked discontinued and no verified successor/substitute is recorded.",
+    target:null
+  };
+  return {
+    action:"BUY_EXACT_OR_VERIFY_BEFORE_SUBSTITUTION",
+    reason:"No verified compatibility relationship is recorded; title or dimensional similarity is not treated as compatibility proof.",
+    target:null
+  };
+}
+
+async function resolvePart(env,{query="",part_number="",manufacturer=""}={}){
+  const results=await searchPartsCatalog(env,{query,part_number,manufacturer,limit:12});
+  if(!results.length)return {ok:false,status:404,error:"part_not_found",results:[]};
+  const first=results[0],second=results[1];
+  const exact=part_number&&normalizePartNumber(first.part_number)===normalizePartNumber(part_number);
+  const clearLead=!second||Number(first.match_score||0)-Number(second.match_score||0)>=15;
+  if(!exact&&!clearLead){
+    return {ok:false,status:409,error:"part_disambiguation_required",results:results.slice(0,8)};
+  }
+  return {ok:true,part:first,alternatives:results.slice(1,6),resolution:exact?"exact_part_number":"ranked_match"};
+}
+
+async function buildPartsIntelligence(env,part){
+  const relations=await getPartRelations(env,part.id);
+  const documents=await getPartDocuments(env,part.id);
+  const localOffers=await getPartLocalOffers(env,part.id);
+  const market=await optionalPartMarketSearch(env,part);
+  const buckets=relationBuckets(relations);
+  const decision=partDecision(part,buckets);
+
+  return {
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    part,
+    lifecycle:{
+      status:part.lifecycle_status||"unknown",
+      discontinued_at:part.discontinued_at||null,
+      successor_part_number:part.successor_part_number||null
+    },
+    compatibility_policy:{
+      inferred_from_title_similarity:false,
+      inferred_from_dimension_similarity:false,
+      verified_relation_required_for_substitute_recommendation:true
+    },
+    relations:buckets,
+    official_documents:documents,
+    market:{
+      local_observations:localOffers,
+      optional_live_market_offers:market.offers,
+      provider_errors:market.provider_errors
+    },
+    decision,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function partsSearchApi(env,url){
+  const query=url.searchParams.get("query")||"";
+  const part_number=url.searchParams.get("part_number")||url.searchParams.get("mpn")||"";
+  const manufacturer=url.searchParams.get("manufacturer")||"";
+  const limit=url.searchParams.get("limit")||20;
+  const results=await searchPartsCatalog(env,{query,part_number,manufacturer,limit});
+  return {
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    count:results.length,
+    results,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function partsIntelligenceApi(request,env,url,ctx=null){
+  const query=url.searchParams.get("query")||"";
+  const part_number=url.searchParams.get("part_number")||url.searchParams.get("mpn")||"";
+  const manufacturer=url.searchParams.get("manufacturer")||"";
+  if(!String(query||part_number).trim())return json({service:"PARTS INTELLIGENCE",version:VERSION,error:"query_or_part_number_required",charged:false},400);
+  const resolved=await resolvePart(env,{query,part_number,manufacturer});
+  if(!resolved.ok)return json({service:"PARTS INTELLIGENCE",version:VERSION,charged:false,...resolved},resolved.status||400);
+  const part=resolved.part;
+  return x402Gate(request,env,PRICES.partsIntelligence,"PARTS INTELLIGENCE full part lifecycle compatibility replacement and sourcing intelligence",async()=>{
+    const out=await buildPartsIntelligence(env,part);
+    deferTelemetry(ctx,logRequestStage(env,request,"parts_intelligence_served",{product_id:part.id,metadata:{part_number:part.part_number||null,manufacturer:part.manufacturer||null,resolution:resolved.resolution}}));
+    return {...out,resolution:resolved.resolution,alternatives:resolved.alternatives};
+  },ctx);
+}
+
+async function upsertPartAdmin(env,body){
+  const row={
+    id:body.id||crypto.randomUUID(),
+    manufacturer:String(body.manufacturer||"").trim()||null,
+    brand:String(body.brand||"").trim()||null,
+    part_number:String(body.part_number||"").trim()||null,
+    normalized_part_number:normalizePartNumber(body.part_number||body.normalized_part_number||""),
+    name:String(body.name||"").trim()||null,
+    category:String(body.category||"").trim()||null,
+    lifecycle_status:String(body.lifecycle_status||"unknown").trim().toLowerCase(),
+    discontinued_at:body.discontinued_at||null,
+    successor_part_number:String(body.successor_part_number||"").trim()||null,
+    aliases_text:Array.isArray(body.aliases)?body.aliases.join(" | "):(body.aliases_text||null),
+    specifications:body.specifications||{},
+    dimensions:body.dimensions||{},
+    electrical:body.electrical||{},
+    mechanical:body.mechanical||{},
+    notes:body.notes||null,
+    official_url:body.official_url||null,
+    source_confidence:Number(body.source_confidence??0.5),
+    source_last_checked_at:new Date().toISOString(),
+    updated_at:new Date().toISOString()
+  };
+  if(!row.part_number&&!row.name)throw new Error("part_number_or_name_required");
+  await sb(env,"/parts_catalog?on_conflict=manufacturer,normalized_part_number",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=representation"},body:JSON.stringify(row)});
+  return {ok:true,service:"PARTS INTELLIGENCE",version:VERSION,part:row};
+}
 
 function genericCommerceConfigured(env){
   return !!env.YAHOO_CLIENT_ID||!!env.EBAY_CLIENT_ID;
@@ -7334,6 +7728,9 @@ function openapi(origin){
   paths["/v1/travel/flights/search"]={post:{operationId:"searchFlights",summary:"Search live flight offers",description:"Search flight offers through Duffel Offer Requests v2 when DUFFEL_ACCESS_TOKEN is configured.",tags:["travel","flights","duffel"],security:[],requestBody:{required:true,content:{"application/json":{schema:{type:"object",required:["origin","destination","departure_date"],properties:{origin:{type:"string"},destination:{type:"string"},departure_date:{type:"string"},return_date:{type:"string"},adults:{type:"integer"},children:{type:"integer"},cabin_class:{type:"string"},max_connections:{type:"integer"},limit:{type:"integer"}}}}}},responses:{200:{description:"Flight offers"},503:{description:"Duffel is not configured"}}}};
   paths["/v1/travel/accommodations/search"]={post:{operationId:"searchAccommodations",summary:"Search live accommodation offers",description:"Search Booking.com Demand API v3.2 accommodation availability when credentials are configured.",tags:["travel","accommodation","booking"],security:[],responses:{200:{description:"Accommodation offers"},503:{description:"Booking Demand is not configured"}}}};
   paths["/v1/travel/accommodations/smart-search"]={post:{operationId:"smartSearchAccommodations",summary:"Natural-language accommodation search",description:"Use Booking.com Demand smart-search when available and configured.",tags:["travel","accommodation","ai-search"],security:[],responses:{200:{description:"Accommodation offers"},503:{description:"Booking Demand is not configured"}}}};
+  paths["/v1/parts/status"]={get:{operationId:"partsIntelligenceStatus",summary:"PARTS INTELLIGENCE catalog and ingest status",description:"Read-only status of the public manufacturer ingest pipeline and current parts catalog.",tags:["parts","industrial"],security:[],responses:{200:{description:"Parts ingest status"}}}};
+  paths["/v1/parts/search"]={get:{operationId:"searchPartsCatalog",summary:"Search exact/discontinued/industrial parts",description:"Free catalog search by part number, manufacturer or description. No new external API credential is required.",tags:["parts","industrial","replacement-parts","discontinued"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"part_number",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}},{in:"query",name:"limit",schema:{type:"integer",default:20}}],responses:{200:{description:"Part candidates"}}}};
+  paths["/v1/parts-intelligence"]={get:{operationId:"partsIntelligence",summary:"Paid exact-part lifecycle compatibility replacement and sourcing intelligence",description:"Resolves a part before payment, then returns lifecycle, verified successor/substitute relationships, official documents and sourcing intelligence. Compatibility is not inferred from title similarity.",tags:["parts","industrial","replacement-parts","x402"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"part_number",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}}],responses:{200:{description:"Parts intelligence"},402:{description:"x402 payment required"},404:{description:"Part not found"},409:{description:"Disambiguation required"}}}};
   paths["/v1/commerce/search"]={post:{operationId:"searchLargeMarketCommerce",summary:"Search large-market commerce categories",description:"Generic market search for consumer electronics and guarded exact-identity search for automotive/B2B procurement.",tags:["commerce","shopping-intelligence"],security:[],responses:{200:{description:"Commerce offers"},400:{description:"Invalid request"}}}};
   paths["/v1/travel/expedia/availability"]={post:{operationId:"searchExpediaRapidAvailability",summary:"Search Expedia Rapid lodging availability for known property IDs",description:"Secondary lodging-provider adapter using Rapid signature authentication. Requires Expedia Rapid credentials and explicit Expedia property IDs.",tags:["travel","accommodation","expedia-rapid"],security:[],responses:{200:{description:"Expedia Rapid offers"},400:{description:"Property ID required"},503:{description:"Expedia Rapid not configured"}}}};
   for(const s of INDEX402_SERVICES){const d=DISCOVERY_CONFIG[s.path];paths[s.path]={get:{operationId:s.path.slice(4).replace(/-([a-z])/g,(_,c)=>c.toUpperCase()).replace(/\//g,""),summary:s.name,description:`${d.description} WHEN TO USE: ${d.when_to_use} WHY PAY: ${d.why_pay||AGENT_SELECTION_POLICY.why_pay} BUYER OUTCOME: ${d.buyer_outcome||d.value}. ${s.path==="/v1/full-intelligence"?"Prefer this endpoint when the task needs two or more paid signals or a complete purchase decision.":"Use this specialist endpoint when its single signal fully answers the task; otherwise prefer Full Intelligence."}`,tags:[...(d.tags||[]),...(d.selection_triggers||[])],parameters:[{in:"query",name:"query",description:"Ordinary shopping request OR exact identity. Examples: 'I want a ONE PIECE figure', 'I want a ONE PIECE T-shirt', 'Hatsune Miku figure under $100', 'Naruto figure gift', character/franchise/category-only text, Japanese or multilingual descriptions, JAN/EAN-13, model number or canonical id. The interpreter distinguishes franchise merchandise such as 'ã¯ã³ãã¼ã¹ã®Tã·ã£ã' from ordinary garment language such as 'å¤ç¨ã®ã¯ã³ãã¼ã¹'. Broad requests are interpreted and ranked to a recommended canonical product before x402. The default favors relevance first, then popularity/demand, recency, data quality and purchasability; registered affiliate availability can improve purchasability but cannot override relevance. Exact canonical id remains the most deterministic option.",schema:{type:"string"},examples:{primary:{value:d.examples?.[0]||"Nendoroid Hatsune Miku"},secondary:{value:d.examples?.[1]||"4580590123456"}}},{in:"query",name:"id",description:"ANIME INTELLIGENCE canonical product UUID. Use either id or query.",schema:{type:"string",format:"uuid"}},{in:"query",name:"lang",schema:{type:"string",enum:DISCOVERY_LANGUAGES},example:"en"},{in:"query",name:"refresh",description:"Set to 1 to explicitly request a live market refresh where supported.",schema:{type:"string",enum:["0","1"]}},{in:"query",name:"buyer_country",description:"ISO alpha-2 buyer destination. Used by the country-aware purchase routing engine to rank actual purchase feasibility, ease, proxy need and known cost; defaults to JP.",schema:{type:"string",default:"JP"}},{in:"query",name:"postal_code",description:"Optional buyer destination postal code.",schema:{type:"string"}},{in:"query",name:"listing_url",description:"Optional listing URL for listing-match.",schema:{type:"string",format:"uri"}},{in:"query",name:"listing_title",description:"Optional listing title for listing-match when URL is unavailable.",schema:{type:"string"}}],"x-agent-intent":d.intent,"x-when-to-use":d.when_to_use,"x-why-pay":d.why_pay||AGENT_SELECTION_POLICY.why_pay,"x-buyer-outcome":d.buyer_outcome||d.value,"x-selection-triggers":d.selection_triggers||[],"x-prefer-over-generic-web":d.prefer_over||AGENT_SELECTION_POLICY.prefer_over_generic_web,"x-do-not-use-for":AGENT_SELECTION_POLICY.do_not_use_for,"x-agent-selection":agentSelectionMetadata(s.path),"x-agent-task-queries":discoveryTaskQueries(s.path),"x-commercial-discovery-keywords":COMMERCIAL_DISCOVERY_KEYWORDS,"x-value":d.value,"x-output-fields":d.output_fields,"x-search-languages":DISCOVERY_LANGUAGES,"x-multilingual-examples":MULTILINGUAL_DISCOVERY_EXAMPLES,"x-discovery-keywords":combinedDiscoveryKeywords(),"x-vague-intent-terms":GLOBAL_VAGUE_INTENT_TERMS,"x-payment-info":{protocol:"x402",protocols:["x402"],version:2,price:{mode:"fixed",currency:"USD",amount:s.price_usd.toFixed(3).replace(/0+$/g,"").replace(/\.$/,"")},price_usdc:s.price_usd,price_atomic:String(Math.round(s.price_usd*1000000)),currency:"USDC",network:SOLANA_MAINNET},responses:{200:{description:"Paid intelligence response after x402 settlement",content:{"application/json":{schema:paidResponse,examples:{representative:{value:bazaarOutputExample(s.path)}}}}},402:{description:"x402 payment required. Read the canonical PAYMENT-REQUIRED header and retry the same URL with PAYMENT-SIGNATURE. X-PAYMENT is also accepted as a compatibility alias for AgentCore clients.",headers:{"PAYMENT-REQUIRED":{description:"Base64-encoded x402 v2 PaymentRequired object",schema:{type:"string"}}}},404:{description:"Product could not be resolved before payment; charged=false."},409:{description:"Reserved for exceptional identity conflicts. Normal multi-candidate shopping queries do not stop here; they are ranked to a commercial default before payment."},503:{description:"Payment infrastructure or required configuration is unavailable."}}}};}
@@ -7356,6 +7753,17 @@ The same server also exposes AI PURCHASE INTELLIGENCE, an agent-neutral commerce
 Travel endpoints do not claim live inventory when credentials are absent. Missing provider credentials return a non-charged error response.
 
 Expedia Rapid is available as a secondary accommodation availability provider when credentials are configured and Expedia property IDs are supplied.
+
+## PARTS INTELLIGENCE
+- GET /v1/parts/status
+- GET /v1/parts/search
+- GET /v1/parts-intelligence - 0.05 USDC via x402
+- Use for discontinued parts, replacement parts, service parts, industrial components, appliance parts, camera/audio/tool/IT parts and exact model-number sourcing.
+- The system stores canonical part identity, lifecycle, official documents and explicit successor/substitute relations in Supabase.
+- Compatibility is never inferred from title similarity alone.
+- No new external API key is required. Existing Yahoo/eBay connectors are optional market enrichers only.
+- v3.10.2 uses Supabase bulk import plus admin upsert for initial catalog growth to keep the Worker compact and deploy-safe.
+- Initial source set: OMRON, Mitsubishi Electric FA, SMC, IDEC, Panasonic Industry, Yaskawa, Oriental Motor, THK, NSK and Azbil.
 
 ## Large-market commerce
 - POST /v1/commerce/search
@@ -7507,6 +7915,47 @@ const MCP_TOOLS=[
     },
     outputSchema:{type:"object",additionalProperties:true},
     annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}
+  },
+  {
+    name:"parts_search",
+    title:"Parts Search",
+    description:"Free search of the PARTS INTELLIGENCE catalog for discontinued parts, replacement parts, industrial components, appliance/service parts, camera/audio/tool/IT parts and other exact model-number items.",
+    inputSchema:{
+      type:"object",
+      properties:{
+        query:{type:"string"},
+        part_number:{type:"string"},
+        manufacturer:{type:"string"},
+        limit:{type:"integer",default:20}
+      },
+      anyOf:[{required:["query"]},{required:["part_number"]}]
+    },
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"parts_intelligence",
+    title:"Parts Intelligence",
+    description:"Paid exact-part intelligence for lifecycle status, discontinuation, verified successor/substitute relationships, official documents and sourcing. Compatibility is never inferred from title similarity alone. Price: 0.05 USDC via x402.",
+    inputSchema:{
+      type:"object",
+      properties:{
+        query:{type:"string"},
+        part_number:{type:"string"},
+        manufacturer:{type:"string"}
+      },
+      anyOf:[{required:["query"]},{required:["part_number"]}]
+    },
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true,paid:true,x402:true,price_usdc:0.05,endpoint:"/v1/parts-intelligence"}
+  },
+  {
+    name:"parts_status",
+    title:"Parts Intelligence Status",
+    description:"Read the current PARTS INTELLIGENCE catalog and public-source ingest pipeline status.",
+    inputSchema:{type:"object",properties:{}},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}
   }
 ];
 
@@ -7531,6 +7980,34 @@ async function mcp(request,env,origin){
     }
     if(name==="record_purchase_intent"){
       const data=await recordPurchaseIntent(env,args,"mcp");return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="parts_status"){
+      const data=await partsIngestStatus(env);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="parts_search"){
+      const fake=new URL(`${origin}/v1/parts/search`);
+      if(args.query)fake.searchParams.set("query",args.query);
+      if(args.part_number)fake.searchParams.set("part_number",args.part_number);
+      if(args.manufacturer)fake.searchParams.set("manufacturer",args.manufacturer);
+      if(args.limit)fake.searchParams.set("limit",String(args.limit));
+      const data=await partsSearchApi(env,fake);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="parts_intelligence"){
+      const u=new URL(`${origin}/v1/parts-intelligence`);
+      if(args.query)u.searchParams.set("query",args.query);
+      if(args.part_number)u.searchParams.set("part_number",args.part_number);
+      if(args.manufacturer)u.searchParams.set("manufacturer",args.manufacturer);
+      const payload={
+        paid_x402_url:u.toString(),
+        payment:"Solana USDC via x402 v2",
+        price_usdc:0.05,
+        intent:"exact_part_lifecycle_compatibility_replacement_and_sourcing",
+        compatibility_policy:"Only verified relation records can produce substitute recommendations.",
+        expected_output:["canonical part identity","lifecycle/discontinued status","successor","verified substitutes","official documents","market observations","sourcing decision"]
+      };
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(payload)}],structuredContent:payload});
     }
     if(name==="commerce_search"){
       const data=await genericCommerceSearch(env,args);
@@ -8328,7 +8805,7 @@ export default{
     try{
       if(url.pathname==="/icon.svg"&&request.method==="GET")return new Response(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#0b1020"/><path d="M55 190L104 58h48l49 132h-37l-10-31H101l-10 31H55zm57-63h32l-16-50-16 50z" fill="#fff"/><circle cx="190" cy="66" r="18" fill="#fff"/></svg>`,{status:200,headers:corsHeaders({"content-type":"image/svg+xml; charset=utf-8","cache-control":"public, max-age=86400"})});
       if(url.pathname==="/"){const now=Date.now();return json({service:"ANIME INTELLIGENCE",version:VERSION,status:"online",architecture:"FREE_WORKER_8_STAGE_ROTATION",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"* * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,self_growing_database:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,natural_shopping_recommendation_v3739:true,budget_location_usecase_inference_v3739:true,intent_aware_candidate_ranking_v3739:true,no_payment_recommendation_audit_v3739:true,payment_core_frozen_v3739:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:rakutenWebServiceConfigured(env)?"live_web_service_plus_affiliate":"pre_generated_only",rakuten_search_fallback_is_affiliate:false,public_shop:`${origin}/shop`,rakuten_affiliate_public_media:true,api_returns_purchase_page_for_rakuten:true,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,search_locales:DISCOVERY_LOCALES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,x402_local_preflight_v3711:true,x402_phantom_mainnet_e2e_v3712:true,x402_pc_phantom_e2e_v3713:true,x402_svm_feepayer_v3714:true,x402_browser_rpc_bridge_v3715:true,x402_rpc_failover_diagnostic_v3716:true,x402_rpc_admin_auth_fixed_v3717:true,x402_rpc_auth_flow_fixed_v3718:true,x402_rpc_key_resolver_fixed_v3719:true,x402_rpc_diagnostic_runtime_fixed_v3720:true,x402_rpc_diagnostic_self_contained_v3721:true,phantom_presign_simulation_v3722:true,x402_usdc_account_diagnostic_v3723:true,x402_feepayer_handshake_fixed_v3725:true,x402_phantom_modifying_signer_fixed_v3726:true,x402_phantom_lighthouse_7ix_fixed_v3727:true,semantic_commercial_discovery_v3728:true,agent_task_query_pack_v3728:true,free_to_paid_routing_v3728:true,compact_x402_discovery_header_v3730:true,commerce_decision_expansion_v3731:true,japan_buyer_first_class_v3731:true,listing_match_v3731:true,purchase_deadline_v3731:true,landed_cost_v3731:true,price_history_v3731:true,x402_fast_gate_v3732:true,nonblocking_commerce_telemetry_v3732:true,kpi_recent_history_revenue_v3732:true,bazaar_spec_metadata_v3733:true,bazaar_canonical_resource_url_v3733:true,bazaar_service_metadata_limits_v3733:true,bazaar_extension_response_observability_v3733:true,x402_all_paid_endpoints_e2e_v3736:true,bazaar_metadata_quality_audit_v3737:true,external_payer_kpi_v3737:true,identify_conversion_semantics_v3737:true,mojibake_guard_v3737:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
-      if(url.pathname==="/health"){const productRows=await sb(env,"/products?select=id&limit=1"),now=Date.now();return json({ok:true,service:"ANIME INTELLIGENCE",version:VERSION,supabase:"ok",has_product:Array.isArray(productRows)&&productRows.length>0,autonomous_pipeline:{architecture:"8-stage-rotating",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),stages:ROTATION,one_stage_per_invocation:true,scheduled_time_deterministic:true},marketplace:{yahoo_configured:!!env.YAHOO_CLIENT_ID,ebay_configured:!!(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET),ebay_epn_affiliate_configured:ebayEpnConfigured(env),rakuten_configured:rakutenConfigured(env),rakuten_web_service_configured:rakutenWebServiceConfigured(env),rakuten_mode:"affiliate_link_only",environment_usdjpy:envUsdJpyRate(env),ecb_fx_fallback:true},x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},discovery:{mcp:true,mcp_paid_tools:MCP_TOOLS.filter(t=>t?.annotations?.paid===true).length,openapi:true,index402:true,bazaar_extension:true,coinbase_bazaar_direct:isCdpFacilitator(env),multilingual_fuzzy_search:true,global_vague_intent:true,agent402_self_register:true,languages:DISCOVERY_LANGUAGES,locales:DISCOVERY_LOCALES},atelier:{configured:atelierConfigured(env),poll_every_minutes:ATELIER_POLL_EVERY_MINUTES},travel:{architecture:"multi_provider",booking_demand_configured:bookingDemandConfigured(env),duffel_configured:duffelConfigured(env),expedia_rapid_configured:expediaRapidConfigured(env),amadeus_configured:amadeusConfigured(env),status:(bookingDemandConfigured(env)||duffelConfigured(env)||expediaRapidConfigured(env))?"partially_active":"awaiting_credentials"},commerce:{generic_market_search_configured:genericCommerceConfigured(env),consumer_electronics:"active_if_provider_credentials",automotive_parts:"exact_part_guard",enterprise_procurement:"exact_mpn_guard"},identity_guard_version:VERSION,quality_auto_loop:true});}
+      if(url.pathname==="/health"){const productRows=await sb(env,"/products?select=id&limit=1"),now=Date.now();return json({ok:true,service:"ANIME INTELLIGENCE",version:VERSION,supabase:"ok",has_product:Array.isArray(productRows)&&productRows.length>0,autonomous_pipeline:{architecture:"8-stage-rotating",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),stages:ROTATION,one_stage_per_invocation:true,scheduled_time_deterministic:true},marketplace:{yahoo_configured:!!env.YAHOO_CLIENT_ID,ebay_configured:!!(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET),ebay_epn_affiliate_configured:ebayEpnConfigured(env),rakuten_configured:rakutenConfigured(env),rakuten_web_service_configured:rakutenWebServiceConfigured(env),rakuten_mode:"affiliate_link_only",environment_usdjpy:envUsdJpyRate(env),ecb_fx_fallback:true},x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},discovery:{mcp:true,mcp_paid_tools:MCP_TOOLS.filter(t=>t?.annotations?.paid===true).length,openapi:true,index402:true,bazaar_extension:true,coinbase_bazaar_direct:isCdpFacilitator(env),multilingual_fuzzy_search:true,global_vague_intent:true,agent402_self_register:true,languages:DISCOVERY_LANGUAGES,locales:DISCOVERY_LOCALES},atelier:{configured:atelierConfigured(env),poll_every_minutes:ATELIER_POLL_EVERY_MINUTES},travel:{architecture:"multi_provider",booking_demand_configured:bookingDemandConfigured(env),duffel_configured:duffelConfigured(env),expedia_rapid_configured:expediaRapidConfigured(env),amadeus_configured:amadeusConfigured(env),status:(bookingDemandConfigured(env)||duffelConfigured(env)||expediaRapidConfigured(env))?"partially_active":"awaiting_credentials"},commerce:{generic_market_search_configured:genericCommerceConfigured(env),consumer_electronics:"active_if_provider_credentials",automotive_parts:"exact_part_guard",enterprise_procurement:"exact_mpn_guard"},parts_intelligence:{status:"active_supabase_core",new_external_api_keys_required:false,paid_endpoint:"/v1/parts-intelligence",free_search:"/v1/parts/search",status_endpoint:"/v1/parts/status",official_sources:DEFAULT_PARTS_SOURCES.length,scheduled_ingest:false,ingest_mode:"supabase_bulk_import_plus_admin_upsert"},identity_guard_version:VERSION,quality_auto_loop:true});}
       if(url.pathname.startsWith("/atelier/result/")&&request.method==="GET"){const orderId=decodeURIComponent(url.pathname.slice("/atelier/result/".length));const result=await loadAtelierResult(env,orderId);return result?json(result,200,{"cache-control":"private, no-store"}):json({error:"atelier_result_not_found"},404);}
       if(url.pathname==="/agent/profile"&&request.method==="GET")return json({name:"ANIME INTELLIGENCE",description:"Agent commerce intelligence. Production capabilities include Japanese anime collectible purchase intelligence plus a multi-provider Travel Core. Travel routes accommodation/ground inventory through Booking.com Demand when configured and flight search through Duffel when configured; secondary Expedia Rapid and Amadeus provider slots avoid permanent single-vendor architecture. Missing credentials or context are surfaced rather than guessed.",capabilities:["multilingual-vague-shopping-intent","hard-and-soft-constraint-ranking","verified-budget-guard","missing-context-no-guess","canonical-listing-separation","collectible-identification","market-valuation","rarity","authenticity-risk","exact-identity-buy-wait","buyer-country-purchase-routing","recommendation-confidence","agent-commerce-core","travel-shopping-adapter"],commercial_discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,task_queries:DISCOVERY_TASK_QUERIES,agent_selection:AGENT_SELECTION_POLICY,version:VERSION});
       if(url.pathname==="/agent/services"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,payment_flow:{protocol:"x402",version:2,asset:"USDC",network:SOLANA_MAINNET,first_request:"GET service URL without payment proof",on_402:"Read PAYMENT-REQUIRED and accepts[0]",retry:"Retry the exact same URL with PAYMENT-SIGNATURE",compatibility_alias:"X-PAYMENT",success:"HTTP 200 + PAYMENT-RESPONSE"},services:INDEX402_SERVICES.map(x=>({path:x.path,title:x.name,category:"anime_collectibles_intelligence",price_usdc:x.price_usd,price_type:"fixed",protocol:"x402",network:SOLANA_MAINNET,capability:DISCOVERY_CONFIG[x.path]?.value||null,when_to_use:DISCOVERY_CONFIG[x.path]?.when_to_use||null,why_pay:DISCOVERY_CONFIG[x.path]?.why_pay||AGENT_SELECTION_POLICY.why_pay,buyer_outcome:DISCOVERY_CONFIG[x.path]?.buyer_outcome||DISCOVERY_CONFIG[x.path]?.value||null,retry_header:"PAYMENT-SIGNATURE",accepted_payment_headers:["PAYMENT-SIGNATURE","X-PAYMENT"],example_url:`${origin}${x.path}?query=${encodeURIComponent(DISCOVERY_CONFIG[x.path]?.examples?.[0]||"Hatsune Miku figure")}`})),travel:{architecture:"multi_provider",status_url:`${origin}/v1/travel/status`,shopping_intelligence_url:`${origin}/v1/travel/shopping-intelligence`,flight_search_url:`${origin}/v1/travel/flights/search`,accommodation_search_url:`${origin}/v1/travel/accommodations/search`,providers:["booking","duffel","expedia_rapid","amadeus"]}});
@@ -8342,6 +8819,9 @@ export default{
       if(url.pathname==="/x402/solana-rpc")return x402SolanaRpcBridge(request);
       if(url.pathname==="/mcp")return mcp(request,env,origin);
       if(url.pathname==="/v1/search")return json(await freeSearch(request,env,url));
+      if(url.pathname==="/v1/parts/status"&&request.method==="GET")return json(await partsIngestStatus(env));
+      if(url.pathname==="/v1/parts/search"&&request.method==="GET")return json(await partsSearchApi(env,url));
+      if(url.pathname==="/v1/parts-intelligence"&&request.method==="GET")return partsIntelligenceApi(request,env,url,ctx);
       if(url.pathname==="/v1/commerce/domains"&&request.method==="GET")return json(commerceDomainsResponse());
       if(url.pathname==="/v1/commerce/search"&&request.method==="POST"){
         let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
@@ -8362,6 +8842,20 @@ export default{
       if(url.pathname==="/admin")return htmlResponse(adminPage(env));
       if(url.pathname.startsWith("/admin/")){
         if(!authorized(request,env))return json({error:"unauthorized"},401);
+        if(url.pathname==="/admin/parts/seed-sources"&&request.method==="POST"){
+          try{return json(await seedDefaultPartsSources(env));}catch(e){return json({ok:false,error:"parts_source_seed_failed",detail:safeError(e)},500);}
+        }
+        if(url.pathname==="/admin/parts/ingest-status"&&request.method==="GET"){
+          try{return json(await partsIngestStatus(env));}catch(e){return json({ok:false,error:"parts_ingest_status_failed",detail:safeError(e)},500);}
+        }
+        if(url.pathname==="/admin/parts/ingest-run"&&request.method==="POST"){
+          let body={};try{body=await request.json();}catch{body={};}
+          try{return json(await runPartsIngest(env,{sources:body.sources||2,pages:body.pages||8}));}catch(e){return json({ok:false,error:"parts_ingest_run_failed",detail:safeError(e)},500);}
+        }
+        if(url.pathname==="/admin/parts/upsert"&&request.method==="POST"){
+          let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
+          try{return json(await upsertPartAdmin(env,body));}catch(e){return json({ok:false,error:"parts_upsert_failed",detail:safeError(e)},400);}
+        }
         if(url.pathname==="/admin/x402-rpc-check"&&request.method==="GET")return json(await x402RpcDiagnostic());
         if(url.pathname==="/admin/world-discovery-audit"&&request.method==="GET")return json(await worldDiscoveryAudit(env,url.searchParams.get("mode")||"all",origin));
         if(url.pathname==="/admin/atelier-status"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,atelier:await atelierStatus(env)});
@@ -8485,7 +8979,7 @@ export default{
     const dt=new Date(scheduledTime),minute=dt.getUTCMinutes(),hourBoundary=minute===0;
     const slot=rotationSlotFromTime(scheduledTime),stage=ROTATION[slot];
     ctx.waitUntil((async()=>{
-      const report={version:VERSION,scheduled_time:dt.toISOString(),recommended_cron:"* * * * *",catalog:null,dynamic_catalog:null,yahoo_catalog_cooldown:null,fallback_growth:null,catalog_enrichment:{status:"not_due"},official_mass:{status:"deferred_to_hour_boundary"},rotation:{status:"deferred_to_hour_boundary"},monetization:{status:"deferred_to_hour_boundary"},atelier:{status:"not_due"},errors:[]};
+      const report={version:VERSION,scheduled_time:dt.toISOString(),recommended_cron:"* * * * *",catalog:null,dynamic_catalog:null,yahoo_catalog_cooldown:null,fallback_growth:null,catalog_enrichment:{status:"not_due"},official_mass:{status:"deferred_to_hour_boundary"},rotation:{status:"deferred_to_hour_boundary"},monetization:{status:"deferred_to_hour_boundary"},atelier:{status:"not_due"},parts_ingest:{status:"supabase_bulk_import_mode"},errors:[]};
       let yahooCooldown=await yahooCatalogCooldownState(env);report.yahoo_catalog_cooldown=yahooCooldown;
       if(!yahooCooldown.active){
         try{
