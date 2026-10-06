@@ -1,67 +1,70 @@
-# ANIME INTELLIGENCE
+# ANIME INTELLIGENCE / AI PURCHASE INTELLIGENCE
 
-Anime shopping intelligence for AI agents buying physical Japanese anime merchandise: identify the exact product, check value and authenticity risk, decide BUY/WAIT, and choose a practical purchase route for the buyer's country.
-
-Use ANIME INTELLIGENCE when the buyer asks things like **"Which Hatsune Miku Nendoroid is this?"**, **"Is this ONE PIECE figure overpriced?"**, **"Is this listing fake?"**, **"Should I buy now or wait?"**, or **"Where can I actually buy this from the US?"**. Broad buyer language is accepted; exact JAN codes and edition names are not required for discovery.
+Agent commerce intelligence for AI agents. The production service combines Japanese anime collectible purchase intelligence with a multi-provider Travel Core.
 
 **Production MCP:** https://anime-intelligence.goodmy0312.workers.dev/mcp  
 **OpenAPI:** https://anime-intelligence.goodmy0312.workers.dev/openapi.json  
 **x402 discovery:** https://anime-intelligence.goodmy0312.workers.dev/.well-known/x402  
-**Free search:** https://anime-intelligence.goodmy0312.workers.dev/v1/search  
+**Free anime search:** https://anime-intelligence.goodmy0312.workers.dev/v1/search  
 **Agent services:** https://anime-intelligence.goodmy0312.workers.dev/agent/services  
+**Travel status:** https://anime-intelligence.goodmy0312.workers.dev/v1/travel/status  
+**Travel shopping intelligence:** https://anime-intelligence.goodmy0312.workers.dev/v1/travel/shopping-intelligence  
+**Flight search:** https://anime-intelligence.goodmy0312.workers.dev/v1/travel/flights/search  
 **Public shop:** https://anime-intelligence.goodmy0312.workers.dev/shop  
-**Version:** 3.7.98
+**Version:** 3.9.1
 
 <!-- mcp-name: io.github.Mike05102/anime-intelligence-mcp -->
 
-## What it does
+## Anime collectible intelligence
 
 ANIME INTELLIGENCE resolves and evaluates physical Japanese anime collectibles and character merchandise across figures, Nendoroids, figma, model kits, plush, acrylic goods, keychains, badges, lottery prizes, trading cards, collaboration sneakers, apparel and related limited goods.
 
-It is designed for autonomous shopping agents that need a product-level decision rather than generic search results. The service separates canonical product identity from noisy marketplace listing titles, preserves hard franchise/character/category constraints, and only claims softer preferences such as budget, color, size, condition, shipping or availability when there is evidence.
+It separates canonical product identity from noisy marketplace listing titles and supports multilingual discovery. Core languages are Japanese, English, Simplified Chinese, Traditional Chinese, Korean, Spanish, French and German.
 
-Core multilingual discovery support: **Japanese, English, Simplified Chinese, Traditional Chinese, Korean, Spanish, French and German**. Other languages are best-effort only.
+## AI Purchase Intelligence
 
-## Agent selection
+The same MCP server exposes a general commerce layer for autonomous shopping agents.
 
-Start with the free search tool when the user wants options or the exact product is still unclear. Use a paid specialist tool when one signal fully answers the task; use **full-intelligence** when the task needs multiple signals or an end-to-end purchase decision.
+Current large-market adapter:
 
-High-value triggers include:
+- **Travel**
+  - Accommodation / ground inventory: Booking.com Demand API when configured
+  - Flights: Duffel when configured
+  - Secondary adapter slots: Expedia Rapid and Amadeus
+  - Provider readiness: `/v1/travel/status`
+  - Unified decision endpoint: `/v1/travel/shopping-intelligence`
+  - Flight search: `/v1/travel/flights/search`
+  - Accommodation search: `/v1/travel/accommodations/search`
+  - Natural-language accommodation search: `/v1/travel/accommodations/smart-search`
 
-- exact product / edition identification
-- current market value or price appraisal
-- counterfeit / bootleg / suspicious-listing screening
-- rarity and rerelease risk
-- BUY / WAIT / WATCH / AVOID timing
-- listing-to-canonical-product matching
-- preorder / lottery deadline checks
-- buyer-country landed-cost context
-- price history
-- best current purchase route
+Travel does not claim live availability when provider credentials are absent.
 
-## x402 entry point
+## Paid x402 intelligence endpoints
 
-For a low-cost first paid call, use:
-
-- `identify` — **0.005 USDC** — canonical product / edition identification.
-
-If a paid endpoint returns HTTP 402, read the machine-readable x402 payment requirement and retry the **same request** with a valid `PAYMENT-SIGNATURE` header (legacy alias `X-PAYMENT` is also accepted).
+- `identify` â **0.005 USDC**
+- `market` â **0.01 USDC**
+- `rarity` â **0.01 USDC**
+- `listing-match` â **0.01 USDC**
+- `deadline` â **0.01 USDC**
+- `authenticity` â **0.02 USDC**
+- `buy-wait` â **0.02 USDC**
+- `landed-cost` â **0.02 USDC**
+- `price-history` â **0.02 USDC**
+- `best-place` â **0.03 USDC**
+- `full-intelligence` â **0.05 USDC**
+- `shopping-intelligence` â **0.05 USDC**
 
 Payments use **x402 v2**, **USDC on Solana mainnet**.
 
-## Paid x402 endpoints
+## MCP tool surface
 
-- `identify` — **0.005 USDC** — exact product / edition / JAN identification.
-- `market` — **0.01 USDC** — current identity-matched Japan/global market value.
-- `rarity` — **0.01 USDC** — scarcity and rerelease/replenishment risk.
-- `listing-match` — **0.01 USDC** — verify whether a marketplace listing matches the exact canonical product/edition.
-- `deadline` — **0.01 USDC** — preorder, lottery and order-window deadline intelligence when known.
-- `authenticity` — **0.02 USDC** — counterfeit, bootleg and suspicious-listing risk.
-- `buy-wait` — **0.02 USDC** — BUY / WAIT / WATCH / AVOID purchase-timing decision.
-- `landed-cost` — **0.02 USDC** — buyer-country-aware purchase cost; Japan buyers default to JP.
-- `price-history` — **0.02 USDC** — 7/30/90/180-day observed asking-price history where available.
-- `best-place` — **0.03 USDC** — strongest current matched purchase route.
-- `full-intelligence` — **0.05 USDC** — end-to-end purchase intelligence in one call.
+Version 3.9.1 exposes **16 MCP tools**:
+
+- 12 paid x402 intelligence tools
+- `search_anime_product`
+- `record_purchase_intent`
+- `travel_shopping_intelligence`
+- `travel_provider_status`
 
 ## Discovery surfaces
 
@@ -74,14 +77,10 @@ Payments use **x402 v2**, **USDC on Solana mainnet**.
 - Agent services: `https://anime-intelligence.goodmy0312.workers.dev/agent/services`
 - LLM discovery text: `https://anime-intelligence.goodmy0312.workers.dev/llms.txt`
 
-## Discovery keywords
+## Registry identity
 
-anime collectibles, Japanese collectibles, anime shopping agent, anime figure recommendation, Nendoroid, figure authenticity, bootleg risk, collectible rarity, rerelease risk, buy or wait, best place to buy anime figure, listing match, preorder deadline, landed cost Japan, price history, Japan-only merchandise, autonomous shopping agent, x402, Solana USDC.
+Official MCP Registry package name:
 
-## Production status
+`io.github.Mike05102/anime-intelligence-mcp`
 
-ANIME INTELLIGENCE exposes **12 MCP tools: 11 paid x402 endpoints plus 1 free search tool**. The service uses Coinbase CDP x402 facilitation, Solana USDC settlement, MCP/OpenAPI discovery and Bazaar-compatible discovery metadata.
-
-Production preflight audits preserve explicit hard constraints and avoid charging when required product or preference evidence is missing. Social-context requests without the referenced image or URL are guarded rather than guessed.
-
-Official MCP Registry package name: `io.github.Mike05102/anime-intelligence-mcp`.
+The repository `server.json`, production Worker version, MCP tool surface and registry publication should remain on the same release version to prevent downstream directories from reverting to stale tool metadata.
