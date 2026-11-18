@@ -1,0 +1,51 @@
+name: GPD independent availability monitor
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check independent DNS and GPD HTTP health
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          for host in example.com github.com anime-intelligence.goodmy0312.workers.dev; do
+            echo "DNS $host:"
+            getent ahostsv4 "$host" | head -n 2 || true
+          done
+          check() {
+            local label="$1" url="$2" output code
+            output="$(mktemp)"
+            code="$(curl -L -sS --connect-timeout 8 --max-time 25 -o "$output" -w '%{http_code}' "$url")"
+            local status=$?
+            echo "$label curl_exit=$status http=$code"
+            head -c 1200 "$output" || true
+            echo
+            rm -f "$output"
+            if [ "$status" -ne 0 ]; then return 1; fi
+            if [[ ! "$code" =~ ^2[0-9][0-9]$ ]]; then return 1; fi
+            return 0
+          }
+          control_fail=0
+          check control_example https://example.com/ || control_fail=1
+          check control_github https://github.com/ || control_fail=1
+          if [ "$control_fail" -ne 0 ]; then
+            echo "::warning::GitHub runner connectivity issue; GPD status is UNKNOWN."
+            exit 0
+          fi
+          gpd_fail=0
+          check gpd_x402_status https://anime-intelligence.goodmy0312.workers.dev/x402/status || gpd_fail=1
+          check gpd_discovery_health https://anime-intelligence.goodmy0312.workers.dev/v1/system/discovery-health || gpd_fail=1
+          if [ "$gpd_fail" -ne 0 ]; then
+            echo "::error::GPD endpoint failed while independent control sites worked."
+            exit 1
+          fi
+          echo "GPD HTTP endpoints responded successfully. This does NOT prove revenue or payment settlement."
