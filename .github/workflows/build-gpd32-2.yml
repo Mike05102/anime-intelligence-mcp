@@ -1,0 +1,59 @@
+name: Build GPD v32.2 identity enrichment
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build-gpd32-2.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Improve discovery identity enrichment
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src=Path('releases/GPD32_1_COMPLETE_WORKER.js').read_text()
+          old='''    for(const o of enrichedOffers){
+      if(enrichmentDiagnostics.attempted>=3)break;
+      if(o.provider!=="ebay"||!o.id||validGtin(digitsOnly(o.gtin||o.jan_code||""))||o.mpn||o.manufacturer_part_number)continue;'''
+          new='''    // Spend the same three free-tier detail calls on the most relevant eligible
+    // listings, rotating the start offset across Cron slots for catalog coverage.
+    // Never synthesize a canonical product from a seller listing ID or title alone.
+    const identityTargets=enrichedOffers.filter(o=>o.provider==="ebay"&&o.id&&!validGtin(digitsOnly(o.gtin||o.jan_code||""))&&!o.mpn&&!o.manufacturer_part_number)
+      .sort((a,b)=>universalCandidateRelevance(query,b)-universalCandidateRelevance(query,a));
+    const identityOffset=identityTargets.length?Math.floor(Date.parse(now)/600000)%identityTargets.length:0;
+    const identityQueue=identityTargets.slice(identityOffset).concat(identityTargets.slice(0,identityOffset));
+    for(const o of identityQueue){
+      if(enrichmentDiagnostics.attempted>=3)break;'''
+          assert src.count(old)==1, 'Enrichment loop not uniquely found'
+          src=src.replace(old,new)
+          old2='''        const rawMpn=String(detail?.mpn||mpnAspect?.value||"").trim();'''
+          new2='''        const aspectValue=(a)=>Array.isArray(a?.value)?a.value[0]:a?.value;
+        const rawMpn=String(detail?.mpn||detail?.product?.mpn||aspectValue(mpnAspect)||"").trim();'''
+          assert src.count(old2)==1, 'MPN extraction not uniquely found'
+          src=src.replace(old2,new2)
+          old3='''        if(!o.brand)o.brand=String(detail?.brand||brandAspect?.value||"").trim()||null;'''
+          new3='''        if(!o.brand)o.brand=String(detail?.brand||detail?.product?.brand||aspectValue(brandAspect)||"").trim()||null;'''
+          assert src.count(old3)==1, 'Brand extraction not uniquely found'
+          src=src.replace(old3,new3)
+          old4='''    const promotionDiagnostics={gtin_valid:0,structured_mpn_valid:0,missing_identity:0,quality_rejected:0,proposed:0,confirmed:0,write_errors:[]};'''
+          new4='''    const promotionDiagnostics={gtin_valid:0,structured_mpn_valid:0,missing_identity:0,quality_rejected:0,proposed:0,confirmed:0,write_errors:[],identity_detail_attempted:enrichmentDiagnostics.attempted,identity_detail_successful:enrichmentDiagnostics.successful,identity_detail_gtin_found:enrichmentDiagnostics.gtin_found,identity_detail_mpn_found:enrichmentDiagnostics.mpn_found,provisional_listings_staged:enrichmentDiagnostics.staged};'''
+          assert src.count(old4)==1, 'Diagnostics not uniquely found'
+          src=src.replace(old4,new4)
+          src=src.replace('const VERSION="32.0.0";','const VERSION="32.2.0";',1)
+          src=src.replace('20261119-3201-jan-owner-reconciliation-a1','20261119-3202-identity-enrichment-a1')
+          out=Path('releases/GPD32_2_COMPLETE_WORKER.js')
+          out.write_text(src)
+          print('Created',out,'bytes',out.stat().st_size)
+          PY
+          node --check releases/GPD32_2_COMPLETE_WORKER.js
+      - name: Commit full deployable Worker
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/GPD32_2_COMPLETE_WORKER.js
+          git commit -m "Publish complete GPD v32.2 Worker with identity enrichment diagnostics"
+          git push
