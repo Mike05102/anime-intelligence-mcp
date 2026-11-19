@@ -1,0 +1,35 @@
+name: Publish GPD v32.5 ten thousand per category
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-gpd32-5.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and validate Worker
+        run: |
+          python3 scripts/build_gpd32_5.py
+          node --check releases/GPD32_5_COMPLETE_WORKER.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('releases/GPD32_5_COMPLETE_WORKER.js').read_text()
+          assert 'const VERSION="32.5.0"' in s
+          assert 'const UNIVERSAL_GENERIC_DOMAIN_TARGET=10000;' in s
+          assert 'rotationAnchors[domainVisit%rotationAnchors.length]' in s
+          assert 'generic_domain_target_total:UNIVERSAL_GENERIC_DOMAIN_TARGET*UNIVERSAL_GENERIC_DOMAINS.length' in s
+          assert 'if(enrichmentDiagnostics.attempted>=5)break;' in s
+          assert 'Math.max(55,offerEvidenceScore(o))' not in s
+          print('PASS: syntax, category goal, rotation, budget, evidence integrity')
+          PY
+      - name: Publish complete Worker
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add releases/GPD32_5_COMPLETE_WORKER.js
+          git commit -m 'Publish complete GPD v32.5 Worker'
+          git push
