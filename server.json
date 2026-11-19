@@ -1,14 +1,14 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Mike05102/anime-intelligence-mcp",
-  "title": "ANIME INTELLIGENCE / AI PURCHASE INTELLIGENCE",
-  "description": "AI commerce intelligence for anime, industrial parts, replacements, sourcing and agent buying.",
+  "title": "GLOBAL PURCHASE DECISION — AI Agent Product & Sourcing Intelligence",
+  "description": "MCP purchase-decision intelligence for AI agents: product identity, sourcing, industrial parts, anime collectibles and cross-category buying decisions. x402 Solana USDC paid API.",
   "websiteUrl": "https://anime-intelligence.goodmy0312.workers.dev",
   "repository": {
     "url": "https://github.com/Mike05102/anime-intelligence-mcp",
     "source": "github"
   },
-  "version": "3.10.2",
+  "version": "32.0.0",
   "remotes": [
     {
       "type": "streamable-http",
