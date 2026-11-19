@@ -1,0 +1,1000 @@
+
+const MERCHANT_ADAPTER_TEMPLATES=[
+  {merchant_slug:"monotaro-japan",merchant_name:"MonotaRO",root:"https://www.monotaro.com",website_url:"https://www.monotaro.com/",country_code:"JP",source_type:"industrial_retailer_public_catalog",priority:90,allowPrefixes:["https://www.monotaro.com/s/","https://www.monotaro.com/g/","https://www.monotaro.com/p/"],currency:"JPY",ships_to:["JP"]},
+  {merchant_slug:"misumi-japan",merchant_name:"MISUMI Japan",root:"https://jp.misumi-ec.com",website_url:"https://jp.misumi-ec.com/",country_code:"JP",source_type:"industrial_distributor_public_catalog",priority:98,allowPrefixes:["https://jp.misumi-ec.com/vona2/detail/","https://jp.misumi-ec.com/vona2/result/"],currency:"JPY",ships_to:["JP"]},
+  {merchant_slug:"digikey-japan",merchant_name:"DigiKey Japan",root:"https://www.digikey.jp",website_url:"https://www.digikey.jp/",country_code:"JP",source_type:"electronic_distributor_public_catalog",priority:97,allowPrefixes:["https://www.digikey.jp/ja/products/detail/","https://www.digikey.jp/ja/products/result"],currency:"JPY",ships_to:["JP"]},
+  {merchant_slug:"mouser",merchant_name:"Mouser Electronics",root:"https://www.mouser.com",website_url:"https://www.mouser.com/",country_code:"US",source_type:"electronic_distributor_public_catalog",priority:96,allowPrefixes:["https://www.mouser.com/ProductDetail/","https://www.mouser.com/c/"],currency:"USD",ships_to:null}
+];
+
+const EXISTING_WATCH_MANUFACTURERS=new Set(OFFICIAL_WATCH_SOURCES_BASE.map(x=>x.manufacturer));
+const OFFICIAL_WATCH_SOURCES_FALLBACK=MANUFACTURER_UNIVERSE
+  .filter(m=>!EXISTING_WATCH_MANUFACTURERS.has(m.name))
+  .map(m=>({
+    kind:"manufacturer_watch",
+    slug:`watch-root-${sourceKey(m.name)}`,
+    manufacturer:m.name,
+    root:m.official_root,
+    seeds:[m.official_root],
+    allowPrefixes:[m.official_root],
+    priority:55,
+    source_tier:"D_root",
+    applications:m.applications,
+    domains:m.domains,
+    collection_enabled:true,
+    max_depth:0,
+    refresh_days:14,
+    watch_only:true,
+    fallback_root_watch:true
+  }));
+const OFFICIAL_WATCH_SOURCES=[...OFFICIAL_WATCH_SOURCES_BASE,...OFFICIAL_WATCH_SOURCES_FALLBACK];
+
+const BASE_OFFER_MANUFACTURERS=new Set(OFFER_SOURCES_BASE.filter(x=>x.collection_enabled!==false).map(x=>`${x.merchant_slug}|${x.manufacturer}`));
+const OFFER_SOURCES_EXPANDED=[];
+for(const m of MANUFACTURER_UNIVERSE){
+  for(const t of MERCHANT_ADAPTER_TEMPLATES){
+    if(BASE_OFFER_MANUFACTURERS.has(`${t.merchant_slug}|${m.name}`))continue;
+    OFFER_SOURCES_EXPANDED.push({
+      kind:"merchant_offer",
+      slug:`offer-${sourceKey(t.merchant_slug)}-${sourceKey(m.name)}`,
+      merchant_slug:t.merchant_slug,
+      merchant_name:t.merchant_name,
+      manufacturer:m.name,
+      root:t.root,
+      website_url:t.website_url,
+      country_code:t.country_code,
+      verified_merchant:false,
+      source_type:t.source_type,
+      priority:t.priority,
+      seeds:[],
+      bootstrapSeeds:[],
+      allowPrefixes:t.allowPrefixes,
+      authenticity_evidence_url:null,
+      tax_included:false,
+      currency:t.currency,
+      ships_to:t.ships_to,
+      collection_enabled:true,
+      generated_adapter:true
+    });
+  }
+}
+const OFFER_SOURCES=[...OFFER_SOURCES_BASE,...OFFER_SOURCES_EXPANDED];
+const ALL_SOURCES=[...SOURCES,...OFFICIAL_WATCH_SOURCES,...OFFER_SOURCES];
+
+function merchantSearchUrl(source,partNumber){
+  const q=encodeURIComponent(String(partNumber||"").trim());
+  if(!q)return null;
+  if(source.merchant_slug==="monotaro-japan")return `https://www.monotaro.com/s/q-${q}/`;
+  if(source.merchant_slug==="misumi-japan")return `https://jp.misumi-ec.com/vona2/result/?Keyword=${q}`;
+  if(source.merchant_slug==="digikey-japan")return `https://www.digikey.jp/ja/products/result?keywords=${q}`;
+  if(source.merchant_slug==="mouser")return `https://www.mouser.com/c/?q=${q}`;
+  return null;
+}
+
+
+const MAX_PAGES_PER_RUN=1;
+const MAX_LINKS_PER_PAGE=16;
+const MAX_MODELS_PER_PAGE=80;
+const MAX_BODY_CHARS=300000;
+const SUPABASE_TIMEOUT_MS=18000;
+const STATUS_PROBE_TIMEOUT_MS=10000;
+const STATUS_RETRY_TIMEOUT_MS=20000;
+const STATUS_DIAGNOSTIC_BATCH_SIZE=1;
+const SUPABASE_GET_RETRY_COUNT=1;
+const SUPABASE_GET_RETRY_DELAY_MS=250;
+const COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS=12000;
+const QUEUE_ACTIVE_BUDGET=500;
+const WATCH_ENRICHMENT_MAX_PARTS=24;
+const WATCH_DISCOVERY_LINK_LIMIT=4;
+const SPEC_METRIC_LIMIT=24;
+const NON_OMRON_MERCHANT_PRIORITY=["Renesas","ROHM","TDK","Murata","Infineon","STMicroelectronics","Texas Instruments","NXP","Analog Devices","onsemi","Microchip","TE Connectivity","Molex","Amphenol","Bosch Sensortec","Allegro MicroSystems","Melexis","THK","NSK","NTN","Nabtesco","Harmonic Drive Systems","Nidec","MinebeaMitsumi","maxon","FAULHABER","Yaskawa"];
+const DAILY_SEED_PAUSE_THRESHOLD=400;
+const MERCHANT_QUEUE_BUDGET=120; // soft budget: enter drain-priority + trickle-seed mode
+const MERCHANT_QUEUE_HARD_CEILING=180; // only here do we fully pause new Merchant seeding
+const HARD_QUEUE_CEILING=650;
+const MERCHANT_GLOBAL_DRAIN_LIMIT=4;
+const MERCHANT_TRICKLE_SEED_MAX_ROWS=1;
+const STATUS_SAMPLE_LIMIT=80;
+const STATUS_PARTS_SAMPLE_LIMIT=60;
+const STATUS_RELATION_SAMPLE_LIMIT=60;
+const STATUS_OFFER_SAMPLE_LIMIT=60;
+const STATUS_MERCHANT_SAMPLE_LIMIT=60;
+const STATUS_RUN_SAMPLE_LIMIT=18;
+const STATUS_RUN_LOOKBACK_HOURS=24;
+const STATUS_FALLBACK_TIMEOUT_MS=8000;
+const STATUS_SAMPLE_RETRY_DISABLED=true;
+const OFFER_WINDOW_SIZE=16;
+const WATCH_WINDOW_SIZE=12;
+const MAX_OFFER_ITEMS_PER_RUN=4;
+const MAX_CATALOG_ITEMS_PER_RUN=3;
+const MAX_WATCH_ITEMS_PER_RUN=3;
+const DEEP_WATCH_PRIORITY_LIMIT=1;
+const DEEP_BOOTSTRAP_PER_RUN=1;
+const DEEP_QUEUE_BUDGET=24;
+const MAX_DEEP_HOPS=2;
+const MERCHANT_DETAIL_PROMOTION_LIMIT=2;
+
+function safeError(e){return String(e?.message||e||"unknown_error").slice(0,1200);}
+function json(data,status=200,headers={}){return new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*",...headers}});}
+async function sha256HexText(v=""){
+  const b=new TextEncoder().encode(String(v));
+  const h=await crypto.subtle.digest("SHA-256",b);
+  return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+function normalizePartNumber(v=""){return String(v||"").normalize("NFKC").toUpperCase().replace(/\s+/g,"").replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g,"-").trim();}
+function stripHtml(html=""){
+  return String(html||"")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi," ")
+    .replace(/<[^>]+>/g," ")
+    .replace(/&nbsp;|&#160;/gi," ")
+    .replace(/&amp;/gi,"&")
+    .replace(/&quot;/gi,'"')
+    .replace(/&#39;|&apos;/gi,"'")
+    .replace(/&lt;/gi,"<")
+    .replace(/&gt;/gi,">")
+    .replace(/\s+/g," ")
+    .trim();
+}
+function titleOf(html=""){const m=String(html).match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);return m?stripHtml(m[1]).slice(0,400):null;}
+function absoluteUrl(base,href){try{return new URL(String(href||""),base).toString();}catch{return null;}}
+function linksOf(html="",base=""){
+  const out=[];
+  for(const m of String(html).matchAll(/<a\b[^>]*href\s*=\s*["']([^"'#]+)["'][^>]*>/gi)){
+    const u=absoluteUrl(base,m[1]);if(u)out.push(u);
+  }
+  return [...new Set(out)];
+}
+function pdfLinksOf(html="",base=""){return linksOf(html,base).filter(u=>/\.pdf(?:$|[?#])/i.test(u));}
+function hostAllowed(source,url){
+  try{
+    const h=new URL(url).hostname.replace(/^www\./,"");
+    const r=new URL(source.root).hostname.replace(/^www\./,"");
+    return h===r||h.endsWith("."+r)||source.allowPrefixes.some(p=>String(url).startsWith(p));
+  }catch{return false;}
+}
+function pageAllowed(source,url){
+  if(!hostAllowed(source,url))return false;
+  if(/\.(?:jpg|jpeg|png|gif|svg|webp|css|js|zip|exe)(?:$|[?#])/i.test(url))return false;
+  return source.allowPrefixes.some(p=>String(url).startsWith(p))||source.seeds.includes(url);
+}
+function crawlerHeaders(){return {
+  "user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 PARTS-INTELLIGENCE-COLLECTOR/2.1.2",
+  "accept":"text/html,application/xhtml+xml,application/xml,text/plain,application/pdf;q=0.9,*/*;q=0.8",
+  "accept-language":"ja,en-US;q=0.8,en;q=0.7",
+  "cache-control":"no-cache"
+};}
+function jinaReaderUrl(url){return `https://r.jina.ai/${String(url)}`;}
+function markdownLinksOf(text="",base=""){
+  const out=[];
+  for(const m of String(text).matchAll(/\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g)){const u=absoluteUrl(base,m[1]);if(u)out.push(u);}
+  for(const m of String(text).matchAll(/https?:\/\/[^\s<>()\]"']+/g)){const u=absoluteUrl(base,m[0].replace(/[),.;]+$/g,""));if(u)out.push(u);}
+  return [...new Set(out)];
+}
+function allLinksOf(page){return [...new Set([...(page.html?linksOf(page.html,page.url):[]),...markdownLinksOf(page.text,page.url)])];}
+function isPdfUrl(url=""){return /\.pdf(?:$|[?#])/i.test(String(url||""));}
+
+function sbBase(env){
+  const u=String(env.SUPABASE_URL||"").replace(/\/$/,"");
+  if(!u)throw new Error("SUPABASE_URL_missing");
+  return `${u}/rest/v1`;
+}
+function sbHeaders(env,extra={}){
+  const key=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY||env.SUPABASE_KEY;
+  if(!key)throw new Error("SUPABASE_SECRET_KEY_missing");
+  return {apikey:key,authorization:`Bearer ${key}`,"content-type":"application/json",...extra};
+}
+function supabaseReadRetryCount(method="GET",allow=true){
+  const m=String(method||"GET").toUpperCase();
+  return allow!==false&&(m==="GET"||m==="HEAD")?SUPABASE_GET_RETRY_COUNT:0;
+}
+function isRetryableSupabaseReadError(e){
+  const x=String(e?.message||e||"");
+  return /Supabase timeout|Supabase (503|504|520)|PGRST00[0-3]|network|fetch failed|connection/i.test(x);
+}
+async function sbOnce(env,path,options={}){
+  const controller=new AbortController();
+  const timeoutMs=Math.max(3000,Math.min(30000,Number(options.timeout_ms||SUPABASE_TIMEOUT_MS)));
+  const timer=setTimeout(()=>controller.abort("supabase_timeout"),timeoutMs);
+  try{
+    const r=await fetch(sbBase(env)+path,{method:options.method||"GET",headers:sbHeaders(env,options.headers||{}),body:options.body,signal:controller.signal});
+    const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null;}catch{data={raw};}
+    if(!r.ok)throw new Error(`Supabase ${r.status}: ${raw.slice(0,800)}`);
+    return data;
+  }catch(e){
+    if(String(e?.name||"")==="AbortError")throw new Error(`Supabase timeout after ${timeoutMs}ms: ${path.slice(0,220)}`);
+    throw e;
+  }finally{clearTimeout(timer);}
+}
+async function sb(env,path,options={}){
+  const method=String(options.method||"GET").toUpperCase();
+  const retries=supabaseReadRetryCount(method,options.retry_get!==false);
+  let lastErr=null;
+  for(let attempt=0;attempt<=retries;attempt++){
+    try{
+      const timeoutMs=attempt===0?options.timeout_ms:Math.min(30000,Number(options.timeout_ms||SUPABASE_TIMEOUT_MS)+5000);
+      return await sbOnce(env,path,{...options,timeout_ms:timeoutMs});
+    }catch(e){
+      lastErr=e;
+      if(attempt>=retries||!isRetryableSupabaseReadError(e))throw e;
+      await new Promise(r=>setTimeout(r,SUPABASE_GET_RETRY_DELAY_MS*(attempt+1)));
+    }
+  }
+  throw lastErr||new Error("supabase_unknown_error");
+}
+async function sbOptional(env,path,options={}){try{return await sb(env,path,options);}catch(e){console.log("sbOptional",safeError(e));return null;}}
+async function collectorDbPreflight(env){
+  try{
+    const data=await sb(env,"/parts_ingest_runs?select=version&limit=1",{timeout_ms:COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS});
+    return {ok:true,data,error:null};
+  }catch(e){return {ok:false,data:null,error:safeError(e)};}
+}
+
+function rotateWindow(items,tick,width){
+  if(!Array.isArray(items)||!items.length)return [];
+  const w=Math.max(1,Math.min(items.length,Number(width)||1));
+  const start=((Number(tick)||0)*w)%items.length;
+  const out=[];
+  for(let i=0;i<w;i++)out.push(items[(start+i)%items.length]);
+  return out;
+}
+function sourceInFilter(sources){
+  return sources.map(x=>`"${String(x.slug).replace(/"/g,'\\"')}"`).join(",");
+}
+async function activeQueueBacklog(env,limit=QUEUE_ACTIVE_BUDGET+1){
+  const now=new Date().toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(now)}&limit=${Math.max(1,Math.min(1000,Number(limit)||1))}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+async function activeMerchantQueueBacklog(env,limit=MERCHANT_QUEUE_BUDGET+1){
+  // Count only work that is actually due now. Future cooldown retries must not
+  // freeze new Merchant discovery for 24-72h.
+  const now=new Date().toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&source_slug=like.offer-*&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(now)}&limit=${Math.max(1,Math.min(500,Number(limit)||1))}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+async function quarantineDisabledMerchantQueue(env){
+  const disabled=OFFER_SOURCES.filter(x=>x.collection_enabled===false);
+  if(!disabled.length)return {disabled_sources:0,quarantined:false};
+  const path=`/parts_collector_queue?source_slug=in.(${encodeURIComponent(sourceInFilter(disabled))})&status=in.(pending,retry)`;
+  const result=await sbOptional(env,path,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({status:"failed",last_error:"SOURCE_DISABLED",updated_at:new Date().toISOString()})});
+  return {disabled_sources:disabled.length,quarantined:result!==null};
+}
+function isExpectedExternalSourceError(error=""){
+  const e=String(error||"");
+  return /HTTP_(403|404|429|520)|FALLBACK_JINA_HTTP_429|JINA_HTTP_429/i.test(e);
+}
+function isLikelyMerchantDetailUrl(source,url=""){
+  const u=String(url||"");
+  if(source?.merchant_slug==="monotaro-japan")return /\/p\/\d{4}\/\d{4}(?:\/|$)/.test(u);
+  if(source?.merchant_slug==="misumi-japan")return /\/vona2\/detail\//.test(u);
+  if(source?.merchant_slug==="digikey-japan")return /\/products\/detail\//.test(u);
+  if(source?.merchant_slug==="mouser")return /\/ProductDetail\//i.test(u);
+  return source?.generated_adapter!==true;
+}
+function manufacturerAliases(name=""){
+  const base=String(name||"").normalize("NFKC");
+  const manual={
+    "OMRON":["OMRON","OMRON AUTOMATION","オムロン"],
+    "Mitsubishi Electric":["MITSUBISHI ELECTRIC","三菱電機"],
+    "Harmonic Drive Systems":["HARMONIC DRIVE SYSTEMS","HARMONIC DRIVE","ハーモニックドライブ"],
+    "Texas Instruments":["TEXAS INSTRUMENTS","TI.COM","TEXAS INSTRUMENT"],
+    "Analog Devices":["ANALOG DEVICES","ANALOG.COM","ADI"],
+    "STMicroelectronics":["STMICROELECTRONICS","STMICRO","ST.COM"],
+    "TE Connectivity":["TE CONNECTIVITY","TE.COM"],
+    "Bosch Sensortec":["BOSCH SENSORTEC"],
+    "Sony Semiconductor Solutions":["SONY SEMICONDUCTOR","SONY-SEMICON"]
+  };
+  return [...new Set([base,...(manual[base]||[])].map(x=>String(x).normalize("NFKC").toUpperCase()).filter(Boolean))];
+}
+function merchantEvidenceGate(source,offer,pageText="",pageUrl=""){
+  const pn=normalizePartNumber(offer?.part_number||"");
+  if(!pn)return {ok:false,reason:"missing_mpn"};
+  const hay=`${String(pageText||"")} ${String(pageUrl||"")}`.normalize("NFKC").toUpperCase();
+  const compactHay=normalizePartNumber(hay);
+  if(!compactHay.includes(pn))return {ok:false,reason:"mpn_not_visible"};
+  if(source?.generated_adapter===true && !isLikelyMerchantDetailUrl(source,pageUrl))return {ok:false,reason:"generated_adapter_search_page_not_evidence"};
+  if(source?.generated_adapter===true){
+    const brandOk=manufacturerAliases(source.manufacturer).some(a=>hay.includes(a));
+    if(!brandOk)return {ok:false,reason:"manufacturer_not_corroborated"};
+  }
+  const hasPositiveCommerce=offer?.active===true || offer?.active===false || offer?.price!=null || offer?.stock_status && offer.stock_status!=="unknown" || !!offer?.status_evidence;
+  if(!hasPositiveCommerce)return {ok:false,reason:"no_commerce_evidence"};
+  return {ok:true,reason:"evidence_gate_pass"};
+}
+function retryPolicy(error,attempts){
+  const e=String(error||"");
+  if(/HTTP_429|JINA_HTTP_429/.test(e))return {status:attempts>=6?"failed":"retry",delay_hours:24,reason:"rate_limited"};
+  if(/HTTP_403/.test(e))return {status:attempts>=4?"failed":"retry",delay_hours:72,reason:"blocked"};
+  if(/Supabase 504|Supabase timeout|upstream request timeout/i.test(e))return {status:attempts>=6?"failed":"retry",delay_hours:1,reason:"database_timeout"};
+  const h=Math.min(24,Math.pow(2,Math.max(1,attempts)));
+  return {status:attempts>=6?"failed":"retry",delay_hours:h,reason:"exponential"};
+}
+
+
+
+function decodeHttpBodyBytes(bytes,contentType=""){
+  const labels=[];
+  const m=String(contentType||"").match(/charset\s*=\s*["']?([^;"'\s]+)/i);
+  if(m?.[1])labels.push(m[1].toLowerCase());
+  for(const x of ["utf-8","shift_jis"])if(!labels.includes(x))labels.push(x);
+  const candidates=[];
+  for(const label of labels){
+    try{
+      const t=new TextDecoder(label,{fatal:false}).decode(bytes);
+      candidates.push({label,text:t,score:textDecodeScore(t)});
+    }catch{}
+  }
+  if(!candidates.length)return {text:"",charset:"unknown"};
+  candidates.sort((a,b)=>b.score-a.score);
+  return {text:candidates[0].text,charset:candidates[0].label};
+}
+function textDecodeScore(text=""){
+  const s=String(text);
+  let jp=0,bad=0;
+  for(const ch of s){
+    const c=ch.codePointAt(0);
+    if((c>=0x3040&&c<=0x30ff)||(c>=0x3400&&c<=0x9fff)||(c>=0xff00&&c<=0xffef))jp++;
+    if(ch==="\ufffd")bad+=8;
+  }
+  const moj=(s.match(/[\u00c3\u00c2\u00e2\u00e5\u00e3]/g)||[]).length;
+  return jp*3-bad-moj*2;
+}
+
+async function fetchPage(url){
+  // PDFs are retained as first-party evidence pointers instead of repeatedly
+  // fetching binary bodies through Cloudflare/Jina. This avoids 403->429 retry
+  // loops while preserving the official manufacturer URL for provenance.
+  if(isPdfUrl(url)){
+    return {
+      url,
+      official_url:url,
+      isPdf:true,
+      html:"",
+      text:"",
+      status:200,
+      transport:"official_pdf_pointer",
+      body_fetched:false,
+      pointer_only:true,
+      note:"Official PDF URL retained as evidence pointer; body parsing deferred."
+    };
+  }
+
+  let directError=null;
+  try{
+    const r=await fetch(url,{headers:crawlerHeaders(),redirect:"follow"});
+    const ct=String(r.headers.get("content-type")||"").toLowerCase();
+    if(r.ok && !ct.includes("application/pdf")){
+      const bytes=new Uint8Array(await r.arrayBuffer());
+      const decoded=decodeHttpBodyBytes(bytes,ct);
+      const html=decoded.text.slice(0,MAX_BODY_CHARS);
+      return {url:r.url||url,official_url:url,isPdf:false,html,text:stripHtml(html),status:r.status,transport:"direct",body_fetched:true,decoded_charset:decoded.charset};
+    }
+    if(!r.ok)directError=`HTTP_${r.status}`;
+    else if(ct.includes("application/pdf")){
+      return {
+        url:r.url||url,
+        official_url:url,
+        isPdf:true,
+        html:"",
+        text:"",
+        status:r.status,
+        transport:"official_pdf_pointer",
+        body_fetched:false,
+        pointer_only:true,
+        note:"Official endpoint returned PDF; body parsing deferred."
+      };
+    }
+  }catch(e){directError=safeError(e);}
+
+  // HTML/text fallback transport only. Provenance remains the original
+  // manufacturer URL. Jina is never used for PDF bodies in v1.3.2.
+  try{
+    const jr=await fetch(jinaReaderUrl(url),{headers:{"accept":"text/plain,text/markdown;q=0.9,*/*;q=0.8"},redirect:"follow"});
+    if(!jr.ok)throw new Error(`JINA_HTTP_${jr.status}`);
+    const body=(await jr.text()).slice(0,MAX_BODY_CHARS);
+    return {url,official_url:url,isPdf:false,html:"",text:body,status:200,transport:"jina_reader",direct_error:directError,body_fetched:true};
+  }catch(e){
+    throw new Error(`${directError||"DIRECT_FETCH_FAILED"};FALLBACK_${safeError(e)}:${url}`);
+  }
+}
+
+async function fetchViaJinaOnly(url){
+  const jr=await fetch(jinaReaderUrl(url),{headers:{"accept":"text/plain,text/markdown;q=0.9,*/*;q=0.8"},redirect:"follow"});
+  if(!jr.ok)throw new Error(`JINA_HTTP_${jr.status}`);
+  const body=(await jr.text()).slice(0,MAX_BODY_CHARS);
+  return {url,official_url:url,isPdf:false,html:"",text:body,status:200,transport:"jina_reader_content_fallback",body_fetched:true};
+}
+
+function modelPatterns(manufacturer){
+  if(manufacturer==="OMRON")return [/\b(?:CJ1|CJ2|CP1|CP2|CS1|NX1|NX7|NJ1|NJ3|NJ5|NY5|E2E|E2B|E3Z|E3X|E3S|G2R|G3NA|MY|LY|S8VK|S8FS|R88D|R88M|3G3MX2|3G3RX2|FQ2|FQ-)[A-Z0-9\-\/\.\u25a1]{1,30}\b/gi];
+  if(manufacturer==="Mitsubishi Electric")return [/\b(?:QJ71|Q\d{2,4}|FX1|FX2|FX3|FX5|R\d{2,4}|RJ71|RD\d{2,4}|MR-J2|MR-J3|MR-J4|MR-J5|MR-JE|HG-[A-Z]|HF-[A-Z]|FR-[A-Z]|GT\d{3,5}|AJ65|A1S|A2S)[A-Z0-9\-\/\.]{0,30}\b/gi];
+  if(manufacturer==="SMC")return [/\b(?:SY3|SY5|SY7|VQ|CQ2|CDQ2|C85|C96|MGPM|MXS|MXQ|KQ2|AS\d|AR\d|AW\d|ZSE|ISE|LE[A-Z]|PFM|PF3W)[A-Z0-9\-\/\.]{1,32}\b/gi];
+  if(manufacturer==="Panasonic Industry")return [/\b(?:FX-|CX-|EX-|EQ-|PM-|HG-|AFP|FP0R|FP-X|GT\d|A5|A6)[A-Z0-9\-\/\.]{1,30}\b/gi];
+  if(manufacturer==="Yaskawa")return [/\b(?:SGDM|SGDH|SGDS|SGDV|SGD7S|SGM[A-Z]|SGLC|SGT[A-Z0-9]|CACR|CPCR|JUSP|SJDE|CEPT|SSR|SST|EMR|EMT|EMG|DR[A-Z0-9])[A-Z0-9\-\/\.]{0,32}\b/gi];
+  if(manufacturer==="THK")return [/\b(?:HSR|SRS|SRG|RSR|SBN|BNS|LTR|FBL|BTK|KSH|CCM|LXA|LXT|LM(?:E|JK|R)?|LBS)[A-Z0-9\-\/\.]{0,28}\b/gi];
+  if(manufacturer==="IDEC")return [/\b(?:HW1|HW4|XW1E|XW5E|HS5D|FC6A|FT1A|KW2D|PS5R|RJ|RU|RH|LBW|AP22|BN)[A-Z0-9\-\/\.]{1,28}\b/gi];
+  if(manufacturer==="Oriental Motor")return [/\b(?:PKP|AZX|AZ|BLM|BXM|MSD|MACK|MAC-|EP|EPUA|EPR|CS[25]|CC20|PAES|PAVR|FD|FGB|LXD)[A-Z0-9\-\/\.]{1,32}\b/gi];
+  if(manufacturer==="Azbil")return [/\b(?:JTD|JTG|JTA|JTC|ATT|SPC|RHS|SES|HP|H1L|CML|MVF|AF)[A-Z0-9\-\/\.\u25a1]{0,28}\b/gi];
+  return [];
+}
+function genericModels(text=""){
+  const out=[];
+  const rx=/\b(?=[A-Z0-9\-\/\.]{5,30}\b)(?=[A-Z0-9\-\/\.]*[A-Z])(?=[A-Z0-9\-\/\.]*\d)[A-Z][A-Z0-9]{0,8}(?:[-\/\.][A-Z0-9]{1,12}){0,4}\b/g;
+  for(const m of String(text).toUpperCase().matchAll(rx))out.push(m[0]);
+  return out;
+}
+function extractModels(manufacturer,text){
+  const out=[];
+  const raw=String(text||"").normalize("NFKC");
+  for(const rx of modelPatterns(manufacturer)){rx.lastIndex=0;for(const m of raw.matchAll(rx))out.push(m[0]);}
+  for(const x of genericModels(raw))out.push(x);
+  const bad=/^(?:HTTPS?|HTML|UTF-8|JAPAN|DOWNLOAD|PRODUCT|PRODUCTS|CATALOG|MANUAL|SUPPORT|CONTACT|COPYRIGHT|WIDTH|HEIGHT|PAGE|PDF)$/i;
+  return [...new Set(out.map(normalizePartNumber).filter(x=>x.length>=4&&x.length<=34&&!bad.test(x)))].slice(0,MAX_MODELS_PER_PAGE);
+}
+
+function occurrenceCount(text,token){
+  const t=String(text||"").toUpperCase(),q=String(token||"").toUpperCase();
+  if(!q)return 0;let n=0,pos=0;while((pos=t.indexOf(q,pos))>=0){n++;pos+=q.length;if(n>=4)break;}return n;
+}
+function contextualOfficialModels(manufacturer,text,title=""){
+  const raw=String(`${title||""} ${text||""}`).normalize("NFKC");
+  const specific=[];
+  for(const rx of modelPatterns(manufacturer)){rx.lastIndex=0;for(const m of raw.matchAll(rx))specific.push(normalizePartNumber(m[0]));}
+  const contextCue=/(?:品番|型番|形式|形名|製品番号|モデル|model|part\s*(?:no\.?|number)|mfr\.?\s*part|order\s*code|product\s*code)/i;
+  const generic=genericModels(raw).map(normalizePartNumber).filter(pn=>{
+    if(pn.length<5||pn.length>34)return false;
+    if(occurrenceCount(raw,pn)>=2)return true;
+    const i=raw.toUpperCase().indexOf(pn.toUpperCase());
+    if(i<0)return false;
+    return contextCue.test(raw.slice(Math.max(0,i-90),Math.min(raw.length,i+pn.length+90)));
+  });
+  return [...new Set([...specific,...generic])].slice(0,WATCH_ENRICHMENT_MAX_PARTS);
+}
+function metricExcerpt(text,index,len=120){const t=String(text||"").replace(/\s+/g," ");return t.slice(Math.max(0,index-45),Math.min(t.length,index+len)).trim();}
+function findMetricAfterLabels(text,labels,units,sourceUrl,key){
+  const t=String(text||"").normalize("NFKC");
+  const lower=t.toLowerCase();
+  for(const label of labels){
+    const ll=String(label).normalize("NFKC").toLowerCase();
+    let pos=0;
+    while((pos=lower.indexOf(ll,pos))>=0){
+      const tail=t.slice(pos+ll.length,pos+ll.length+80).replace(/^\s*[:：]?\s*/,"");
+      const nm=tail.match(/^-?\d+(?:\.\d+)?/);
+      if(nm){
+        const value=Number(nm[0]);
+        const after=tail.slice(nm[0].length).trimStart();
+        for(const u of units){
+          const nu=String(u).normalize("NFKC");
+          if(after.toLowerCase().startsWith(nu.toLowerCase())) return {key,value,unit:u,source_url:sourceUrl,evidence:metricExcerpt(t,pos)};
+        }
+      }
+      pos+=Math.max(1,ll.length);
+    }
+  }
+  return null;
+}
+function extractEngineeringSpecs(text,sourceUrl){
+  const defs=[
+    ["voltage",["rated voltage","supply voltage","operating voltage","定格電圧","電源電圧","使用電圧"],["mV","V","kV"]],
+    ["current",["rated current","supply current","current consumption","定格電流","消費電流"],["uA","µA","mA","A"]],
+    ["power",["rated power","power consumption","output power","定格出力","消費電力","出力"],["mW","W","kW"]],
+    ["torque",["rated torque","maximum torque","max torque","continuous torque","定格トルク","最大トルク","許容トルク"],["mN·m","mN・m","mN m","N·m","N・m","N m","Nm"]],
+    ["speed",["rated speed","maximum speed","max speed","回転速度","定格回転数","最高回転数"],["rpm","r/min","min-1"]],
+    ["mass",["mass","weight","質量","重量"],["mg","g","kg"]],
+    ["backlash",["backlash","バックラッシ","バックラッシュ"],["arcmin","arc-min","°","deg"]],
+    ["reduction_ratio",["reduction ratio","gear ratio","減速比"],[""]],
+    ["resolution",["resolution","分解能"],["bit","bits","ppr","cpr","pulse/rev","パルス/回転",""]],
+    ["pitch",["pitch","ピッチ"],["mm","um","µm"]],
+    ["travel",["stroke","travel","ストローク","移動量"],["mm","cm","m"]],
+    ["load",["rated load","maximum load","max load","load capacity","定格荷重","許容荷重","最大荷重"],["N","kN","kgf"]],
+    ["pressure",["pressure","圧力","使用圧力","定格圧力"],["Pa","kPa","MPa","bar"]],
+    ["frequency",["frequency","周波数","応答周波数"],["Hz","kHz","MHz","GHz"]],
+    ["rdson",["RDS(ON)","RDSon","on-state resistance","オン抵抗"],["mΩ","mohm","Ω","ohm"]]
+  ];
+  const out=[]; const seen=new Set();
+  for(const [key,labels,units] of defs){
+    const m=findMetricAfterLabels(text,labels,units,sourceUrl,key);
+    if(!m) continue;
+    const k=`${m.key}|${m.value}|${m.unit||""}`;
+    if(!seen.has(k)){seen.add(k);out.push(m);}
+    if(out.length>=SPEC_METRIC_LIMIT) break;
+  }
+  return out;
+}
+function canonicalEvidenceForModel(source,text,title,url,pn){
+  const raw=String(`${title||""} ${text||""}`).normalize("NFKC");
+  const norm=normalizePartNumber(pn);
+  const upper=raw.toUpperCase();
+  const idx=upper.indexOf(norm);
+  const explicitCue=/(?:品番|型番|形式|形名|製品番号|モデル|model|part\s*(?:no\.?|number)|mfr\.?\s*part|order\s*code|product\s*code)/i;
+  const detailUrl=/(?:\/detail(?:\/|$)|\/product(?:\/|$)|\/products\/[^/?#]+(?:\/[^/?#]+)?$|\/p\/|\/item\/|\/model\/|datasheet|spec(?:ification)?)/i.test(String(url||""));
+  const titleHit=normalizePartNumber(title||"").includes(norm);
+  const context=idx>=0?raw.slice(Math.max(0,idx-120),Math.min(raw.length,idx+norm.length+120)):"";
+  const specific=modelPatterns(source.manufacturer).some(rx=>{rx.lastIndex=0;return rx.test(norm);});
+  if((detailUrl&&(titleHit||explicitCue.test(context))) || (titleHit&&explicitCue.test(raw)))return {level:"manufacturer_exact",reason:"official_detail_identity",confidence:0.92};
+  if(specific && (occurrenceCount(raw,norm)>=2 || explicitCue.test(context)))return {level:"manufacturer_catalog",reason:"official_catalog_identity",confidence:0.80};
+  return {level:"candidate",reason:"weak_or_pagewide_identifier",confidence:0.50};
+}
+function classifyCanonicalModels(source,text,title,url,models){
+  return (models||[]).map(pn=>({pn,...canonicalEvidenceForModel(source,text,title,url,pn)}));
+}
+function acceptedCanonicalModels(classified){return (classified||[]).filter(x=>x.level!=="candidate").map(x=>x.pn);}
+function metricBindingSafe(classified){const accepted=(classified||[]).filter(x=>x.level!=="candidate");return accepted.length===1 || (accepted.length<=2&&accepted.every(x=>x.level==="manufacturer_exact"));}
+function isDeepWatchDepth(depth){return Number(depth||0)<0;}
+function deepHop(depth){return Math.abs(Math.min(0,Number(depth||0)));}
+function detailLikeOfficialUrl(url=""){return /(?:\/detail(?:\/|$)|\/products?\/[^/?#]+(?:\/[^/?#]+)?$|\/item\/|\/model\/|datasheet|spec(?:ification)?|replacement|successor|discontinued|renew|\.pdf(?:$|[?#]))/i.test(String(url));}
+function rankOfficialDiscoveryUrl(url=""){
+  const u=String(url||"");let score=0;
+  if(/replacement|successor|renew|discontinued/i.test(u))score+=8;
+  if(/\.pdf(?:$|[?#])/i.test(u))score+=6;
+  if(/\/detail|\/item|\/model|datasheet|spec/i.test(u))score+=5;
+  if(/[?&](?:page|p|sort|filter|rv|si|pf|pt|attr_)=/i.test(u))score-=8;
+  return score;
+}
+function rankedWatchDiscoveryLinks(source,page){
+  return allLinksOf(page).filter(u=>pageAllowed(source,u)&&u!==page.url&&detailLikeOfficialUrl(u)).sort((a,b)=>rankOfficialDiscoveryUrl(b)-rankOfficialDiscoveryUrl(a)).slice(0,WATCH_DISCOVERY_LINK_LIMIT);
+}
+async function deepQueueBacklog(env){
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&source_slug=like.watch-*&status=in.(pending,retry)&depth=lt.0&limit=${DEEP_QUEUE_BUDGET+1}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+async function enqueueDeepWatchLinks(env,source,links,itemDepth){
+  const hop=isDeepWatchDepth(itemDepth)?deepHop(itemDepth)+1:1;
+  if(hop>MAX_DEEP_HOPS)return 0;
+  const backlog=await deepQueueBacklog(env);if(backlog!=null&&backlog>=DEEP_QUEUE_BUDGET)return 0;
+  const clean=[...new Set((links||[]).filter(u=>pageAllowed(source,u)&&detailLikeOfficialUrl(u)))].slice(0,Math.max(1,DEEP_WATCH_PRIORITY_LIMIT*2));
+  if(!clean.length)return 0;
+  const now=new Date().toISOString(),depth=-hop;
+  const rows=clean.map(u=>({id:crypto.randomUUID(),source_slug:source.slug,url:u,status:"pending",depth,attempts:0,next_attempt_at:now,created_at:now,updated_at:now}));
+  await sbOptional(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return rows.length;
+}
+function isMerchantDetailUrl(source,url=""){
+  const u=String(url||"");
+  if(source.merchant_slug==="monotaro-japan")return /\/p\/\d{4}\/\d{4}\//.test(u);
+  if(source.merchant_slug==="misumi-japan")return /\/vona2\/detail\//.test(u);
+  if(source.merchant_slug==="digikey-japan")return /\/products\/detail\//i.test(u);
+  if(source.merchant_slug==="mouser")return /\/ProductDetail\//i.test(u);
+  return false;
+}
+function isMerchantDiscoveryHubUrl(source,url=""){
+  const u=String(url||"");
+  if(source?.merchant_slug==="monotaro-japan")return /\/g\/\d+\/?/.test(u);
+  return false;
+}
+function merchantDetailCandidates(source,page){
+  const links=allLinksOf(page).filter(u=>pageAllowed(source,u));
+  const exact=links.filter(u=>isMerchantDetailUrl(source,u));
+  if(exact.length)return [...new Set(exact)].slice(0,MERCHANT_DETAIL_PROMOTION_LIMIT);
+  // MonotaRO search/category pages usually lead to /g/ family pages first; those
+  // family pages then expose exact /p/ SKU pages. Treat /g/ only as discovery,
+  // never as final offer evidence.
+  if(source?.merchant_slug==="monotaro-japan")return [...new Set(links.filter(u=>isMerchantDiscoveryHubUrl(source,u)))].slice(0,MERCHANT_DETAIL_PROMOTION_LIMIT);
+  return [];
+}
+async function promoteMerchantDetailLinks(env,source,page,itemDepth){
+  if(isMerchantDetailUrl(source,page.url||""))return 0;
+  const links=merchantDetailCandidates(source,page);if(!links.length)return 0;
+  const now=new Date().toISOString();
+  const rows=links.map(u=>({id:crypto.randomUUID(),source_slug:source.slug,url:u,status:"pending",depth:isMerchantDiscoveryHubUrl(source,u)?-6:-10,attempts:0,next_attempt_at:now,created_at:now,updated_at:now}));
+  await sbOptional(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return rows.length;
+}
+function replacementPdfLikely(url=""){return /(?:replacement|successor|renew|discontinued|replacement_data|代替|後継)/i.test(decodeURIComponent(String(url||"")));}
+async function fetchReplacementPdfText(url){
+  if(!replacementPdfLikely(url))return null;
+  try{return await fetchViaJinaOnly(url);}catch(e){return {error:safeError(e),text:"",url,transport:"official_pdf_pointer"};}
+}
+function applicationEvidenceLevel(source,text){
+  const t=String(text||"").toLowerCase();
+  const explicit=/(humanoid|robot(?:ics)?|cobot|amr|agv|drone|automotive|vehicle|ev\b|industrial robot|協働ロボット|ロボット|自動車|ドローン|無人搬送)/i.test(t);
+  return explicit?"manufacturer_explicit":"engineering_fit";
+}
+function watchDiscoveryLinks(source,page){return rankedWatchDiscoveryLinks(source,page);}
+
+function lifecycleFromText(source,text){
+  const t=String(text||"");
+  if(/\u751f\u7523\u7d42\u4e86|\u751f\u7523\u4e2d\u6b62|\u8ca9\u58f2\u7d42\u4e86|discontinued|obsolete/i.test(t))return "discontinued";
+  if(/\u751f\u7523\u7d42\u4e86\u4e88\u5b9a|\u7d42\u4e86\u4e88\u5b9a/i.test(t))return "limited_support";
+  return source.lifecycle||"unknown";
+}
+
+function extractReplacementCandidates(manufacturer,text,url){
+  const t=String(text||"").normalize("NFKC");
+  const models=extractModels(manufacturer,t);
+  if(models.length<2)return [];
+  const relationCue=/(\u63a8\u5968\u4ee3\u66ff|\u4ee3\u66ff\u6a5f\u7a2e|\u7f6e\u304d\u63db\u3048|\u7f6e\u63db|\u5f8c\u7d99|\u30ea\u30cb\u30e5\u30fc\u30a2\u30eb|replacement|successor)/i;
+  if(!relationCue.test(t))return [];
+  // Do NOT auto-verify direction from page-wide model co-occurrence.
+  // Store only candidates for evidence review / later stronger parser.
+  return models.slice(0,12).map(m=>({part_number:m,source_url:url,evidence_type:"replacement_page_cooccurrence",verified:false}));
+}
+
+function compactEvidence(text="",max=900){return String(text||"").replace(/\s+/g," ").trim().slice(0,max);}
+function uniqueModels(manufacturer,text=""){return [...new Set(extractModels(manufacturer,text))];}
+function strongRelationPairs(source,text,url,title=""){
+  const t=String(text||"").normalize("NFKC");
+  const pairs=[];
+  const compatibilityWarning=/\u76f4\u63a5(?:\u306e)?\u4e92\u63db(?:\u5546\u54c1|\u6a5f\u7a2e)?\u3067\u306a\u3044|\u4e92\u63db\u6027(?:\u304c)?\u306a\u3044|\u305d\u306e\u307e\u307e(?:\u3067\u306f)?\u7f6e\u304d\u63db\u3048\u3067\u304d\u306a\u3044|\u914d\u7dda\u63a5\u7d9a.*\u5909\u308f|\u53d6\u4ed8\u5bf8\u6cd5.*\u5909\u308f|\u5916\u5f62\u5bf8\u6cd5.*\u5909\u308f/i.test(t);
+  const incompatNotes=[];
+  if(/\u5916\u5f62\u5bf8\u6cd5.*\u5909\u308f|\u5916\u5f62\u5bf8\u6cd5.*\u00d7/i.test(t))incompatNotes.push("dimensions_change");
+  if(/\u914d\u7dda\u63a5\u7d9a.*\u5909\u308f|\u914d\u7dda\u63a5\u7d9a.*\u00d7|\u7aef\u5b50\u914d\u7f6e.*\u5909\u308f/i.test(t))incompatNotes.push("wiring_change");
+  if(/\u53d6\u4ed8\u5bf8\u6cd5.*\u5909\u308f|\u53d6\u4ed8\u5bf8\u6cd5.*\u00d7/i.test(t))incompatNotes.push("mounting_change");
+
+  // Strongest parser: official replacement-table rows. Many OMRON PDFs render one source/target pair per line.
+  const lines=t.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  for(const line of lines){
+    if(!/(\u63a8\u5968\u4ee3\u66ff\u5546\u54c1|\u63a8\u5968\u4ee3\u66ff\u54c1)/i.test(t))break;
+    const ms=uniqueModels(source.manufacturer,line);
+    if(/\u63a8\u5968\u4ee3\u66ff\u5546\u54c1(?:\u306f)?(?:\u3042\u308a\u307e\u305b\u3093|\u306a\u3057)/i.test(line)&&ms.length){
+      for(const a of ms.slice(0,4))pairs.push({part_number:a,source_part_number:a,target_part_number:null,relation_hint:"no_recommended_replacement",relation_type_candidate:null,source_url:url,source_title:title||null,evidence_type:"official_no_recommended_replacement",evidence_excerpt:compactEvidence(line),parser_confidence:0.99,compatibility_warning:false,incompatibility_notes:[],verified:false});
+      continue;
+    }
+    if(ms.length>=2){
+      const a=normalizePartNumber(ms[0]),b=normalizePartNumber(ms[1]);
+      if(a&&b&&a!==b){
+        pairs.push({part_number:a,source_part_number:a,target_part_number:b,relation_hint:"successor_or_substitute_candidate",relation_type_candidate:"substitute",source_url:url,source_title:title||null,evidence_type:"official_replacement_table_row",evidence_excerpt:compactEvidence(line),parser_confidence:0.99,compatibility_warning:compatibilityWarning,incompatibility_notes:incompatNotes,verified:false});
+      }
+    }
+    if(pairs.length>=60)break;
+  }
+  if(pairs.some(p=>p.evidence_type==="official_replacement_table_row"||p.evidence_type==="official_no_recommended_replacement")){
+    const seen=new Set();
+    return pairs.filter(p=>{const k=`${p.source_part_number}|${p.target_part_number||"NONE"}|${p.source_url}|${p.relation_hint}`;if(seen.has(k))return false;seen.add(k);return true;});
+  }
+
+  const markers=[...t.matchAll(/\u63a8\u5968\u4ee3\u66ff\u5546\u54c1|\u63a8\u5968\u4ee3\u66ff\u54c1|\u4ee3\u66ff\u6a5f\u7a2e|\u7f6e\u304d\u63db\u3048\u6a5f\u7a2e|\u7f6e\u63db\u6a5f\u7a2e|\u5f8c\u7d99\u6a5f\u7a2e/gi)];
+  for(const m of markers.slice(0,12)){
+    const idx=m.index||0;
+    const before=t.slice(Math.max(0,idx-1200),idx);
+    const after=t.slice(idx,Math.min(t.length,idx+1800));
+    const sourceSection=(before.match(/(?:\u751f\u7523\u7d42\u4e86\u5546\u54c1|\u751f\u7523\u7d42\u4e86\u54c1|\u5f93\u6765\u6a5f\u7a2e|\u65e7\u6a5f\u7a2e)([\s\S]*)$/i)||[])[1]||before.slice(-650);
+    const targetSection=after.split(/(?:\u25a0|\u6ce8\u610f|\u76f8\u9055\u70b9|\u6700\u7d42\u53d7\u6ce8|\u6700\u7d42\u51fa\u8377|\u751f\u7523\u7d42\u4e86\u5546\u54c1|\u5f93\u6765\u6a5f\u7a2e)/i)[0];
+    const src=uniqueModels(source.manufacturer,sourceSection).slice(0,8);
+    const dst=uniqueModels(source.manufacturer,targetSection).filter(x=>!src.includes(x)).slice(0,8);
+    if(!src.length||!dst.length)continue;
+    const confidence=(src.length===1&&dst.length===1)?0.97:(src.length<=2&&dst.length<=3)?0.90:0.78;
+    for(const a of src)for(const b of dst){
+      pairs.push({
+        part_number:a,source_part_number:a,target_part_number:b,
+        relation_hint:"successor_or_substitute_candidate",
+        relation_type_candidate:"substitute",
+        source_url:url,source_title:title||null,
+        evidence_type:"official_replacement_section",
+        evidence_excerpt:compactEvidence(`${sourceSection} ${targetSection}`),
+        parser_confidence:confidence,
+        compatibility_warning:compatibilityWarning,
+        incompatibility_notes:incompatNotes,
+        verified:false
+      });
+      if(pairs.length>=40)return pairs;
+    }
+  }
+
+  // Mitsubishi and other official pages often use compact 'A \u2192 B' / 'A\u304b\u3089B\u3078' style wording.
+  const arrow=/([A-Z][A-Z0-9\-\/\.]{3,30})\s*(?:\u2192|\u21d2|\u304b\u3089|\u3088\u308a)\s*([A-Z][A-Z0-9\-\/\.]{3,30})/g;
+  for(const m of t.toUpperCase().matchAll(arrow)){
+    const a=normalizePartNumber(m[1]),b=normalizePartNumber(m[2]);
+    if(!a||!b||a===b)continue;
+    pairs.push({part_number:a,source_part_number:a,target_part_number:b,relation_hint:"successor_or_substitute_candidate",relation_type_candidate:"substitute",source_url:url,source_title:title||null,evidence_type:"official_directional_arrow",evidence_excerpt:compactEvidence(m[0]),parser_confidence:0.96,compatibility_warning:compatibilityWarning,incompatibility_notes:incompatNotes,verified:false});
+    if(pairs.length>=40)break;
+  }
+  const seen=new Set();
+  return pairs.filter(p=>{const k=`${p.source_part_number}|${p.target_part_number}|${p.source_url}`;if(seen.has(k))return false;seen.add(k);return true;});
+}
+
+function modelGranularity(pn=""){
+  const x=String(pn||"");
+  return /[\u25a1\u25b3\u25cb\u00d7\uff0a*]|X{2,}|-{2,}/i.test(x)?"series_or_pattern":"exact_or_series";
+}
+function relationRoleMaps(pairs=[]){
+  const sourceSet=new Set(),targetSet=new Set();
+  for(const p of pairs||[]){const a=normalizePartNumber(p?.source_part_number||p?.part_number||"");const b=normalizePartNumber(p?.target_part_number||"");if(a)sourceSet.add(a);if(b)targetSet.add(b);}
+  return {sourceSet,targetSet};
+}
+async function existingLifecycleMap(env,manufacturer,models){
+  if(!models.length)return new Map();
+  const quoted=models.map(x=>`"${String(x).replace(/"/g,'\\"')}"`).join(",");
+  const rows=await sbOptional(env,`/parts_catalog?select=normalized_part_number,lifecycle_status,source_confidence,specifications,dimensions,electrical,mechanical&manufacturer=eq.${encodeURIComponent(manufacturer)}&normalized_part_number=in.(${encodeURIComponent(quoted)})&limit=${Math.max(20,models.length*2)}`);
+  return new Map((Array.isArray(rows)?rows:[]).map(r=>[String(r.normalized_part_number),r]));
+}
+function markdownTableRelationPairs(source,text,url,title=""){
+  const t=String(text||"").normalize("NFKC"),out=[];
+  if(!/(\u63a8\u5968\u4ee3\u66ff|\u4ee3\u66ff\u88fd\u54c1|\u4ee3\u66ff\u54c1|\u5f8c\u7d99|replacement|successor)/i.test(t))return out;
+  for(const line of t.split(/\r?\n/)){
+    if(!line.includes("|"))continue;
+    const cells=line.split("|").map(x=>x.trim()).filter(Boolean);
+    if(cells.length<3||cells.every(x=>/^[-: ]+$/.test(x)))continue;
+    const modelCells=cells.map((c,i)=>({i,models:uniqueModels(source.manufacturer,c)})).filter(x=>x.models.length);
+    if(!modelCells.length)continue;
+    const noReplacement=cells.some(c=>/^(?:-|\uff0d|\u306a\u3057|\u7121\u3057|none)$/i.test(c.trim()));
+    if(modelCells.length===1&&noReplacement){for(const a of modelCells[0].models.slice(0,8))out.push({part_number:a,source_part_number:a,target_part_number:null,relation_hint:"no_recommended_replacement",relation_type_candidate:null,source_url:url,source_title:title||null,evidence_type:"official_replacement_table_row",evidence_excerpt:compactEvidence(line),parser_confidence:0.96,compatibility_warning:false,incompatibility_notes:[],verified:false});continue;}
+    if(modelCells.length<2)continue;
+    const src=modelCells[0].models.slice(0,8),dst=modelCells[modelCells.length-1].models.filter(x=>!src.includes(x)).slice(0,8);
+    if(!src.length||!dst.length)continue;
+    const pairs=(src.length===dst.length)?src.map((a,i)=>[a,dst[i]]):src.flatMap(a=>dst.map(b=>[a,b])).slice(0,24);
+    for(const [a,b] of pairs)if(a&&b&&a!==b)out.push({part_number:a,source_part_number:a,target_part_number:b,relation_hint:"successor_or_substitute_candidate",relation_type_candidate:"substitute",source_url:url,source_title:title||null,evidence_type:"official_replacement_table_row",evidence_excerpt:compactEvidence(line),parser_confidence:0.94,compatibility_warning:/\u4e92\u63db\u6027.*\u306a\u3044|\u5bf8\u6cd5.*\u7570\u306a|\u914d\u7dda.*\u7570\u306a|\u53d6\u4ed8.*\u7570\u306a/i.test(line),incompatibility_notes:[],verified:false});
+    if(out.length>=80)break;
+  }
+  const seen=new Set();return out.filter(p=>{const k=`${p.source_part_number}|${p.target_part_number||"NONE"}|${p.source_url}`;if(seen.has(k))return false;seen.add(k);return true;});
+}
+
+async function upsertPartsBatch(env,source,models,pageTitle,pageUrl,lifecycle,relationPairs=[],enrichment={}){
+  if(!models.length)return 0;
+  const now=new Date().toISOString(),{sourceSet,targetSet}=relationRoleMaps(relationPairs),existing=await existingLifecycleMap(env,source.manufacturer,models);
+  const extractedMetrics=Array.isArray(enrichment.extracted_metrics)?enrichment.extracted_metrics:[];
+  const appEvidence=enrichment.application_evidence_level||"engineering_fit";
+  const canonicalEvidence=enrichment.canonical_evidence_by_model||{};
+  const rows=models.slice(0,MAX_MODELS_PER_PAGE).map(pn=>{
+    const role=sourceSet.has(pn)?"replacement_source":targetSet.has(pn)?"replacement_target":"observed";let lifecycleStatus=lifecycle;const prev=existing.get(pn);
+    if(role==="replacement_target")lifecycleStatus=(prev?.lifecycle_status&&prev.lifecycle_status!=="unknown")?prev.lifecycle_status:"unknown";
+    else if(role==="observed"&&lifecycleStatus==="unknown"&&prev?.lifecycle_status)lifecycleStatus=prev.lifecycle_status;
+    const specific=modelPatterns(source.manufacturer).some(rx=>{rx.lastIndex=0;return rx.test(pn);}),granularity=modelGranularity(pn);
+    const prevSpecs=(prev?.specifications&&typeof prev.specifications==="object")?prev.specifications:{};
+    const collectorPrev=(prevSpecs.collector&&typeof prevSpecs.collector==="object")?prevSpecs.collector:{};
+    const ce=canonicalEvidence[pn]||canonicalEvidence[normalizePartNumber(pn)]||{level:"manufacturer_catalog",reason:"legacy_official_parser",confidence:(specific?0.80:0.75)};
+    const specs={...prevSpecs,collector:{...collectorPrev,identity_granularity:granularity,relation_role:role,source_slug:source.slug,source_tier:source.source_tier||"A",canonical_evidence_level:ce.level,canonical_evidence_reason:ce.reason,application_tags:source.applications||universeProfile(source.manufacturer)?.applications||[],technology_tags:source.domains||universeProfile(source.manufacturer)?.domains||[],application_evidence_level:appEvidence,last_enriched_at:now},extracted_metrics:extractedMetrics.length?extractedMetrics:(prevSpecs.extracted_metrics||[])};
+    return {manufacturer:source.manufacturer,brand:source.manufacturer,part_number:pn,normalized_part_number:normalizePartNumber(pn),name:pageTitle||pn,category:source.slug,lifecycle_status:lifecycleStatus,specifications:specs,dimensions:prev?.dimensions||{},electrical:prev?.electrical||{},mechanical:prev?.mechanical||{},notes:"Auto-collected from an official public manufacturer source. Replacement targets are never marked discontinued merely because they co-occur on a discontinuation page. Compatibility is never inferred from co-occurrence. Extracted engineering metrics retain source evidence and require source-page interpretation for design release.",official_url:pageUrl,source_confidence:Math.max(Number(prev?.source_confidence||0),Number(ce.confidence||0.75)),source_last_checked_at:now,updated_at:now};
+  });
+  await sb(env,"/parts_catalog?on_conflict=manufacturer,normalized_part_number",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(rows)});return rows.length;
+}
+async function loadPartIds(env,manufacturer,models){
+  if(!models.length)return new Map();
+  const quoted=models.map(x=>`"${x.replace(/"/g,'\\"')}"`).join(",");
+  const rows=await sbOptional(env,`/parts_catalog?select=id,normalized_part_number&manufacturer=eq.${encodeURIComponent(manufacturer)}&normalized_part_number=in.(${encodeURIComponent(quoted)})&limit=${Math.max(20,models.length*2)}`);
+  return new Map((Array.isArray(rows)?rows:[]).map(r=>[String(r.normalized_part_number),r.id]));
+}
+async function saveDocuments(env,source,ids,pdfs,title){
+  const rows=[];
+  for(const [pn,id] of ids){
+    for(const u of pdfs.slice(0,10)){
+      rows.push({id:crypto.randomUUID(),part_id:id,document_type:"official_pdf",title:title||`${source.manufacturer} official document`,url:u,source_domain:new URL(source.root).hostname,official:true,checked_at:new Date().toISOString(),evidence_scope:"Official PDF link discovered on official manufacturer page."});
+      if(rows.length>=80)break;
+    }
+    if(rows.length>=80)break;
+  }
+  if(rows.length)await sbOptional(env,"/parts_documents?on_conflict=part_id,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return rows.length;
+}
+async function saveRelationCandidates(env,source,candidates,pageTitle){
+  if(!candidates.length)return 0;
+  const seen=new Set();
+  const rows=[];
+  for(const c of candidates){
+    const sourcePart=normalizePartNumber(c.source_part_number||c.part_number||"");
+    const targetPart=normalizePartNumber(c.target_part_number||"");
+    const k=`${source.manufacturer}|${sourcePart}|${targetPart}|${c.source_url}|${c.relation_hint||"replacement_or_successor_candidate"}`;
+    if(!sourcePart||seen.has(k))continue;seen.add(k);
+    rows.push({
+      id:crypto.randomUUID(),
+      manufacturer:source.manufacturer,
+      part_number:sourcePart,
+      source_part_number:sourcePart,
+      target_part_number:targetPart||null,
+      relation_hint:c.relation_hint||"replacement_or_successor_candidate",
+      relation_type_candidate:c.relation_type_candidate||null,
+      source_url:c.source_url,
+      source_title:c.source_title||pageTitle||null,
+      evidence_type:c.evidence_type||"replacement_page_cooccurrence",
+      evidence_excerpt:c.evidence_excerpt||null,
+      parser_confidence:c.parser_confidence!=null?Number(c.parser_confidence):0.55,
+      compatibility_warning:!!c.compatibility_warning,
+      incompatibility_notes:Array.isArray(c.incompatibility_notes)?c.incompatibility_notes:[],
+      verified:((c.evidence_type==="official_replacement_table_row"||c.evidence_type==="official_no_recommended_replacement")&&Number(c.parser_confidence||0)>=0.96&&!c.compatibility_warning),
+      observed_at:new Date().toISOString()
+    });
+    if(rows.length>=60)break;
+  }
+  if(!rows.length)return 0;
+  await sbOptional(env,"/parts_relation_candidates",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return rows.length;
+}
+
+async function seedQueue(env){
+  const backlog=await activeQueueBacklog(env,DAILY_SEED_PAUSE_THRESHOLD+1);
+  if(backlog!=null&&backlog>=DAILY_SEED_PAUSE_THRESHOLD)return {ok:true,seeded:0,skipped:true,reason:"daily_seed_queue_guard",active_backlog_probe:backlog};
+  const rows=[];
+  for(const s of ALL_SOURCES.filter(x=>x.kind!=="merchant_offer"||x.collection_enabled!==false))for(const u of [...s.seeds,...(s.bootstrapSeeds||[])])rows.push({id:crypto.randomUUID(),source_slug:s.slug,url:u,status:"pending",depth:0,attempts:0,next_attempt_at:new Date().toISOString(),created_at:new Date().toISOString(),updated_at:new Date().toISOString()});
+  await sb(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return {ok:true,seeded:rows.length,active_backlog_probe:backlog};
+}
+
+async function seedDynamicMerchantQueries(env,preferredManufacturers=[]){
+  const globalBacklog=await activeQueueBacklog(env,HARD_QUEUE_CEILING+1);
+  const merchantBacklog=await activeMerchantQueueBacklog(env,MERCHANT_QUEUE_HARD_CEILING+1);
+  if(globalBacklog!=null&&globalBacklog>=HARD_QUEUE_CEILING)return {parts_sampled:0,queries_seeded:0,paused:true,reason:"global_hard_queue_ceiling",active_backlog_probe:globalBacklog,merchant_backlog_probe:merchantBacklog};
+  if(merchantBacklog!=null&&merchantBacklog>=MERCHANT_QUEUE_HARD_CEILING)return {parts_sampled:0,queries_seeded:0,paused:true,reason:"merchant_hard_queue_ceiling",active_backlog_probe:globalBacklog,merchant_backlog_probe:merchantBacklog,soft_budget:MERCHANT_QUEUE_BUDGET,hard_ceiling:MERCHANT_QUEUE_HARD_CEILING};
+  const trickleMode=merchantBacklog!=null&&merchantBacklog>=MERCHANT_QUEUE_BUDGET;
+  const targetParts=trickleMode?1:4;
+  const tick=Math.floor(Date.now()/600000);
+  const preferred=[...new Set((preferredManufacturers||[]).filter(x=>universeProfile(x)))];
+  const parts=[];
+  const attemptedManufacturers=[];
+  for(const manufacturer of preferred.slice(0,4)){
+    attemptedManufacturers.push(manufacturer);
+    const rows=await sbOptional(env,`/parts_catalog?select=manufacturer,part_number,normalized_part_number,lifecycle_status,source_confidence&manufacturer=eq.${encodeURIComponent(manufacturer)}&lifecycle_status=neq.discontinued&order=updated_at.desc&limit=1`);
+    if(Array.isArray(rows)&&rows[0]&&!parts.some(p=>p.manufacturer===rows[0].manufacturer))parts.push(rows[0]);
+    if(parts.length>=targetParts)break;
+  }
+  if(parts.length<targetParts){
+    const fallback=await sbOptional(env,"/parts_catalog?select=manufacturer,part_number,normalized_part_number,lifecycle_status,source_confidence&manufacturer=neq.OMRON&lifecycle_status=neq.discontinued&order=source_confidence.desc,updated_at.desc&limit=40");
+    const rotated=rotateWindow(Array.isArray(fallback)?fallback:[],tick,24);
+    for(const row of rotated){
+      if(!row?.manufacturer||!row?.part_number||!universeProfile(row.manufacturer))continue;
+      if(!OFFER_SOURCES.some(x=>x.collection_enabled!==false&&x.manufacturer===row.manufacturer))continue;
+      if(parts.some(p=>p.manufacturer===row.manufacturer))continue;
+      parts.push(row);
+      if(parts.length>=targetParts)break;
+    }
+  }
+  const rows=[];const now=new Date().toISOString();
+  for(const part of parts){
+    if(!part?.manufacturer||!part?.part_number)continue;
+    const profile=universeProfile(part.manufacturer);
+    const domains=(profile?.domains||[]).join(" ").toLowerCase();
+    const electronic=/(semiconductor|mcu|soc|sensor|connector|power|sic|mosfet|igbt|imu|radar|lidar|connectivity|passive)/.test(domains);
+    const mechanical=/(motor|bearing|reducer|linear|actuator|servo|gear|motion)/.test(domains);
+    const preferredSlugs=electronic&&!mechanical?["digikey-japan","mouser","monotaro-japan"]:mechanical&&!electronic?["misumi-japan","monotaro-japan","digikey-japan"]:["digikey-japan","mouser","misumi-japan","monotaro-japan"];
+    const sources=OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&x.manufacturer===part.manufacturer&&preferredSlugs.includes(x.merchant_slug)).sort((a,b)=>preferredSlugs.indexOf(a.merchant_slug)-preferredSlugs.indexOf(b.merchant_slug)).slice(0,trickleMode?1:3);
+    for(const source of sources){
+      const url=merchantSearchUrl(source,part.part_number);if(!url)continue;
+      rows.push({id:crypto.randomUUID(),source_slug:source.slug,url,status:"pending",depth:0,attempts:0,next_attempt_at:now,created_at:now,updated_at:now});
+    }
+  }
+  const seedRows=trickleMode?rows.slice(0,MERCHANT_TRICKLE_SEED_MAX_ROWS):rows;
+  if(seedRows.length)await sbOptional(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(seedRows)});
+  return {parts_sampled:parts.length,queries_seeded:seedRows.length,paused:false,mode:trickleMode?"drain_priority_trickle_seed":"normal",seeding_limited:trickleMode,soft_budget:MERCHANT_QUEUE_BUDGET,hard_ceiling:MERCHANT_QUEUE_HARD_CEILING,active_backlog_probe:globalBacklog,merchant_backlog_probe:merchantBacklog,preferred_manufacturers:preferred.slice(0,4),seeded_manufacturers:[...new Set(parts.map(x=>x.manufacturer))],seeded_source_slugs:[...new Set(seedRows.map(x=>x.source_slug))],fallback_used:parts.some(x=>!preferred.includes(x.manufacturer))};
+}
+function sourceBySlug(slug){return ALL_SOURCES.find(s=>s.slug===slug)||null;}
+
+async function enqueueLinks(env,source,links,depth){
+  const maxDepth=Number.isFinite(Number(source.max_depth))?Number(source.max_depth):2;
+  if(depth>maxDepth)return 0;
+  const clean=[...new Set(links.filter(u=>pageAllowed(source,u)))].slice(0,MAX_LINKS_PER_PAGE);
+  if(!clean.length)return 0;
+  const now=new Date().toISOString();
+  const rows=clean.map(u=>({id:crypto.randomUUID(),source_slug:source.slug,url:u,status:"pending",depth,attempts:0,next_attempt_at:now,created_at:now,updated_at:now}));
+  await sbOptional(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return rows.length;
+}
+
+function offerUpdatedAt(text=""){
+  const t=String(text||"").normalize("NFKC");
+  const m=t.match(/\u60c5\u5831\u66f4\u65b0\s*[:\uff1a]?\s*(20\d{2})[\/.\u5e74-](\d{1,2})[\/.\u6708-](\d{1,2})/);
+  if(!m)return null;
+  const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]);
+  if(!y||!mo||!d)return null;
+  return new Date(Date.UTC(y,mo-1,d,0,0,0)).toISOString();
+}
+function parseOmronStoreOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC");
+  const models=extractModels("OMRON",text);
+  const upper=text.toUpperCase();
+  const located=[];
+  for(const pn of models){const i=upper.indexOf(pn);if(i>=0)located.push({pn,i});}
+  located.sort((a,b)=>a.i-b.i);
+  const out=[];
+  for(let n=0;n<located.length;n++){
+    const {pn,i}=located[n];
+    const next=located[n+1]?.i??text.length;
+    const seg=text.slice(i,Math.min(next,i+360));
+    const pm=seg.match(/[\u00a5\uffe5]\s*([0-9][0-9,]*)/);
+    if(!pm)continue;
+    const price=Number(pm[1].replace(/,/g,""));
+    if(!Number.isFinite(price)||price<=0)continue;
+    const label=/\u6a19\u6e96\u5728\u5eab\u6a5f\u7a2e/.test(seg)?"standard_stock":/\u53d7\u6ce8\u751f\u7523\u6a5f\u7a2e/.test(seg)?"made_to_order":null;
+    const stock=label==="made_to_order"?"backorder":"unknown";
+    out.push({part_number:pn,price,availability_label:label,stock_status:stock,segment:seg.slice(0,280)});
+    if(out.length>=120)break;
+  }
+  const seen=new Set();
+  return out.filter(x=>{const k=x.part_number;if(seen.has(k))return false;seen.add(k);return true;});
+}
+
+function rsStockMap(label=""){
+  const x=String(label||"").trim();
+  if(x==="\u5728\u5eab\u3042\u308a")return {stock_status:"in_stock",active:true};
+  if(["\u304a\u53d6\u308a\u5bc4\u305b\u54c1","\u53d7\u6ce8\u8abf\u9054","\u5165\u8377\u5f85\u3061\uff08\u65b0\u5546\u54c1\uff09"].includes(x))return {stock_status:"backorder",active:true};
+  if(["\u5165\u8377\u5f85\u3061","\u4e00\u6642\u7684\u306b\u5728\u5eab\u5207\u308c"].includes(x))return {stock_status:"out_of_stock",active:true};
+  if(x==="\u53d6\u6271\u505c\u6b62\u4e2d")return {stock_status:"out_of_stock",active:false};
+  return {stock_status:"unknown",active:true};
+}
+function parseRsOmronOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC");
+  const statuses=["\u5728\u5eab\u3042\u308a","\u5728\u5eab\u9650\u308a","\u304a\u53d6\u308a\u5bc4\u305b\u54c1","\u53d7\u6ce8\u8abf\u9054","\u5165\u8377\u5f85\u3061\uff08\u65b0\u5546\u54c1\uff09","\u4e00\u6642\u7684\u306b\u5728\u5eab\u5207\u308c","\u5165\u8377\u5f85\u3061","\u53d6\u6271\u505c\u6b62\u4e2d"];
+  const out=[];
+  const rsRe=/RS\u54c1\u756a\s*[:\uff1a]?\s*([0-9A-Z-]+)/gi;
+  const matches=[...text.matchAll(rsRe)];
+  for(let i=0;i<matches.length;i++){
+    const m=matches[i];
+    const blockStart=Math.max(0,(i?matches[i-1].index:0));
+    const blockEnd=Math.min(text.length,(i+1<matches.length?matches[i+1].index:m.index+1800));
+    const block=text.slice(blockStart,blockEnd);
+    const rel=m.index-blockStart;
+    const after=block.slice(rel);
+    const mpnMatch=after.match(/\u30e1\u30fc\u30ab\u30fc\u578b\u756a\s*[:\uff1a]?\s*([^\n\r]{1,140})/i);
+    if(!mpnMatch)continue;
+    let mpn=String(mpnMatch[1]||"").trim();
+    mpn=mpn.replace(/\s+(?:\u30d6\u30e9\u30f3\u30c9|\u30d7\u30ed\u30c0\u30af\u30c8\u30bf\u30a4\u30d7|1\u500b\u5c0f\u8a08|\u6570\u91cf|\u30c7\u30fc\u30bf\u30b7\u30fc\u30c8).*$/i,"").trim();
+    if(!mpn||mpn.length>120)continue;
+    const priceMatch=after.match(/(?:1\u500b\u5c0f\u8a08|[0-9]+\s*(?:\u500b|\u888b|\u7bb1).*?\u5c0f\u8a08)\s*[:\uff1a]?\s*[\r\n ]*[\uffe5\u00a5]\s*([0-9][0-9,]*(?:\.\d+)?)/i)
+      || after.match(/[\uffe5\u00a5]\s*([0-9][0-9,]*(?:\.\d+)?)\s*\(\u7a0e\u629c\)/i);
+    const price=priceMatch?Number(priceMatch[1].replace(/,/g,"")):null;
+    let label=null,last=-1;
+    const before=block.slice(0,rel);
+    for(const st of statuses){const p=before.lastIndexOf(st);if(p>last){last=p;label=st;}}
+    const mapped=label==="\u5728\u5eab\u9650\u308a"?{stock_status:"low_stock",active:true}:rsStockMap(label);
+    out.push({
+      part_number:mpn,
+      price:Number.isFinite(price)&&price>0?price:null,
+      availability_label:label,
+      stock_status:mapped.stock_status,
+      active:mapped.active,
+      merchant_sku:`RS-${m[1]}`,
+      tax_included:false,
+      segment:block.slice(Math.max(0,rel-200),Math.min(block.length,rel+700))
+    });
+    if(out.length>=120)break;
+  }
+  const seen=new Set();
+  return out.filter(x=>{const k=normalizePartNumber(x.part_number);if(!k||seen.has(k))return false;seen.add(k);return true;});
+}
+function decodeEmbeddedUnicode(v=""){
+  return String(v||"")
+    .replace(/\\u\{([0-9a-fA-F]+)\}/g,(_,h)=>{try{return String.fromCodePoint(parseInt(h,16));}catch{return _;}})
+    .replace(/\\u([0-9a-fA-F]{4})/g,(_,h)=>String.fromCharCode(parseInt(h,16)))
+    .replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>String.fromCharCode(parseInt(h,16)));
+}
+function monotaroPrimaryWindow(text="",pn=""){
+  const src=String(text||"").normalize("NFKC");
+  const rawPn=String(pn||"").normalize("NFKC").trim();
+  const candidates=[rawPn,normalizePartNumber(rawPn)].filter(Boolean);
+  let idx=-1;
+  for(const c of candidates){
+    idx=src.toUpperCase().indexOf(c.toUpperCase());
+    if(idx>=0)break;
+  }
+  if(idx<0)return src.slice(0,5000);
+  // The commercial facts for the selected SKU sit close to the exact MPN.
+  // Keep recommendations/related-products outside the decision window.
+  return src.slice(Math.max(0,idx-1800),Math.min(src.length,idx+2600));
+}
+function canonicalMonotaroProductUrl(url=""){
+  try{
+    const u=new URL(String(url));
+    const m=u.pathname.match(/^\/p\/(\d{4})\/(\d{4})(?:\/print)?\/?$/);
+    if(!m)return String(url);
+    return `https://www.monotaro.com/p/${m[1]}/${m[2]}/`;
+  }catch{return String(url);}
+}
+function monotaroPrintUrl(url=""){
+  const canonical=canonicalMonotaroProductUrl(url);
+  return /\/p\/\d{4}\/\d{4}\/$/.test(canonical)?`${canonical}print/`:null;
+}
+function classifyMonotaroCommerce({discontinued=false,salePrice=null,leadDays=null}={}){
+  const hasSalePrice=salePrice!=null&&salePrice!==""&&Number.isFinite(Number(salePrice))&&Number(salePrice)>0;
+  const hasLead=leadDays!=null&&leadDays!==""&&Number.isFinite(Number(leadDays))&&Number(leadDays)>=0;
+  const active=!discontinued && (hasSalePrice||hasLead);
+  return {
+    active,
+    stock_status:discontinued?"out_of_stock":hasLead?"in_stock":"unknown",
+    price:active&&hasSalePrice?Number(salePrice):null
+  };
+}
+function sliceLabelValue(src,label,nextLabels=[]){
+  const hay=String(src||"");
+  const idx=hay.indexOf(label);
+  if(idx<0)return null;
+  let v=hay.slice(idx+label.length).replace(/^\s*[:\uff1a]?\s*/,"");
+  let cut=v.length;
+  for(const n of nextLabels){
+    const j=v.indexOf(n);
+    if(j>=0&&j<cut)cut=j;
+  }
+  return v.slice(0,cut).trim();
+}
+function moneyAfterLabel(src,label){
+  const v=sliceLabelValue(src,label,["\u6ce8\u6587\u30b3\u30fc\u30c9","\u54c1\u756a","\u5185\u5bb9\u91cf","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"]);
+  if(!v)return null;
+  const m=v.match(/[\uffe5\u00a5]?\s*([0-9][0-9,]*)/);
