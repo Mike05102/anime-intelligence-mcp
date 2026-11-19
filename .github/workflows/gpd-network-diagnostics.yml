@@ -1,0 +1,31 @@
+name: GPD cross-network root-cause diagnostics
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/gpd-network-diagnostics.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Independent DNS, TLS, HTTP and application diagnostics
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "UTC $(date -u -Is)"
+          for host in example.com github.com anime-intelligence.goodmy0312.workers.dev; do
+            echo "::group::DNS $host"
+            getent ahostsv4 "$host" | head -n 5 || true
+            echo "::endgroup::"
+          done
+          for url in https://example.com/ https://github.com/ https://anime-intelligence.goodmy0312.workers.dev/x402/status https://anime-intelligence.goodmy0312.workers.dev/v1/system/discovery-health https://anime-intelligence.goodmy0312.workers.dev/agents/readiness; do
+            echo "::group::HTTP $url"
+            curl -sS -L --connect-timeout 10 --max-time 35 -o /tmp/gpd-diagnostic-response -w 'curl_http=%{http_code} remote_ip=%{remote_ip} dns_s=%{time_namelookup} connect_s=%{time_connect} tls_s=%{time_appconnect} total_s=%{time_total}\n' "$url" || echo "curl_exit=$?"
+            head -c 9000 /tmp/gpd-diagnostic-response || true
+            echo
+            echo "::endgroup::"
+            rm -f /tmp/gpd-diagnostic-response
+          done
