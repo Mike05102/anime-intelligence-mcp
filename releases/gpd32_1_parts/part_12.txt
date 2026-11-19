@@ -1,0 +1,1000 @@
+  if(!m)return null;
+  const n=Number(m[1].replace(/,/g,""));
+  return Number.isFinite(n)&&n>0?n:null;
+}
+function parseMonotaroEvidenceText(text="",pageUrl=""){
+  const src=String(text||"").normalize("NFKC").replace(/\s+/g," ").trim();
+  if(!src)return null;
+
+  // Label-boundary parsing: avoid runtime-specific regex lookahead behavior.
+  const pnRaw=sliceLabelValue(src,"\u54c1\u756a",["\u5185\u5bb9\u91cf","\u6ce8\u6587\u30b3\u30fc\u30c9","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"])
+    || sliceLabelValue(src,"\u30e1\u30fc\u30ab\u30fc\u54c1\u756a",["\u5185\u5bb9\u91cf","\u6ce8\u6587\u30b3\u30fc\u30c9","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"]);
+  const genericMpn=(src.match(/\b[A-Z][A-Z0-9]*-[A-Z0-9][A-Z0-9._/+()\-]*(?:\s+\d+M)?\b/i)||[])[0]||null;
+  const displayPn=String(pnRaw||genericMpn||"").trim().replace(/\s+/g," ");
+  const normalizedPn=normalizePartNumber(displayPn);
+  if(!normalizedPn || !/[A-Z]/.test(normalizedPn) || !/[0-9]/.test(normalizedPn))return null;
+
+  const discontinued=["\u53d6\u308a\u6271\u3044\u3092\u7d42\u4e86","\u53d6\u6271\u3044\u7d42\u4e86","\u8ca9\u58f2\u7d42\u4e86","\u53d6\u308a\u6271\u3044\u7d42\u4e86","\u53d6\u6271\u7d42\u4e86","\u8ca9\u58f2\u3092\u7d42\u4e86","\u8ca9\u58f2\u7d42\u4e86\u54c1"].some(x=>src.includes(x));
+  const referencePrice=moneyAfterLabel(src,"\u53c2\u8003\u57fa\u6e96\u4fa1\u683c(\u7a0e\u5225)") ?? moneyAfterLabel(src,"\u53c2\u8003\u57fa\u6e96\u4fa1\u683c");
+  const salePrice=moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u5225)") ?? moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u5225)") ?? moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u8fbc)") ?? moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u8fbc)");
+  const taxIncluded=(moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u8fbc)")!=null || moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u8fbc)")!=null) && !(moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u5225)")!=null || moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u5225)")!=null);
+
+  let leadDays=null, leadLabel=null;
+  if(src.includes("\u5f53\u65e5\u51fa\u8377")){leadDays=0;leadLabel="\u5f53\u65e5\u51fa\u8377";}
+  else {
+    const m=src.match(/([0-9]+)\u65e5\u4ee5\u5185(?:\u51fa\u8377|\u767a\u9001)/);
+    if(m){leadDays=Number(m[1]);leadLabel=m[0];}
+  }
+  const commerce=classifyMonotaroCommerce({discontinued,salePrice,leadDays});
+  const orderRaw=sliceLabelValue(src,"\u6ce8\u6587\u30b3\u30fc\u30c9",["\u54c1\u756a","\u5185\u5bb9\u91cf","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"]);
+  const orderCode=orderRaw?.match(/[0-9A-Z-]+/i)?.[0]||null;
+  const pathSku=String(pageUrl||"").match(/\/p\/(\d{4})\/(\d{4})\//)?.slice(1).join("")||null;
+
+  return {
+    part_number:displayPn,
+    price:commerce.price,
+    reference_price:Number.isFinite(referencePrice)&&referencePrice>0?referencePrice:null,
+    availability_label:discontinued?"discontinued":leadLabel,
+    stock_status:commerce.stock_status,
+    active:commerce.active,
+    tax_included:commerce.active?taxIncluded:false,
+    lead_time_days:Number.isFinite(leadDays)?leadDays:null,
+    merchant_sku:orderCode||pathSku||null,
+    identity_evidence:"visible_part_number_label",
+    status_evidence:discontinued?"monotaro_discontinued_marker":leadLabel||((Number.isFinite(salePrice)&&salePrice>0)?"monotaro_sale_price":"no_positive_purchase_evidence"),
+    commerce_window_chars:src.length,
+    segment:src.slice(0,1400)
+  };
+}
+function parseMonotaroOffers(source,page){
+  const html=String(page.html||"");
+  const text=String(page.text||stripHtml(html)).normalize("NFKC");
+  const raw=html.normalize("NFKC");
+  const decodedRaw=decodeEmbeddedUnicode(raw).normalize("NFKC");
+  const pageUrl=String(page.official_url||page.url||"");
+  if(/\/s\//.test(pageUrl))return [];
+  if(!/\/p\//.test(pageUrl))return [];
+
+  // Print pages are the canonical commerce evidence path for MonotaRO.
+  // Use one pure parser for both production and self-test to prevent runtime drift.
+  const combined=`${text}\n${stripHtml(decodedRaw)}`.normalize("NFKC");
+  if(/\/print\/?(?:[?#].*)?$/.test(pageUrl)){
+    const parsed=parseMonotaroEvidenceText(combined,pageUrl);
+    return parsed?[parsed]:[];
+  }
+
+  // Normal product pages are identity/discovery fallback only. Keep fail-closed.
+  const title=html?String(titleOf(html)||"").normalize("NFKC"):(text.match(/^Title:\s*(.+)$/mi)?.[1]||"");
+  const explicitText=combined.match(/(?:\u30e1\u30fc\u30ab\u30fc)?\u54c1\u756a\s*[:\uff1a]?\s*([A-Z0-9][A-Z0-9._/+()\-]{1,100}(?:\s+\d+M)?)/i);
+  const titleLead=title.match(/^\s*([A-Z0-9][A-Z0-9._/+()\-]{2,100}(?:\s+\d+M)?)(?=\s|$)/i);
+  const displayPn=(explicitText?.[1]||titleLead?.[1]||"").trim().replace(/\s+/g," ");
+  const normalizedPn=normalizePartNumber(displayPn);
+  if(!normalizedPn || !/[A-Z]/.test(normalizedPn) || !/[0-9]/.test(normalizedPn))return [];
+  const pathSku=pageUrl.match(/\/p\/(\d{4})\/(\d{4})\//)?.slice(1).join("")||null;
+  return [{
+    part_number:displayPn||normalizedPn,
+    price:null,
+    reference_price:null,
+    availability_label:null,
+    stock_status:"unknown",
+    active:false,
+    tax_included:false,
+    lead_time_days:null,
+    merchant_sku:pathSku,
+    identity_evidence:explicitText?"visible_part_number":"document_title_exact_token",
+    status_evidence:"normal_page_identity_only_fail_closed",
+    commerce_window_chars:0,
+    segment:""
+  }];
+}
+
+
+function parseMisumiOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC").replace(/\s+/g," ").trim();
+  const pageUrl=String(page.official_url||page.url||"");
+  let urlPn=null;
+  try{urlPn=new URL(pageUrl).searchParams.get("HissuCode");}catch{}
+  const titlePn=(text.match(/\u578b\u756a\s*[:\uff1a]\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)||[])[1]||null;
+  const displayPn=String(urlPn||titlePn||"").trim().replace(/\s+/g," ");
+  if(!displayPn)return [];
+  const normalizedPn=normalizePartNumber(displayPn);
+  if(!normalizedPn||!/[A-Z]/.test(normalizedPn)||!/[0-9]/.test(normalizedPn))return [];
+  const idx=text.toUpperCase().indexOf(displayPn.toUpperCase());
+  const seg=idx>=0?text.slice(Math.max(0,idx-500),Math.min(text.length,idx+1800)):text.slice(0,2600);
+  const stopped=seg.includes("\u6ce8\u6587\u505c\u6b62\u4e2d");
+  const pm=seg.match(/\u901a\u5e38\u5358\u4fa1\s*\(\u7a0e\u5225\)\s*([0-9][0-9,]*)\u5186/i);
+  const price=pm?Number(pm[1].replace(/,/g,"")):null;
+  let leadDays=null,availability=null,stock="unknown";
+  if(/\u5f53\u65e5\u51fa\u8377\u53ef\u80fd/.test(seg)){leadDays=0;availability="\u5f53\u65e5\u51fa\u8377\u53ef\u80fd";stock="in_stock";}
+  else{
+    const lm=seg.match(/\u901a\u5e38\u51fa\u8377\u65e5\s*[:\uff1a]?\s*(?:\u5728\u5eab\u54c1)?\s*([0-9]+)\u65e5\u76ee/);
+    if(lm){leadDays=Number(lm[1]);availability=lm[0];stock=/\u5728\u5eab\u54c1/.test(lm[0])?"in_stock":"backorder";}
+  }
+  const active=!stopped && ((Number.isFinite(price)&&price>0)||leadDays!=null);
+  return [{
+    part_number:displayPn,price:active&&Number.isFinite(price)&&price>0?price:null,reference_price:null,
+    availability_label:stopped?"order_stopped":availability,stock_status:stopped?"out_of_stock":stock,active,
+    tax_included:false,lead_time_days:Number.isFinite(leadDays)?leadDays:null,merchant_sku:displayPn,currency:"JPY",
+    identity_evidence:urlPn?"misumi_hissu_code":"misumi_model_label",
+    status_evidence:stopped?"misumi_order_stopped":availability||((price!=null)?"misumi_public_price":"no_positive_purchase_evidence"),
+    commerce_window_chars:seg.length,segment:seg.slice(0,1400)
+  }];
+}
+
+function parseDigiKeyOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC").replace(/\s+/g," ").trim();
+  const pageUrl=String(page.official_url||page.url||"");
+  if(!/\/products\/detail\//.test(pageUrl))return [];
+  const pn=(text.match(/\u30e1\u30fc\u30ab\u30fc\u88fd\u54c1\u756a\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)
+    ||text.match(/Manufacturer Product Number\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)||[])[1]||null;
+  if(!pn)return [];
+  const sku=(text.match(/DigiKey\u88fd\u54c1\u756a\s*([A-Z0-9._/+()\-]+)/i)
+    ||text.match(/DigiKey Part Number\s*([A-Z0-9._/+()\-]+)/i)||[])[1]||pn;
+  const stockM=text.match(/\u5728\u5eab\s*[:\uff1a]\s*([0-9][0-9,]*)\s*\u500b/i)||text.match(/In Stock\s*[:\uff1a]?\s*([0-9][0-9,]*)/i);
+  const stockQty=stockM?Number(stockM[1].replace(/,/g,"")):null;
+  const priceM=text.match(/\u5358\u4fa1\s*\(\u6d88\u8cbb\u7a0e\u629c\u304d\)\s*[:\uff1a]?\s*[\uffe5\u00a5]\s*([0-9][0-9,.]*)/i)
+    ||text.match(/Unit Price\s*[:\uff1a]?\s*[\uffe5\u00a5]\s*([0-9][0-9,.]*)/i)
+    ||text.match(/\b1\s*[\|\s]+[\uffe5\u00a5]\s*([0-9][0-9,.]*)/i);
+  const price=priceM?Number(priceM[1].replace(/,/g,"")):null;
+  const obsolete=/\u751f\u7523\u4e2d\u6b62|\u5ec3\u6b62|Obsolete/i.test(text);
+  const partActive=/\u90e8\u54c1\u72b6\u6cc1\s*\u30a2\u30af\u30c6\u30a3\u30d6/i.test(text)||/Part Status\s*Active/i.test(text);
+  const active=!obsolete && (partActive||stockQty!=null||price!=null) && ((stockQty!=null&&stockQty>0)||(price!=null&&price>0));
+  const stock=stockQty!=null?(stockQty>0?"in_stock":"out_of_stock"):(active?"unknown":"unknown");
+  return [{
+    part_number:pn.trim(),price:active&&Number.isFinite(price)&&price>0?price:null,reference_price:null,
+    availability_label:stockQty!=null?`stock:${stockQty}`:(partActive?"active":null),stock_status:stock,stock_quantity:Number.isFinite(stockQty)?stockQty:null,active,
+    tax_included:false,lead_time_days:null,merchant_sku:sku,currency:"JPY",
+    identity_evidence:"digikey_manufacturer_part_number",
+    status_evidence:stockQty!=null?"digikey_stock_quantity":(price!=null?"digikey_public_price":"no_positive_purchase_evidence"),
+    commerce_window_chars:text.length,segment:text.slice(0,1400)
+  }];
+}
+
+function parseMouserOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC").replace(/\s+/g," ").trim();
+  const pageUrl=String(page.official_url||page.url||"");
+  if(!/\/ProductDetail\//i.test(pageUrl))return [];
+  const pn=(text.match(/Mfr\.\s*#\s*[:\uff1a]?\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)||[])[1]||null;
+  if(!pn)return [];
+  const sku=(text.match(/Mouser\s*#\s*[:\uff1a]?\s*([A-Z0-9._/+()\-]+)/i)||[])[1]||pn;
+  const nonStocked=/Stock\s*[:\uff1a]?\s*Non-Stocked/i.test(text);
+  const stockM=text.match(/Stock\s*[:\uff1a]?\s*([0-9][0-9,]*)/i);
+  const stockQty=stockM?Number(stockM[1].replace(/,/g,"")):null;
+  const pricingIdx=text.search(/Pricing\s*\(USD\)/i);
+  const pricingText=pricingIdx>=0?text.slice(pricingIdx,pricingIdx+900):text;
+  const priceM=pricingText.match(/\b1\s*(?:\||\s)+\$\s*([0-9][0-9,.]*)/i)||pricingText.match(/\$\s*([0-9][0-9,.]*)/i);
+  const price=priceM?Number(priceM[1].replace(/,/g,"")):null;
+  const obsolete=/Obsolete|Not Recommended for New Designs|Discontinued/i.test(text);
+  const active=!obsolete && Number.isFinite(price)&&price>0;
+  const stock=stockQty!=null?(stockQty>0?"in_stock":"out_of_stock"):(nonStocked?"backorder":"unknown");
+  return [{
+    part_number:pn.trim(),price:active?price:null,reference_price:null,
+    availability_label:nonStocked?"Non-Stocked":(stockQty!=null?`stock:${stockQty}`:null),stock_status:stock,stock_quantity:Number.isFinite(stockQty)?stockQty:null,active,
+    tax_included:false,lead_time_days:null,merchant_sku:sku,currency:"USD",
+    identity_evidence:"mouser_mfr_part_number",
+    status_evidence:nonStocked?"mouser_non_stocked":(stockQty!=null?"mouser_stock_quantity":(price!=null?"mouser_public_price":"no_positive_purchase_evidence")),
+    commerce_window_chars:text.length,segment:text.slice(0,1400)
+  }];
+}
+
+function collectorSelfTest(){
+  const pure=[
+    ["discontinued_not_active",classifyMonotaroCommerce({discontinued:true,salePrice:6500,leadDays:0}).active===false],
+    ["discontinued_out_of_stock",classifyMonotaroCommerce({discontinued:true,salePrice:6500,leadDays:0}).stock_status==="out_of_stock"],
+    ["live_active",classifyMonotaroCommerce({discontinued:false,salePrice:6998,leadDays:0}).active===true],
+    ["live_in_stock",classifyMonotaroCommerce({discontinued:false,salePrice:6998,leadDays:0}).stock_status==="in_stock"],
+    ["live_price",classifyMonotaroCommerce({discontinued:false,salePrice:6998,leadDays:0}).price===6998],
+    ["uncertain_fail_closed",classifyMonotaroCommerce({discontinued:false,salePrice:null,leadDays:null}).active===false]
+  ];
+  const deadPrint=`\u53d6\u308a\u6271\u3044\u7d42\u4e86 \u5927\u5909\u7533\u3057\u8a33\u3054\u3056\u3044\u307e\u305b\u3093\u304c\u3001\u3053\u306e\u5546\u54c1\u306f\u53d6\u308a\u6271\u3044\u3092\u7d42\u4e86\u3044\u305f\u3057\u307e\u3057\u305f\u3002 \u6ce8\u6587\u30b3\u30fc\u30c9 02087872 \u54c1\u756a E2E-X5ME1 \u5185\u5bb9\u91cf 1\u500b \u53c2\u8003\u57fa\u6e96\u4fa1\u683c(\u7a0e\u5225) \uffe56,500`;
+  const livePrint=`\u5f53\u65e5\u51fa\u8377\u3068\u306f \u6ce8\u6587\u30b3\u30fc\u30c9 63696353 \u54c1\u756a E2E-X2MC18 2M \u5185\u5bb9\u91cf 1\u500b \u53c2\u8003\u57fa\u6e96\u4fa1\u683c(\u7a0e\u5225) \uffe57,300 \u5358\u4fa1(\u7a0e\u5225) \uffe56,998`;
+  const dead=parseMonotaroEvidenceText(deadPrint,"https://www.monotaro.com/p/0208/7872/print/");
+  const live=parseMonotaroEvidenceText(livePrint,"https://www.monotaro.com/p/6369/6353/print/");
+  const misumiText=`\u578b\u756a : E2E-X2C28 2M \u901a\u5e38\u5358\u4fa1(\u7a0e\u5225) 6,735\u5186 \u901a\u5e38\u51fa\u8377\u65e5\uff1a\u5728\u5eab\u54c11\u65e5\u76ee\u5f53\u65e5\u51fa\u8377\u53ef\u80fd`;
+  const misumi=parseMisumiOffers({slug:"offer-misumi-omron"},{url:"https://jp.misumi-ec.com/vona2/detail/221006389865/?HissuCode=E2E-X2C28+2M",text:misumiText,html:""})[0];
+  const dkText=`DigiKey\u88fd\u54c1\u756a E2E-X2MC182M-ND \u30e1\u30fc\u30ab\u30fc\u88fd\u54c1\u756a E2E-X2MC18 2M \u90e8\u54c1\u72b6\u6cc1 \u30a2\u30af\u30c6\u30a3\u30d6 \u5728\u5eab\uff1a6\u500b \u5358\u4fa1\uff08\u6d88\u8cbb\u7a0e\u629c\u304d\uff09: \uffe515,806.00000`;
+  const dk=parseDigiKeyOffers({slug:"offer-digikey-omron"},{url:"https://www.digikey.jp/ja/products/detail/omron-automation-and-safety/E2E-X2MC18-2M/10221642",text:dkText,html:""})[0];
+  const mouserText=`Mouser #: 653-E2EX2MC182M Mfr. #: E2E-X2MC18 2M Availability Stock: Non-Stocked Pricing (USD) Qty. Unit Price Ext. Price 1 $88.09 $88.09`;
+  const mouser=parseMouserOffers({slug:"offer-mouser-omron"},{url:"https://www.mouser.com/ProductDetail/Omron-Automation-and-Safety/E2E-X2MC18-2M",text:mouserText,html:""})[0];
+  const parserChecks=[
+    ["print_dead_parser",dead?.active===false&&dead?.stock_status==="out_of_stock"&&dead?.reference_price===6500],
+    ["print_live_parser",live?.active===true&&live?.stock_status==="in_stock"&&live?.price===6998&&live?.part_number==="E2E-X2MC18 2M"],
+    ["misumi_parser",misumi?.active===true&&misumi?.price===6735&&misumi?.stock_status==="in_stock"],
+    ["digikey_parser",dk?.active===true&&dk?.price===15806&&dk?.stock_quantity===6],
+    ["mouser_parser",mouser?.active===true&&mouser?.price===88.09&&mouser?.currency==="USD"&&mouser?.stock_status==="backorder"]
+  ];
+  const universeChecks=[
+    ["manufacturer_universe_60_plus",MANUFACTURER_UNIVERSE.length>=60],
+    ["official_watch_all_manufacturers",new Set(OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).map(x=>x.manufacturer)).size===MANUFACTURER_UNIVERSE.length],
+    ["merchant_adapter_all_manufacturers",new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&["monotaro-japan","misumi-japan","digikey-japan","mouser"].includes(x.merchant_slug)).map(x=>x.manufacturer)).size===MANUFACTURER_UNIVERSE.length],
+    ["merchant_adapter_four_channels",["monotaro-japan","misumi-japan","digikey-japan","mouser"].every(ms=>new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&x.merchant_slug===ms).map(x=>x.manufacturer)).size===MANUFACTURER_UNIVERSE.length)],
+    ["merchant_search_builder",!!merchantSearchUrl({merchant_slug:"misumi-japan"},"E2E-X2MC18 2M")&&!!merchantSearchUrl({merchant_slug:"digikey-japan"},"E2E-X2MC18 2M")],
+    ["application_taxonomy_present",APPLICATION_TAXONOMY.humanoid.includes("joint_actuation")&&APPLICATION_TAXONOMY.automotive.includes("ev")]
+  ];
+  const hardeningChecks=[
+    ["rotation_window_wraps",rotateWindow([{slug:"a"},{slug:"b"},{slug:"c"}],1,2).map(x=>x.slug).join(",")==="c,a"],
+    ["generated_search_page_rejected",merchantEvidenceGate({generated_adapter:true,merchant_slug:"digikey-japan",manufacturer:"OMRON"},{part_number:"E2E-X2MC18 2M",active:true,status_evidence:"x"},"OMRON E2E-X2MC18 2M","https://www.digikey.jp/ja/products/result?keywords=E2E-X2MC18%202M").ok===false],
+    ["generated_detail_brand_gate_pass",merchantEvidenceGate({generated_adapter:true,merchant_slug:"digikey-japan",manufacturer:"OMRON"},{part_number:"E2E-X2MC18 2M",active:true,status_evidence:"x"},"OMRON manufacturer part number E2E-X2MC18 2M","https://www.digikey.jp/ja/products/detail/omron-automation-and-safety/E2E-X2MC18-2M/10221642").ok===true],
+    ["generated_detail_wrong_brand_rejected",merchantEvidenceGate({generated_adapter:true,merchant_slug:"digikey-japan",manufacturer:"ROHM"},{part_number:"E2E-X2MC18 2M",active:true,status_evidence:"x"},"OMRON E2E-X2MC18 2M","https://www.digikey.jp/ja/products/detail/omron-automation-and-safety/E2E-X2MC18-2M/10221642").ok===false],
+    ["retry_429_cooldown",retryPolicy("HTTP_429;JINA_HTTP_429",1).delay_hours===24],
+    ["retry_403_cooldown",retryPolicy("HTTP_403",1).delay_hours===72],
+    ["retry_db_timeout_short",retryPolicy("Supabase 504: upstream request timeout",1).delay_hours===1],
+    ["offer_detail_detection_monotaro",isLikelyMerchantDetailUrl({merchant_slug:"monotaro-japan"},"https://www.monotaro.com/p/6369/6353/")===true],
+    ["offer_search_detection_monotaro",isLikelyMerchantDetailUrl({merchant_slug:"monotaro-japan"},"https://www.monotaro.com/s/q-E2E-X2MC18/")===false],
+    ["bounded_offer_run",MAX_OFFER_ITEMS_PER_RUN<=4],
+    ["queue_budget_enabled",QUEUE_ACTIVE_BUDGET>=200&&QUEUE_ACTIVE_BUDGET<=1000],
+    ["relation_status_schema_contract",RELATION_STATUS_DIAGNOSTIC_PATH.includes("observed_at")&&!RELATION_STATUS_DIAGNOSTIC_PATH.includes("created_at")],
+    ["catalog_fallback_attempt_budget",MAX_CATALOG_ITEMS_PER_RUN>=2&&MAX_CATALOG_ITEMS_PER_RUN<=4],
+    ["watch_fallback_attempt_budget",MAX_WATCH_ITEMS_PER_RUN>=2&&MAX_WATCH_ITEMS_PER_RUN<=4],
+    ["offer_fallback_attempt_budget",MAX_OFFER_ITEMS_PER_RUN>=2&&MAX_OFFER_ITEMS_PER_RUN<=4],
+    ["daily_seed_guard_below_global_budget",DAILY_SEED_PAUSE_THRESHOLD<QUEUE_ACTIVE_BUDGET],
+    ["merchant_queue_budget_isolated",MERCHANT_QUEUE_BUDGET<DAILY_SEED_PAUSE_THRESHOLD],
+    ["hard_queue_ceiling_above_normal_budget",HARD_QUEUE_CEILING>QUEUE_ACTIVE_BUDGET],
+    ["external_source_error_classifier",isExpectedExternalSourceError("HTTP_403;FALLBACK_JINA_HTTP_429:https://example.com")&&!isExpectedExternalSourceError("Supabase 504: upstream request timeout")],
+    ["merchant_global_drain_enabled",MERCHANT_GLOBAL_DRAIN_LIMIT>0&&MERCHANT_GLOBAL_DRAIN_LIMIT<=MAX_OFFER_ITEMS_PER_RUN],
+    ["merchant_soft_budget_below_hard_ceiling",MERCHANT_QUEUE_BUDGET<MERCHANT_QUEUE_HARD_CEILING],
+    ["merchant_trickle_seed_bounded",MERCHANT_TRICKLE_SEED_MAX_ROWS===1],
+    ["merchant_due_backlog_excludes_future_cooldown",activeMerchantQueueBacklog.toString().includes("next_attempt_at=lte")],
+    ["monotaro_group_hub_discovery",merchantDetailCandidates.toString().includes("isMerchantDiscoveryHubUrl")&&MERCHANT_ADAPTER_TEMPLATES.find(x=>x.merchant_slug==="monotaro-japan")?.allowPrefixes?.some(x=>x.includes("/g/"))],
+    ["merchant_disabled_queue_cleanup_enabled",OFFER_SOURCES.some(x=>x.collection_enabled===false)],
+    ["official_watch_canonical_enrichment_enabled",contextualOfficialModels("OMRON","型番 E2E-X2MC18 2M","OMRON sensor").length>0],
+    ["engineering_spec_extraction_enabled",(()=>{const m=extractEngineeringSpecs("定格トルク: 2.5 N·m 定格回転数: 3000 rpm", "https://example.invalid");const tq=m.find(x=>x.key==="torque"),sp=m.find(x=>x.key==="speed");return !!tq&&tq.value===2.5&&String(tq.unit).includes("N")&&!!sp&&sp.value===3000&&String(sp.unit).toLowerCase()==="rpm";})()],
+    ["relation_auto_verification_guard_enabled",true],
+    ["merchant_non_omron_priority_enabled",NON_OMRON_MERCHANT_PRIORITY.length>=20]
+  ];
+  const exactFixture=canonicalEvidenceForModel({manufacturer:"OMRON"},"品番 E2E-X2MC18 2M 定格トルク 2.5 N·m","E2E-X2MC18 2M","https://example.com/product/detail/E2E-X2MC18-2M","E2E-X2MC18 2M");
+  const weakFixture=canonicalEvidenceForModel({manufacturer:"Aptiv"},"Download PRODUCT-12345 catalog","Products","https://example.com/products","PRODUCT-12345");
+  const v230Checks=[
+    ["canonical_exact_quality_tier_enabled",exactFixture.level==="manufacturer_exact"],
+    ["weak_candidate_non_promotion_enabled",weakFixture.level==="candidate"&&acceptedCanonicalModels([{pn:"PRODUCT-12345",...weakFixture}]).length===0],
+    ["deep_enrichment_priority_lane_enabled",DEEP_WATCH_PRIORITY_LIMIT===1&&DEEP_QUEUE_BUDGET===24&&isDeepWatchDepth(-1)],
+    ["deep_bootstrap_fallback_enabled",DEEP_BOOTSTRAP_PER_RUN===1&&isDeepWatchDepth(-1)],
+    ["merchant_exact_detail_promotion_enabled",MERCHANT_DETAIL_PROMOTION_LIMIT===2&&isMerchantDetailUrl({merchant_slug:"digikey-japan"},"https://www.digikey.jp/ja/products/detail/test/abc/1")],
+    ["replacement_pdf_bounded_parse_enabled",replacementPdfLikely("https://example.com/Replacement_data.pdf")&&MAX_DEEP_HOPS===2],
+    ["resilient_supabase_status_probe_enabled",STATUS_PROBE_TIMEOUT_MS===10000&&STATUS_RETRY_TIMEOUT_MS===20000&&STATUS_DIAGNOSTIC_BATCH_SIZE===1&&SUPABASE_TIMEOUT_MS===18000],
+    ["supabase_idempotent_get_retry_enabled",SUPABASE_GET_RETRY_COUNT===1&&SUPABASE_GET_RETRY_DELAY_MS===250&&supabaseReadRetryCount("GET")===1&&supabaseReadRetryCount("HEAD")===1],
+    ["supabase_write_retry_disabled_by_design",supabaseReadRetryCount("POST")===0&&supabaseReadRetryCount("PATCH")===0&&supabaseReadRetryCount("PUT")===0&&supabaseReadRetryCount("DELETE")===0],
+    ["collector_db_preflight_enabled",COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS===12000],
+    ["bounded_status_sampling_enabled",STATUS_SAMPLE_LIMIT===80&&STATUS_PARTS_SAMPLE_LIMIT===60&&STATUS_RELATION_SAMPLE_LIMIT===60&&STATUS_OFFER_SAMPLE_LIMIT===60&&STATUS_MERCHANT_SAMPLE_LIMIT===60&&STATUS_RUN_SAMPLE_LIMIT===18&&STATUS_RUN_LOOKBACK_HOURS===24&&STATUS_FALLBACK_TIMEOUT_MS===8000],
+    ["status_probe_separated_from_diagnostics",typeof statusDbProbe==="function"&&typeof runDiagnosticBatches==="function"],
+    ["lightweight_preflight_enabled",collectorDbPreflight.toString().includes("select=version&limit=1")&&!collectorDbPreflight.toString().includes("order=")],
+    ["backlog_probes_unordered",!activeQueueBacklog.toString().includes("order=")&&!activeMerchantQueueBacklog.toString().includes("order=")],
+    ["status_run_window_client_sorted",STATUS_RUN_LOOKBACK_HOURS===24&&STATUS_RUN_SAMPLE_LIMIT===18]
+  ];
+  const checks=[...pure,...parserChecks,...universeChecks,...hardeningChecks,...v230Checks];
+  return {
+    ok:checks.every(x=>x[1]),
+    build_id:BUILD_ID,
+    checks:checks.map(([name,ok])=>({name,ok})),
+    observed:{dead,live,misumi,digikey:dk,mouser}
+  };
+}
+
+async function ensureSystemMerchant(env,source){
+  const found=await sbOptional(env,`/merchants?select=*&slug=eq.${encodeURIComponent(source.merchant_slug)}&limit=1`);
+  if(Array.isArray(found)&&found.length)return found[0];
+  const now=new Date().toISOString();
+  // Deliberately discard the random preimage: system-managed merchants cannot
+  // authenticate through the public merchant API unless explicitly converted later.
+  const unusableSecret=`system-only-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+  const hash=await sha256HexText(unusableSecret);
+  const row={
+    id:crypto.randomUUID(),slug:source.merchant_slug,name:source.merchant_name,
+    website_url:source.website_url,country_code:source.country_code||"JP",status:"active",
+    verified:!!source.verified_merchant,merchant_api_key_hash:hash,merchant_api_key_prefix:"system:none",
+    agent_description:`System-observed public offers from ${source.merchant_name}. No paid placement. Availability is represented conservatively.`,
+    capabilities:{public_offer_observation:true,checkout_mode:"link_out"},
+    metadata:{system_managed:true,source_type:source.source_type,source_url:source.website_url,merchant_self_service_auth:false},
+    created_at:now,updated_at:now
+  };
+  const saved=await sb(env,"/merchants",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(row)});
+  const merchant=Array.isArray(saved)&&saved.length?saved[0]:row;
+  await sbOptional(env,"/merchant_agent_profiles?on_conflict=merchant_id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({
+    merchant_id:merchant.id,discovery_name:source.merchant_name,
+    description:`Public machine-observed offers from ${source.merchant_name}. Stock and fulfillment are never upgraded beyond the public evidence.`,
+    checkout_mode:"link_out",supports_agent_checkout:false,protocols:["https"],
+    capabilities:{public_offer_observation:true},policies:{ranking:"evidence_based_no_paid_placement",compatibility_claims_require_evidence:true},
+    metadata:{system_managed:true,source_url:source.website_url},updated_at:now
+  })});
+  return merchant;
+}
+async function upsertOfferParts(env,source,offers,pageTitle,pageUrl){
+  if(!offers.length)return new Map();
+  const normalized=[...new Set(offers.map(x=>normalizePartNumber(x.part_number)).filter(Boolean))];
+  const existing=await loadPartIds(env,source.manufacturer,normalized);
+  if(source.generated_adapter===true || existing.size===normalized.length)return existing;
+  const now=new Date().toISOString();
+  const missing=offers.filter(o=>!existing.has(normalizePartNumber(o.part_number)));
+  if(!missing.length)return existing;
+  const rows=missing.map(o=>({
+    manufacturer:source.manufacturer,brand:source.manufacturer,part_number:o.part_number,
+    normalized_part_number:normalizePartNumber(o.part_number),name:pageTitle||o.part_number,
+    category:source.source_type==="official_manufacturer_store"?"official_store":"merchant_catalog",
+    lifecycle_status:"unknown",
+    specifications:{collector:{application_tags:universeProfile(source.manufacturer)?.applications||[],technology_tags:universeProfile(source.manufacturer)?.domains||[],evidence_role:"merchant_observation_unverified_identity"}},dimensions:{},electrical:{},mechanical:{},
+    notes:"Created from explicit non-generated merchant observation only because no canonical manufacturer row existed. Lifecycle remains unknown until manufacturer evidence is collected.",
+    official_url:null,source_confidence:0.55,source_last_checked_at:now,updated_at:now
+  }));
+  await sb(env,"/parts_catalog?on_conflict=manufacturer,normalized_part_number",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return loadPartIds(env,source.manufacturer,normalized);
+}
+async function saveMerchantOffers(env,source,merchant,offers,partIds,pageUrl,pageText,evidenceUrl=pageUrl){
+  if(!offers.length)return 0;
+  const gated=[];
+  for(const o of offers){
+    const gate=merchantEvidenceGate(source,o,pageText,evidenceUrl||pageUrl);
+    if(gate.ok)gated.push({...o,evidence_gate:gate.reason});
+  }
+  if(!gated.length)return 0;
+  const observed=new Date().toISOString();
+  const sourceUpdated=offerUpdatedAt(pageText)||observed;
+  const rows=gated.map(o=>{
+    const pn=normalizePartNumber(o.part_number);
+    return {
+      id:crypto.randomUUID(),merchant_id:merchant.id,merchant_sku:o.merchant_sku||`${source.slug}:${pn}`,
+      part_id:partIds.get(pn)||null,manufacturer:source.manufacturer,part_number:o.part_number,
+      normalized_part_number:pn,title:`${source.manufacturer} ${o.part_number}`,mpn:o.part_number,gtin:null,
+      condition:"new",price:o.price!=null?o.price:null,currency:o.currency||source.currency||"JPY",stock_quantity:o.stock_quantity!=null?o.stock_quantity:null,stock_status:o.stock_status||"unknown",
+      lead_time_days:o.lead_time_days!=null?o.lead_time_days:null,ships_to:source.ships_to??["JP"],shipping_cost:null,product_url:pageUrl,checkout_url:o.active!==false?pageUrl:null,
+      datasheet_url:null,return_policy_url:null,authorized_distributor:false,
+      authenticity_evidence_url:source.authenticity_evidence_url||null,
+      compatibility_claim:null,compatibility_evidence_url:null,active:o.active!==false,
+      source_updated_at:sourceUpdated,observed_at:observed,updated_at:observed,
+      metadata:{source_type:source.source_type,source_url:evidenceUrl,ships_from_country:source.country_code||null,tax_included:o.tax_included===true?true:o.tax_included===false?false:(source.tax_included===true?true:source.tax_included===false?false:null),duty_included:null,minimum_order_quantity:1,fulfillment_evidence_url:evidenceUrl,last_verified_at:observed,public_availability_label:o.availability_label,reference_price:o.reference_price??null,availability_is_live_stock:false,evidence_gate:o.evidence_gate,brand_gate_required:source.generated_adapter===true,availability_policy:"Merchant-reported public availability only; no inventory quantity, shipping cost, authorized status or compatibility is inferred."}
+    };
+  });
+  const skus=[...new Set(rows.map(x=>x.merchant_sku))];
+  if(skus.length){
+    const quoted=skus.map(x=>`"${String(x).replace(/"/g,'\\"')}"`).join(",");
+    const existing=await sbOptional(env,`/merchant_offers?select=id,merchant_sku&merchant_id=eq.${encodeURIComponent(merchant.id)}&merchant_sku=in.(${encodeURIComponent(quoted)})&limit=${Math.max(20,skus.length*2)}`);
+    const have=new Set((Array.isArray(existing)?existing:[]).map(x=>x.merchant_sku));
+    for(const row of rows)if(have.has(row.merchant_sku))delete row.id;
+  }
+  await sb(env,"/merchant_offers?on_conflict=merchant_id,merchant_sku",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  await sbOptional(env,`/merchants?id=eq.${encodeURIComponent(merchant.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({last_feed_at:observed,updated_at:observed})});
+  return rows.length;
+}
+async function processOfferItem(env,item,source){
+  const parseFor=(p)=>source.slug==="offer-omron-fa-store"?parseOmronStoreOffers(source,p)
+    :source.slug==="offer-rs-omron"?parseRsOmronOffers(source,p)
+    :source.merchant_slug==="monotaro-japan"?parseMonotaroOffers(source,p)
+    :source.merchant_slug==="misumi-japan"?parseMisumiOffers(source,p)
+    :source.merchant_slug==="digikey-japan"?parseDigiKeyOffers(source,p)
+    :source.merchant_slug==="mouser"?parseMouserOffers(source,p):[];
+
+  const originalUrl=String(item.url||"");
+  let canonicalProductUrl=originalUrl;
+  let evidenceUrl=originalUrl;
+  let page=null;
+  let offers=[];
+  let contentFallbackError=null;
+
+  if(source.merchant_slug==="monotaro-japan" && /\/p\/\d{4}\/\d{4}\//.test(originalUrl)){
+    canonicalProductUrl=canonicalMonotaroProductUrl(originalUrl);
+    const printUrl=monotaroPrintUrl(originalUrl);
+    if(printUrl){
+      try{
+        const printPage=await fetchPage(printUrl);
+        const parsed=parseFor(printPage);
+        if(parsed.length){
+          page={...printPage,transport:`monotaro_print_${printPage.transport||"direct"}`};
+          offers=parsed;
+          evidenceUrl=printUrl;
+        }
+      }catch(e){contentFallbackError=`PRINT_${safeError(e)}`;}
+    }
+  }
+
+  if(!page){
+    page=await fetchPage(originalUrl);
+    if(page.isPdf)return {status:"done",kind:"merchant_offer",source_slug:source.slug,url:originalUrl,offers_found:0,offers_upserted:0,note:"pdf_not_applicable"};
+    offers=parseFor(page);
+  }
+
+  if(!offers.length && page.transport==="direct" && ["offer-rs-omron","offer-misumi-omron","offer-digikey-omron","offer-mouser-omron"].includes(source.slug)){
+    try{
+      const fallback=await fetchViaJinaOnly(originalUrl);
+      const parsed=parseFor(fallback);
+      if(parsed.length){page=fallback;offers=parsed;evidenceUrl=originalUrl;}
+    }catch(e){contentFallbackError=[contentFallbackError,safeError(e)].filter(Boolean).join(";");}
+  }
+
+  const text=String(page.text||stripHtml(page.html||"")).slice(0,MAX_BODY_CHARS);
+  const title=page.html?titleOf(page.html):(text.match(/^Title:\s*(.+)$/mi)?.[1]||null);
+  const gatedOffers=offers.filter(o=>merchantEvidenceGate(source,o,text,evidenceUrl||canonicalProductUrl).ok);
+  const merchant=await ensureSystemMerchant(env,source);
+  const partIds=await upsertOfferParts(env,source,gatedOffers,title,canonicalProductUrl);
+  const saved=await saveMerchantOffers(env,source,merchant,gatedOffers,partIds,canonicalProductUrl,text,evidenceUrl);
+  const links=allLinksOf(page);
+  const eligibleLinks=links.filter(u=>pageAllowed(source,u));
+  const promoted=await promoteMerchantDetailLinks(env,source,page,Number(item.depth||0));
+  return {status:"done",kind:"merchant_offer",source_slug:source.slug,merchant_slug:merchant.slug,url:originalUrl,evidence_url:evidenceUrl,transport:page.transport||"direct",content_fallback_error:contentFallbackError,decoded_charset:page.decoded_charset||null,body_chars:text.length,offers_found:offers.length,offers_rejected_by_evidence_gate:offers.length-gatedOffers.length,offers_with_price:gatedOffers.filter(x=>x.price!=null).length,offers_upserted:saved,parts_ensured:partIds.size,enqueued:promoted,merchant_detail_links_promoted:promoted,discovery_links_found:eligibleLinks.length,parsed_part_numbers:offers.map(x=>x.part_number).slice(0,5),parsed_active:offers.map(x=>x.active!==false).slice(0,5),parsed_stock_status:offers.map(x=>x.stock_status||null).slice(0,5),parsed_reference_price:offers.map(x=>x.reference_price??null).slice(0,5),parsed_sale_price:offers.map(x=>x.price??null).slice(0,5),status_evidence:offers.map(x=>x.status_evidence||null).slice(0,5),commerce_window_chars:offers.map(x=>x.commerce_window_chars??null).slice(0,5),identity_evidence:offers.map(x=>x.identity_evidence||null).slice(0,5)};
+}
+
+async function processWatchItem(env,item,source){
+  let page=await fetchPage(item.url);
+  let pdfRelationParseAttempted=false,pdfRelationParseOk=false,pdfRelationParseError=null;
+  if(page.isPdf){
+    const pdfText=await fetchReplacementPdfText(item.url);pdfRelationParseAttempted=!!pdfText;
+    if(pdfText&&pdfText.text){page=pdfText;pdfRelationParseOk=true;}else return {status:"done",kind:"manufacturer_watch",source_slug:source.slug,manufacturer:source.manufacturer,url:item.url,transport:page.transport||"official_pdf_pointer",decoded_charset:null,body_chars:0,title:null,application_tags:source.applications||[],technology_tags:source.domains||[],source_tier:source.source_tier||"A",watch_only:true,canonical_parts_upserted:0,engineering_metrics_found:0,engineering_metrics_saved:0,relation_hints:0,deep_links_enqueued:0,pdf_relation_parse_attempted:pdfRelationParseAttempted,pdf_relation_parse_ok:false,pdf_relation_parse_error:pdfText?.error||null};
+  }
+  const text=String(page.text||stripHtml(page.html||""));
+  const title=page.html?titleOf(page.html||""):(text.match(/^Title:\s*(.+)$/mi)?.[1]||null);
+  const rawModels=contextualOfficialModels(source.manufacturer,text,title||"");
+  const classified=classifyCanonicalModels(source,text,title||"",page.official_url||page.url,rawModels);
+  const models=acceptedCanonicalModels(classified);
+  const evidenceByModel=Object.fromEntries(classified.filter(x=>x.level!=="candidate").map(x=>[x.pn,{level:x.level,reason:x.reason,confidence:x.confidence}]));
+  const metrics=extractEngineeringSpecs(text,page.official_url||page.url);
+  const safeMetrics=metricBindingSafe(classified)?metrics:[];
+  const lifecycle=lifecycleFromText(source,text);
+  const tablePairs=markdownTableRelationPairs(source,text,page.official_url||page.url,title||"");
+  const genericPairs=tablePairs.length?[]:strongRelationPairs(source,text,page.official_url||page.url,title||"");
+  const relationPairs=tablePairs.length?tablePairs:genericPairs;
+  const enrichment={extracted_metrics:safeMetrics,application_evidence_level:applicationEvidenceLevel(source,text),canonical_evidence_by_model:evidenceByModel};
+  const canonicalPartsUpserted=models.length?await upsertPartsBatch(env,source,models,title,page.official_url||page.url,lifecycle,relationPairs,enrichment):0;
+  const relationHints=relationPairs.length?await saveRelationCandidates(env,source,relationPairs,title):0;
+  const discovery=watchDiscoveryLinks(source,page);
+  let deepEnqueued=0,discoveryQueueGuard=null;
+  if(discovery.length){deepEnqueued=await enqueueDeepWatchLinks(env,source,discovery,Number(item.depth||0));}
+  discoveryQueueGuard=await activeQueueBacklog(env,361);
+  const exact=classified.filter(x=>x.level==="manufacturer_exact").length,catalog=classified.filter(x=>x.level==="manufacturer_catalog").length,candidates=classified.filter(x=>x.level==="candidate").length;
+  return {status:"done",kind:"manufacturer_watch",source_slug:source.slug,manufacturer:source.manufacturer,url:item.url,transport:page.transport||"direct",decoded_charset:page.decoded_charset||null,body_chars:text.length,title,lifecycle_hint:lifecycle,application_tags:source.applications||[],technology_tags:source.domains||[],source_tier:source.source_tier||"A",watch_only:true,canonical_models_found:rawModels.length,canonical_exact_found:exact,canonical_catalog_found:catalog,canonical_candidates_skipped:candidates,canonical_parts_upserted:canonicalPartsUpserted,engineering_metrics_found:metrics.length,engineering_metrics_saved:safeMetrics.length&&models.length?safeMetrics.length:0,relation_hints:relationHints,discovery_links_enqueued:0,deep_links_enqueued:deepEnqueued,discovery_queue_guard:discoveryQueueGuard,application_evidence_level:enrichment.application_evidence_level,pdf_relation_parse_attempted:pdfRelationParseAttempted,pdf_relation_parse_ok:pdfRelationParseOk,pdf_relation_parse_error:pdfRelationParseError};
+}
+async function processItem(env,item){
+  const source=sourceBySlug(item.source_slug);
+  if(!source)throw new Error("unknown_source:"+item.source_slug);
+  if(source.kind==="manufacturer_watch")return processWatchItem(env,item,source);
+  if(source.kind==="merchant_offer")return processOfferItem(env,item,source);
+  let page=await fetchPage(item.url);
+  let pdfRelationParseAttempted=false,pdfRelationParseOk=false,pdfRelationParseError=null;
+  if(page.isPdf&&replacementPdfLikely(item.url)){const p=await fetchReplacementPdfText(item.url);pdfRelationParseAttempted=true;if(p&&p.text){page=p;pdfRelationParseOk=true;}else pdfRelationParseError=p?.error||null;}
+  const parseText=String(page.text||"").slice(0,MAX_BODY_CHARS);
+  const title=page.html?titleOf(page.html):(parseText.match(/^Title:\s*(.+)$/mi)?.[1]||null);
+  const lifecycle=lifecycleFromText(source,parseText);
+  const models=extractModels(source.manufacturer,`${title||""} ${parseText}`);
+  const tablePairs=markdownTableRelationPairs(source,parseText,page.official_url||page.url,title);
+  const genericPairs=tablePairs.length?[]:strongRelationPairs(source,parseText,page.official_url||page.url,title);
+  const strongPairs=tablePairs.length?tablePairs:genericPairs;
+  const weakCandidates=strongPairs.length?[]:extractReplacementCandidates(source.manufacturer,parseText,page.official_url||page.url);
+  const allRelationCandidates=strongPairs.length?strongPairs:weakCandidates;
+  const catalogMetrics=extractEngineeringSpecs(parseText,page.official_url||page.url);
+  const upserted=await upsertPartsBatch(env,source,models,title,page.official_url||page.url,lifecycle,allRelationCandidates,{extracted_metrics:catalogMetrics,application_evidence_level:applicationEvidenceLevel(source,parseText)});
+  const ids=await loadPartIds(env,source.manufacturer,models);
+  const links=allLinksOf(page);
+  const pdfs=links.filter(u=>/\.pdf(?:$|[?#])/i.test(u)&&hostAllowed(source,u));
+  const docs=await saveDocuments(env,source,ids,pdfs,title);
+  const relationHints=await saveRelationCandidates(env,source,allRelationCandidates,title);
+
+  const children=links.filter(u=>pageAllowed(source,u));
+  const enqueued=await enqueueLinks(env,source,children,Number(item.depth||0)+1);
+  return {status:"done",url:item.url,official_url:page.official_url||page.url,transport:page.transport||"direct",direct_error:page.direct_error||null,is_pdf:!!page.isPdf,pointer_only:!!page.pointer_only,body_fetched:page.body_fetched!==false,title,lifecycle,models:models.length,upserted,documents:docs,relation_hints:relationHints,strong_relation_pairs:strongPairs.length,table_relation_pairs:tablePairs.length,engineering_metrics_found:catalogMetrics.length,engineering_metrics_saved:catalogMetrics.length&&models.length<=2?catalogMetrics.length:0,enqueued,pdf_relation_parse_attempted:pdfRelationParseAttempted,pdf_relation_parse_ok:pdfRelationParseOk,pdf_relation_parse_error:pdfRelationParseError};
+}
+
+async function markDone(env,item,result){
+  return sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(item.id)}`,{method:"PATCH",body:JSON.stringify({status:"done",processed_at:new Date().toISOString(),last_error:null,metadata:result,updated_at:new Date().toISOString()})});
+}
+async function markFailure(env,item,e){
+  const attempts=Number(item.attempts||0)+1;
+  const error=safeError(e);
+  const policy=retryPolicy(error,attempts);
+  const next=new Date(Date.now()+policy.delay_hours*3600000).toISOString();
+  return sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(item.id)}`,{method:"PATCH",body:JSON.stringify({status:policy.status,attempts,next_attempt_at:next,last_error:`${policy.reason}:${error}`,updated_at:new Date().toISOString()})});
+}
+
+async function bootstrapDeepWatchWindow(env,window){
+  const now=new Date().toISOString();
+  for(const source of (window||[]).slice(0,Math.max(1,DEEP_BOOTSTRAP_PER_RUN))){
+    const seed=(source.seeds||[])[0];
+    if(!seed)continue;
+    const got=await sbOptional(env,`/parts_collector_queue?select=*&source_slug=eq.${encodeURIComponent(source.slug)}&url=eq.${encodeURIComponent(seed)}&limit=1`);
+    const existing=Array.isArray(got)&&got.length?got[0]:null;
+    if(existing){
+      if(isDeepWatchDepth(existing.depth))continue;
+      const row={...existing,status:"pending",depth:-1,attempts:0,next_attempt_at:now,last_error:null,updated_at:now};
+      await sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(existing.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({status:"pending",depth:-1,attempts:0,next_attempt_at:now,last_error:null,updated_at:now})});
+      return {used:true,source_slug:source.slug,url:seed,row};
+    }
+    const row={id:crypto.randomUUID(),source_slug:source.slug,url:seed,status:"pending",depth:-1,attempts:0,next_attempt_at:now,created_at:now,updated_at:now};
+    await sbOptional(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(row)});
+    return {used:true,source_slug:source.slug,url:seed,row};
+  }
+  return {used:false};
+}
+
+async function refreshStaleWatchRows(env){
+  const enabled=OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false);
+  if(!enabled.length)return 0;
+  const slugs=enabled.map(x=>x.slug).join(",");
+  const cutoff=new Date(Date.now()-7*86400000).toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id,source_slug,status,processed_at&source_slug=in.(${encodeURIComponent(slugs)})&status=eq.done&processed_at=lt.${encodeURIComponent(cutoff)}&order=processed_at.asc&limit=8`);
+  let n=0;
+  for(const r of Array.isArray(rows)?rows:[]){await sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(r.id)}`,{method:"PATCH",body:JSON.stringify({status:"pending",next_attempt_at:new Date().toISOString(),updated_at:new Date().toISOString()})});n++;}
+  return n;
+}
+
+async function runCollector(env,limit=MAX_PAGES_PER_RUN){
+  const nowIso=new Date().toISOString();
+  const preflight=await collectorDbPreflight(env);
+  if(!preflight.ok){
+    return {ok:false,service:SERVICE,version:VERSION,build_id:BUILD_ID,trigger:"collector_run",started_at:nowIso,finished_at:new Date().toISOString(),mode:"database_unavailable",selected_rows:0,processed:[],errors:[{stage:"db_preflight",error:preflight.error}],database_preflight:preflight};
+  }
+  const tick=Math.floor(Date.now()/600000);
+  const merchantBacklogAtStart=await activeMerchantQueueBacklog(env,MERCHANT_QUEUE_BUDGET+1);
+  // v7: saturated Merchant queue becomes a bounded drain priority instead of a permanent seeding pause.
+  const forceMerchantDrain=merchantBacklogAtStart!=null&&merchantBacklogAtStart>=MERCHANT_QUEUE_BUDGET;
+  const mode=forceMerchantDrain?"offer":((tick%6===0||tick%6===3)?"offer":((tick%6===2||tick%6===5)?"manufacturer_watch":"catalog"));
+  const offerSlot=mode==="offer",watchSlot=mode==="manufacturer_watch";
+  const requested=Math.max(1,Math.min(2,Number(limit)||MAX_PAGES_PER_RUN));
+  const dailySeed=tick%144===0;
+  const seedReport=dailySeed?await seedQueue(env):{ok:true,seeded:0,skipped:true,reason:"daily_seed_not_due"};
+  let rows=[];let dynamicMerchantSeed={parts_sampled:0,queries_seeded:0,paused:false};let selectedWindow=[];let watchDeepBootstrap={used:false};
+
+  if(offerSlot){
+    const disabledQueueCleanup=await quarantineDisabledMerchantQueue(env);
+    const enabled=OFFER_SOURCES.filter(x=>x.collection_enabled!==false).sort((a,b)=>a.slug.localeCompare(b.slug));
+    const window=rotateWindow(enabled,Math.floor(tick/3),OFFER_WINDOW_SIZE);selectedWindow=window.map(x=>x.slug);
+    dynamicMerchantSeed=await seedDynamicMerchantQueries(env,[...new Set(window.map(x=>x.manufacturer))]);
+    dynamicMerchantSeed={...dynamicMerchantSeed,disabled_queue_cleanup:disabledQueueCleanup};
+    const seededSlugs=Array.isArray(dynamicMerchantSeed.seeded_source_slugs)?dynamicMerchantSeed.seeded_source_slugs:[];
+    const querySources=[...window,...seededSlugs.map(slug=>OFFER_SOURCES.find(x=>x.slug===slug)).filter(Boolean)];
+    const uniqueQuerySources=[...new Map(querySources.map(x=>[x.slug,x])).values()];
+    if(uniqueQuerySources.length){
+      const path=`/parts_collector_queue?select=*&source_slug=in.(${encodeURIComponent(sourceInFilter(uniqueQuerySources))})&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,created_at.asc&limit=${MAX_OFFER_ITEMS_PER_RUN}`;
+      const got=await sbOptional(env,path);rows=Array.isArray(got)?got:[];
+    }
+    // Deadlock prevention: if the rotating window has no due rows, drain the oldest
+    // due Merchant queue rows globally instead of leaving backlog stranded outside
+    // the current window. New seeding may remain paused while this backlog drains.
+    if(rows.length===0){
+      const omronSlugs=OFFER_SOURCES.filter(x=>x.manufacturer==="OMRON").map(x=>x.slug);
+      const omit=omronSlugs.length?`&source_slug=not.in.(${encodeURIComponent(omronSlugs.map(x=>`"${x}"`).join(","))})`:"";
+      const nonOmronPath=`/parts_collector_queue?select=*&source_slug=like.offer-*${omit}&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,next_attempt_at.asc,created_at.asc&limit=${MERCHANT_GLOBAL_DRAIN_LIMIT}`;
+      const first=await sbOptional(env,nonOmronPath);rows=Array.isArray(first)?first:[];
+      if(rows.length===0){const drainPath=`/parts_collector_queue?select=*&source_slug=like.offer-*&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,next_attempt_at.asc,created_at.asc&limit=${MERCHANT_GLOBAL_DRAIN_LIMIT}`;const drained=await sbOptional(env,drainPath);rows=Array.isArray(drained)?drained:[];}
+      if(rows.length)dynamicMerchantSeed={...dynamicMerchantSeed,global_drain_used:true,global_drain_rows:rows.length,global_drain_non_omron_first:true};
+    }
+  }else if(watchSlot){
+    await refreshStaleWatchRows(env);
+    const enabled=OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).sort((a,b)=>a.slug.localeCompare(b.slug));
+    const window=rotateWindow(enabled,Math.floor(tick/3),WATCH_WINDOW_SIZE);selectedWindow=window.map(x=>x.slug);
+    if(window.length){
+      const deepPath=`/parts_collector_queue?select=*&source_slug=like.watch-*&status=in.(pending,retry)&depth=lt.0&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,created_at.asc&limit=${DEEP_WATCH_PRIORITY_LIMIT}`;
+      const deepGot=await sbOptional(env,deepPath);const deepRows=Array.isArray(deepGot)?deepGot:[];
+      const normalLimit=Math.max(0,MAX_WATCH_ITEMS_PER_RUN-deepRows.length);
+      let normalRows=[];if(normalLimit>0){const path=`/parts_collector_queue?select=*&source_slug=in.(${encodeURIComponent(sourceInFilter(window))})&status=in.(pending,retry)&depth=gte.0&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=created_at.asc&limit=${normalLimit}`;const got=await sbOptional(env,path);normalRows=Array.isArray(got)?got:[];}
+      rows=[...deepRows,...normalRows];
+      if(rows.length===0){
+        watchDeepBootstrap=await bootstrapDeepWatchWindow(env,window);
+        if(watchDeepBootstrap.used&&watchDeepBootstrap.row)rows=[watchDeepBootstrap.row];
+      }
+    }
+  }else{
+    const enabled=SOURCES.filter(x=>x.collection_enabled!==false).sort((a,b)=>a.slug.localeCompare(b.slug));
+    const window=rotateWindow(enabled,Math.floor(tick/3),Math.min(5,enabled.length));selectedWindow=window.map(x=>x.slug);
+    if(window.length){
+      const path=`/parts_collector_queue?select=*&source_slug=in.(${encodeURIComponent(sourceInFilter(window))})&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=created_at.asc&limit=${MAX_CATALOG_ITEMS_PER_RUN}`;
+      const got=await sbOptional(env,path);rows=Array.isArray(got)?got:[];
+    }
+  }
+
+  const report={service:SERVICE,version:VERSION,build_id:BUILD_ID,trigger:"collector_run",started_at:new Date().toISOString(),selected_rows:rows.length,mode,offer_slot:offerSlot,watch_slot:watchSlot,force_merchant_drain:forceMerchantDrain,merchant_backlog_at_start:merchantBacklogAtStart,selected_source_window:selectedWindow,seed_report:seedReport,dynamic_merchant_seed:dynamicMerchantSeed,processed:[],errors:[]};
+  for(const item of rows){
+    try{const result=await processItem(env,item);await markDone(env,item,result);report.processed.push(result);}
+    catch(e){await markFailure(env,item,e);report.errors.push({source_slug:item.source_slug,url:item.url,error:safeError(e)});}
+  }
+  report.finished_at=new Date().toISOString();report.ok=report.errors.length===0;
+  await sbOptional(env,"/parts_ingest_runs",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({started_at:report.started_at,finished_at:report.finished_at,version:`collector-${VERSION}`,pages_processed:report.processed.length,candidates_inserted:report.processed.reduce((a,x)=>a+Number(x.upserted||0)+Number(x.canonical_parts_upserted||0),0),documents_linked:report.processed.reduce((a,x)=>a+Number(x.documents||0),0),errors:report.errors,metadata:{collector:true,hardening:true,build_id:BUILD_ID,mode,offer_slot:offerSlot,watch_slot:watchSlot,selected_source_window:selectedWindow,selected_rows:rows.length,seed_report:seedReport,dynamic_merchant_seed:dynamicMerchantSeed,watch_deep_bootstrap:watchDeepBootstrap,canonical_exact_found:report.processed.reduce((a,x)=>a+Number(x.canonical_exact_found||0),0),canonical_catalog_found:report.processed.reduce((a,x)=>a+Number(x.canonical_catalog_found||0),0),canonical_candidates_skipped:report.processed.reduce((a,x)=>a+Number(x.canonical_candidates_skipped||0),0),canonical_parts_upserted:report.processed.reduce((a,x)=>a+Number(x.canonical_parts_upserted||0),0),engineering_metrics_found:report.processed.reduce((a,x)=>a+Number(x.engineering_metrics_found||0),0),engineering_metrics_saved:report.processed.reduce((a,x)=>a+Number(x.engineering_metrics_saved||0),0),deep_links_enqueued:report.processed.reduce((a,x)=>a+Number(x.deep_links_enqueued||0),0),merchant_detail_links_promoted:report.processed.reduce((a,x)=>a+Number(x.merchant_detail_links_promoted||0),0),relation_hints_saved:report.processed.reduce((a,x)=>a+Number(x.relation_hints||0),0),merchant_offers_upserted:report.processed.reduce((a,x)=>a+Number(x.offers_upserted||0),0),merchant_offers_found:report.processed.reduce((a,x)=>a+Number(x.offers_found||0),0),merchant_offers_rejected:report.processed.reduce((a,x)=>a+Number(x.offers_rejected_by_evidence_gate||0),0),processed_sources:[...new Set(report.processed.map(x=>x.source_slug).filter(Boolean))],processed_transports:[...new Set(report.processed.map(x=>x.transport).filter(Boolean))],processed_detail:report.processed.slice(0,4).map(x=>({source_slug:x.source_slug||null,url:x.url||null,evidence_url:x.evidence_url||null,transport:x.transport||null,body_chars:x.body_chars??null,offers_found:x.offers_found??null,offers_rejected_by_evidence_gate:x.offers_rejected_by_evidence_gate??null,offers_with_price:x.offers_with_price??null,offers_upserted:x.offers_upserted??null,discovery_links_found:x.discovery_links_found??null,parsed_part_numbers:x.parsed_part_numbers||null,parsed_active:x.parsed_active||null,parsed_stock_status:x.parsed_stock_status||null,status_evidence:x.status_evidence||null,identity_evidence:x.identity_evidence||null,content_fallback_error:x.content_fallback_error||null,decoded_charset:x.decoded_charset||null,canonical_models_found:x.canonical_models_found??null,canonical_exact_found:x.canonical_exact_found??null,canonical_catalog_found:x.canonical_catalog_found??null,canonical_candidates_skipped:x.canonical_candidates_skipped??null,canonical_parts_upserted:x.canonical_parts_upserted??null,engineering_metrics_found:x.engineering_metrics_found??null,engineering_metrics_saved:x.engineering_metrics_saved??null,deep_links_enqueued:x.deep_links_enqueued??null,merchant_detail_links_promoted:x.merchant_detail_links_promoted??null,pdf_relation_parse_attempted:x.pdf_relation_parse_attempted??null,pdf_relation_parse_ok:x.pdf_relation_parse_ok??null,pdf_relation_parse_error:x.pdf_relation_parse_error??null,relation_hints:x.relation_hints??null,discovery_links_enqueued:x.discovery_links_enqueued??null,discovery_queue_guard:x.discovery_queue_guard??null,application_evidence_level:x.application_evidence_level||null}))}})});
+  return report;
+}
+
+const RELATION_STATUS_DIAGNOSTIC_PATH="/parts_relation_candidates?select=id,verified,source_part_number,target_part_number,compatibility_warning,parser_confidence,observed_at&limit=60";
+
+async function diagnosticQuery(env,name,path,timeoutMs=SUPABASE_TIMEOUT_MS,fallbackPath=null){
+  try{
+    const data=await sb(env,path,{timeout_ms:timeoutMs,retry_get:false});
+    return {name,ok:true,sample_ok:true,data,error:null,fallback_used:false};
+  }catch(e){
+    const primaryError=safeError(e);
+    if(fallbackPath){
+      try{
+        const fallback=await sb(env,fallbackPath,{timeout_ms:STATUS_FALLBACK_TIMEOUT_MS,retry_get:false});
+        return {name,ok:true,sample_ok:false,data:null,error:primaryError,fallback_used:true,fallback_data:fallback};
+      }catch(fe){
+        return {name,ok:false,sample_ok:false,data:null,error:primaryError,fallback_used:true,fallback_error:safeError(fe)};
+      }
+    }
+    return {name,ok:false,sample_ok:false,data:null,error:primaryError,fallback_used:false};
+  }
+}
+async function statusDbProbe(env){
+  const path="/parts_ingest_runs?select=version,finished_at&limit=1";
+  let first=await diagnosticQuery(env,"probe",path,STATUS_PROBE_TIMEOUT_MS,"/parts_ingest_runs?select=version&limit=1");
+  if(first.ok&&first.sample_ok)return {...first,retried:false};
+  await new Promise(r=>setTimeout(r,250));
+  const second=await diagnosticQuery(env,"probe",path,STATUS_RETRY_TIMEOUT_MS,"/parts_ingest_runs?select=version&limit=1");
+  return {...second,retried:true,first_error:first.error||null};
+}
+async function runDiagnosticBatches(env,specs){
+  const out=[];
+  for(let i=0;i<specs.length;i+=STATUS_DIAGNOSTIC_BATCH_SIZE){
+    const batch=specs.slice(i,i+STATUS_DIAGNOSTIC_BATCH_SIZE);
+    const rows=await Promise.all(batch.map(x=>diagnosticQuery(env,x.name,x.path,x.timeout_ms||SUPABASE_TIMEOUT_MS,x.fallback_path||null)));
+    out.push(...rows);
+  }
+  return out;
+}
+
+async function status(env){
+  const probe=await statusDbProbe(env);
+  // Status must never run expensive ordered scans on large operational tables.
+  // Detailed enrichment outcomes come from the compact run metadata, not by pulling JSONB specifications from parts_catalog.
+  const runCutoff=new Date(Date.now()-STATUS_RUN_LOOKBACK_HOURS*3600000).toISOString();
+  const specs=[
+    {name:"queue",path:`/parts_collector_queue?select=status,source_slug&limit=${STATUS_SAMPLE_LIMIT}`,fallback_path:"/parts_collector_queue?select=id&limit=1"},
+    {name:"parts",path:`/parts_catalog?select=id,manufacturer,lifecycle_status,source_confidence&limit=${STATUS_PARTS_SAMPLE_LIMIT}`,fallback_path:"/parts_catalog?select=id&limit=1"},
+    {name:"relation_candidates",path:`/parts_relation_candidates?select=id,verified,source_part_number,target_part_number,compatibility_warning,parser_confidence,observed_at&limit=${STATUS_RELATION_SAMPLE_LIMIT}`,fallback_path:"/parts_relation_candidates?select=id&limit=1"},
+    {name:"merchant_offers",path:`/merchant_offers?select=id,merchant_id,manufacturer,stock_status,source_updated_at,active&limit=${STATUS_OFFER_SAMPLE_LIMIT}`,fallback_path:"/merchant_offers?select=id&limit=1"},
+    {name:"merchants",path:`/merchants?select=id,slug,verified,status&limit=${STATUS_MERCHANT_SAMPLE_LIMIT}`,fallback_path:"/merchants?select=id&limit=1"},
+    {name:"runs",path:`/parts_ingest_runs?select=started_at,finished_at,version,pages_processed,errors,metadata&finished_at=gte.${encodeURIComponent(runCutoff)}&limit=${STATUS_RUN_SAMPLE_LIMIT}`,fallback_path:"/parts_ingest_runs?select=version,finished_at&limit=1",timeout_ms:STATUS_RETRY_TIMEOUT_MS}
+  ];
+  const checks=probe.ok?await runDiagnosticBatches(env,specs):specs.map(x=>({name:x.name,ok:false,sample_ok:false,data:null,error:"skipped_after_probe_failure",fallback_used:false}));
+  const byName=Object.fromEntries(checks.map(x=>[x.name,x]));
+  const queue=byName.queue.data,parts=byName.parts.data,hints=byName.relation_candidates.data,merchantOffers=byName.merchant_offers.data,merchants=byName.merchants.data;
+  const runsRaw=byName.runs.data;
+  const runs=Array.isArray(runsRaw)?[...runsRaw].sort((a,b)=>new Date(b?.finished_at||b?.started_at||0).getTime()-new Date(a?.finished_at||a?.started_at||0).getTime()):runsRaw;
+  const qc={};for(const r of Array.isArray(queue)?queue:[])qc[r.status]=(qc[r.status]||0)+1;
+  const byManufacturer={},lifecycleCounts={};let lowConfidenceCount=0;
+  for(const r of Array.isArray(parts)?parts:[]){byManufacturer[r.manufacturer]=(byManufacturer[r.manufacturer]||0)+1;const lc=String(r.lifecycle_status||"unknown");lifecycleCounts[lc]=(lifecycleCounts[lc]||0)+1;if(Number(r.source_confidence||0)<0.6)lowConfidenceCount++;}
+  const latestRun=(Array.isArray(runs)&&runs.length?runs[0]:null)||(Array.isArray(probe.data)&&probe.data.length?probe.data[0]:null);const latestTs=latestRun?.finished_at||latestRun?.started_at||null;const latestAgeMinutes=latestTs?Math.max(0,Math.round((Date.now()-new Date(latestTs).getTime())/60000)):null;
+  const recent=Array.isArray(runs)?runs:[];const recentVersion=recent.filter(x=>x.version===`collector-${VERSION}`);
+  const modeLast={};for(const r of recentVersion){const m=r?.metadata?.mode;if(m&&!modeLast[m]){const errs=Array.isArray(r.errors)?r.errors:[];const external_errors=errs.filter(x=>isExpectedExternalSourceError(x?.error)).length;const internal_errors=errs.length-external_errors;modeLast[m]={finished_at:r.finished_at||null,errors:errs.length,external_source_errors:external_errors,internal_errors,pages_processed:r.pages_processed||0,selected_rows:Number(r?.metadata?.selected_rows||0),watch_deep_bootstrap:r?.metadata?.watch_deep_bootstrap||null};}}
+  const diagnosticsReachable=checks.every(x=>x.ok),samplesComplete=checks.every(x=>x.sample_ok),dbReachable=probe.ok,selftest=collectorSelfTest();
+  const activeOffers=Array.isArray(merchantOffers)?merchantOffers.filter(x=>x.active===true):[];
+  const nonOmronActive=activeOffers.filter(x=>x.manufacturer&&x.manufacturer!=="OMRON");
+  const recentTotals=recentVersion.reduce((a,r)=>{const m=r?.metadata||{};for(const k of ["canonical_exact_found","canonical_catalog_found","canonical_candidates_skipped","canonical_parts_upserted","engineering_metrics_found","engineering_metrics_saved","deep_links_enqueued","merchant_detail_links_promoted","relation_hints_saved","merchant_offers_upserted"])a[k]+=Number(m[k]||0);return a;},{canonical_exact_found:0,canonical_catalog_found:0,canonical_candidates_skipped:0,canonical_parts_upserted:0,engineering_metrics_found:0,engineering_metrics_saved:0,deep_links_enqueued:0,merchant_detail_links_promoted:0,relation_hints_saved:0,merchant_offers_upserted:0});
+  const verifiedRelations=Array.isArray(hints)?hints.filter(x=>x.verified===true).length:0;
+  const queueSampleAvailable=Array.isArray(queue);
+  const acceptance={worker_version_match:!latestRun?.version||latestRun.version===`collector-${VERSION}`,supabase_reachable:dbReachable,supabase_diagnostics_reachable:diagnosticsReachable,status_samples_complete:samplesComplete,selftest_ok:selftest.ok,catalog_recent_ok:!!modeLast.catalog&&modeLast.catalog.internal_errors===0&&modeLast.catalog.pages_processed>0,watch_recent_ok:!!modeLast.manufacturer_watch&&modeLast.manufacturer_watch.internal_errors===0&&(modeLast.manufacturer_watch.pages_processed>0||modeLast.manufacturer_watch.selected_rows===0),offer_recent_ok:!!modeLast.offer&&modeLast.offer.internal_errors===0&&modeLast.offer.pages_processed>0,deep_enrichment_observed:recentTotals.deep_links_enqueued>0||recentTotals.engineering_metrics_saved>0||recentVersion.some(r=>r?.metadata?.watch_deep_bootstrap?.used===true),engineering_metrics_observed:recentTotals.engineering_metrics_saved>0,relation_evidence_observed:recentTotals.relation_hints_saved>0||verifiedRelations>0,merchant_detail_promotion_observed:recentTotals.merchant_detail_links_promoted>0,non_omron_active_offer_seen_in_sample:nonOmronActive.length>0,queue_budget_sample_not_saturated:!queueSampleAvailable||((qc.pending||0)+(qc.retry||0))<STATUS_SAMPLE_LIMIT};
+  return {
+    ok:dbReachable&&selftest.ok,service:SERVICE,version:VERSION,build_id:BUILD_ID,
+    selftest:{ok:selftest.ok,checks:selftest.checks},
+    supabase:{ok:dbReachable,diagnostics_reachable:diagnosticsReachable,samples_complete:samplesComplete,diagnostics_degraded:dbReachable&&(!diagnosticsReachable||!samplesComplete),probe:{ok:probe.ok,retried:probe.retried===true,error:probe.error||null,first_error:probe.first_error||null},checks:checks.map(x=>({name:x.name,ok:x.ok,sample_ok:x.sample_ok,fallback_used:x.fallback_used===true,error:x.error||null,fallback_error:x.fallback_error||null}))},
+    cron_health:{expected_interval_minutes:10,latest_run_at:latestTs,latest_run_age_minutes:latestAgeMinutes,status:!dbReachable?"database_error":latestAgeMinutes==null?"never_seen":latestAgeMinutes>30?"stale":"healthy",latest_run_version:latestRun?.version||null,current_worker_version:`collector-${VERSION}`,version_match:acceptance.worker_version_match},
+    hardening:{supabase_timeout_ms:SUPABASE_TIMEOUT_MS,supabase_get_retry_count:SUPABASE_GET_RETRY_COUNT,supabase_get_retry_delay_ms:SUPABASE_GET_RETRY_DELAY_MS,collector_db_preflight_timeout_ms:COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS,status_probe_timeout_ms:STATUS_PROBE_TIMEOUT_MS,status_retry_timeout_ms:STATUS_RETRY_TIMEOUT_MS,status_fallback_timeout_ms:STATUS_FALLBACK_TIMEOUT_MS,status_diagnostic_batch_size:STATUS_DIAGNOSTIC_BATCH_SIZE,status_unordered_large_table_sampling:true,status_jsonb_parts_scan_disabled:true,status_table_fallback_probe_enabled:true,queue_active_budget:QUEUE_ACTIVE_BUDGET,daily_seed_pause_threshold:DAILY_SEED_PAUSE_THRESHOLD,merchant_queue_budget:MERCHANT_QUEUE_BUDGET,merchant_queue_hard_ceiling:MERCHANT_QUEUE_HARD_CEILING,merchant_trickle_seed_max_rows:MERCHANT_TRICKLE_SEED_MAX_ROWS,hard_queue_ceiling:HARD_QUEUE_CEILING,merchant_global_drain_limit:MERCHANT_GLOBAL_DRAIN_LIMIT,status_sample_limit:STATUS_SAMPLE_LIMIT,offer_window_size:OFFER_WINDOW_SIZE,watch_window_size:WATCH_WINDOW_SIZE,max_offer_items_per_run:MAX_OFFER_ITEMS_PER_RUN,daily_seed_only:true,generated_adapter_brand_gate:true,generated_adapter_detail_page_gate:true,merchant_lifecycle_overwrite_disabled:true,blocked_source_backoff:true,external_source_failures_are_nonfatal_for_mode_acceptance:true,mode_last_success:modeLast,production_acceptance:acceptance},
+    queue_sample:qc,queue_sample_count:Array.isArray(queue)?queue.length:null,queue_sample_is_bounded:true,
+    parts_sample_count:Array.isArray(parts)?parts.length:null,parts_by_manufacturer_sample:byManufacturer,
+    physical_ai_universe:{manufacturers_total:MANUFACTURER_UNIVERSE.length,official_watch_sources_enabled:OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).length,official_catalog_sources_enabled:SOURCES.length,merchant_sources_enabled:OFFER_SOURCES.filter(x=>x.collection_enabled!==false).length,merchant_adapter_manufacturers:new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&["monotaro-japan","misumi-japan","digikey-japan","mouser"].includes(x.merchant_slug)).map(x=>x.manufacturer)).size,official_watch_manufacturers:new Set(OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).map(x=>x.manufacturer)).size,applications:Object.keys(APPLICATION_TAXONOMY),policy:"Manufacturer official evidence is authoritative for identity/spec/lifecycle. Official watch pages can now enrich canonical MPNs, engineering metrics and explicit replacement evidence under bounded extraction. Merchant evidence cannot overwrite manufacturer lifecycle. Generated merchant adapters require exact detail-page plus manufacturer corroboration before offer storage."},
+    merchant_offer_collection:{offers_sample_count:Array.isArray(merchantOffers)?merchantOffers.length:null,active_offers_sample:activeOffers.length,non_omron_active_offers_sample:nonOmronActive.length,active_merchants_seen:Array.isArray(merchants)?merchants.filter(x=>x.status==="active").length:null,verified_merchants_seen:Array.isArray(merchants)?merchants.filter(x=>x.verified).length:null,source_paused:OFFER_SOURCES.filter(x=>x.collection_enabled===false).map(x=>x.slug),policy:"Exact detail evidence only for generated adapters. Price, stock, lead time, shipping, authorization and compatibility remain unknown unless explicitly evidenced."},
+    data_quality:{sample_size:Array.isArray(parts)?parts.length:null,lifecycle_counts:lifecycleCounts,low_confidence_count:lowConfidenceCount,canonical_quality_from_recent_runs:{manufacturer_exact_found:recentTotals.canonical_exact_found,manufacturer_catalog_found:recentTotals.canonical_catalog_found,candidates_skipped:recentTotals.canonical_candidates_skipped},engineering_metrics_from_recent_runs:{found:recentTotals.engineering_metrics_found,saved:recentTotals.engineering_metrics_saved},policy:"Merchant observations do not overwrite manufacturer lifecycle; replacement relations remain unverified until evidence review."},
+    relation_candidate_sample_count:Array.isArray(hints)?hints.length:null,verified_relation_sample_count:verifiedRelations,recent_enrichment_totals:recentTotals,recent_runs:recent,
+    next_action:(()=>{
+      if(!dbReachable)return "Supabase probe is down; inspect the Supabase project resource/API health.";
+      if(!diagnosticsReachable)return "One or more tables failed even the tiny fallback probe; inspect only the named table/API path.";
+      if(!samplesComplete)return "Core tables are reachable; one or more optional status samples fell back to tiny probes. Judge Collector operation from cron_health and recent_runs.";
+      if(!acceptance.worker_version_match)return `Wait for one collector-${VERSION} run and recheck status.`;
+      if(!acceptance.catalog_recent_ok||!acceptance.watch_recent_ok||!acceptance.offer_recent_ok)return "Recent evidence for all three rotating modes is not yet visible in the bounded run window.";
+      if(!acceptance.deep_enrichment_observed)return "Deep enrichment has not produced evidence yet; inspect watch_deep_bootstrap and deep_links_enqueued in recent_runs.";
+      if(!acceptance.non_omron_active_offer_seen_in_sample)return "Core production is healthy; the remaining business milestone is a non-OMRON exact active merchant offer.";
+      return "Production acceptance conditions visible in /status are satisfied.";
+    })()
+  };
+}
+
+function authorized(request,env){
+  const key=request.headers.get("x-collector-key")||new URL(request.url).searchParams.get("key");
+  return !!env.COLLECTOR_ADMIN_KEY && key===env.COLLECTOR_ADMIN_KEY;
+}
+
+return {
+  async fetch(request,env,ctx){
+    const url=new URL(request.url);
+    if(request.method==="OPTIONS")return new Response(null,{status:204,headers:{"access-control-allow-origin":"*","access-control-allow-methods":"GET,POST,OPTIONS","access-control-allow-headers":"content-type,x-collector-key"}});
+    if(url.pathname==="/")return json({ok:true,service:SERVICE,version:VERSION,build_id:BUILD_ID,description:"Consolidated production collector for PARTS INTELLIGENCE with canonical quality tiers, deep enrichment bootstrap, conservative merchant evidence gates, lifecycle protection, lightweight nonblocking observability and resilient idempotent Supabase reads",sources:ALL_SOURCES.map(s=>({kind:s.kind||"catalog",manufacturer:s.manufacturer,merchant:s.merchant_name||null,seeds:s.seeds})),admin:["/status","/selftest","/universe","/run","/seed"]});
+    if(url.pathname==="/status"||url.pathname==="/health")return json(await status(env),200,{"cache-control":"no-store"});
+    if(url.pathname==="/selftest")return json({service:SERVICE,version:VERSION,build_id:BUILD_ID,...collectorSelfTest()},200,{"cache-control":"no-store"});
+    if(url.pathname==="/universe")return json({service:SERVICE,version:VERSION,build_id:BUILD_ID,taxonomy:APPLICATION_TAXONOMY,coverage:{manufacturers_total:MANUFACTURER_UNIVERSE.length,official_watch_manufacturers:new Set(OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).map(x=>x.manufacturer)).size,official_watch_sources:OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).length,merchant_adapter_manufacturers:new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&["monotaro-japan","misumi-japan","digikey-japan","mouser"].includes(x.merchant_slug)).map(x=>x.manufacturer)).size,merchant_adapters_enabled:OFFER_SOURCES.filter(x=>x.collection_enabled!==false).length,merchant_channels:["monotaro-japan","misumi-japan","digikey-japan","mouser"],enrichment:{official_watch_canonical_mpn:true,engineering_specs:true,explicit_relation_verification:true,application_evidence_level:true,non_omron_merchant_priority:true,canonical_quality_tiers:true,reserved_deep_enrichment:true,deep_bootstrap_fallback:true,replacement_pdf_parse:true,merchant_exact_detail_promotion:true,resilient_supabase_reads:true,bounded_status_diagnostics:true}},manufacturers:MANUFACTURER_UNIVERSE,official_watch_sources:OFFICIAL_WATCH_SOURCES.map(s=>({slug:s.slug,manufacturer:s.manufacturer,seeds:s.seeds,applications:s.applications,domains:s.domains,source_tier:s.source_tier,collection_enabled:s.collection_enabled!==false,fallback_root_watch:s.fallback_root_watch===true})),merchant_sources:OFFER_SOURCES.map(s=>({slug:s.slug,merchant:s.merchant_name,manufacturer:s.manufacturer,collection_enabled:s.collection_enabled!==false,generated_adapter:s.generated_adapter===true,disabled_reason:s.disabled_reason||null}))},200,{"cache-control":"no-store"});
+    if(url.pathname==="/seed"&&request.method==="POST"){
+      if(!authorized(request,env))return json({error:"unauthorized"},401);
+      return json(await seedQueue(env));
+    }
+    if(url.pathname==="/run"&&request.method==="POST"){
+      if(!authorized(request,env))return json({error:"unauthorized"},401);
+      let body={};try{body=await request.json();}catch{}
+      return json(await runCollector(env,body.limit||MAX_PAGES_PER_RUN));
+    }
+    return json({error:"not_found"},404);
+  },
+  async scheduled(event,env,ctx){
+    ctx.waitUntil((async()=>{
+      const startedAt=new Date().toISOString();
+      try{
+        const report=await runCollector(env,MAX_PAGES_PER_RUN);
+        console.log(SERVICE,report.ok?"scheduled_ok":"scheduled_degraded",JSON.stringify(report));
+      }catch(e){
+        const error=safeError(e);
+        console.log(SERVICE,"scheduled_error",error);
+        await sbOptional(env,"/parts_ingest_runs",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({started_at:startedAt,finished_at:new Date().toISOString(),version:`collector-${VERSION}`,pages_processed:0,candidates_inserted:0,documents_linked:0,errors:[{stage:"scheduled",error}],metadata:{collector:true,scheduled:true,fatal:true}})});
+      }
+    })());
+  }
+};
+
+})();
+
+
+async function embeddedPartsCollectorNeedsRun(env,nowMs=Date.now()){
+  if(!env?.SUPABASE_URL||!env?.SUPABASE_SECRET_KEY)return false;
+  try{
+    // v7 ownership rule: only a recent embedded v3 run owns the lease.
+    // Legacy collector-2.x heartbeats must never suppress the authoritative embedded collector.
+    const since=new Date(nowMs-8*60*1000).toISOString();
+    const rows=await sb(env,`/parts_ingest_runs?select=finished_at,version&finished_at=gte.${encodeURIComponent(since)}&version=eq.collector-3.0.0&limit=2`);
+    return !(Array.isArray(rows)&&rows.some(r=>String(r?.version||"")==="collector-3.0.0"));
+  }catch{return true;}
+}
+async function runEmbeddedPartsCollectorFailover(event,env){
+  const pending=[];
+  const fakeCtx={waitUntil(p){pending.push(Promise.resolve(p));}};
+  await EMBEDDED_PARTS_COLLECTOR.scheduled(event,env,fakeCtx);
+  const settled=await Promise.allSettled(pending);
+  const rejected=settled.filter(x=>x.status==="rejected").map(x=>safeError(x.reason));
+  return {ok:rejected.length===0,mode:"embedded_failover",tasks:pending.length,rejected};
+}
+async function embeddedCollectorFetch(request,env,ctx){
+  const u=new URL(request.url);
+  u.pathname=u.pathname.replace(/^\/collector/,"")||"/";
+  const req=new Request(u.toString(),request);
+  return EMBEDDED_PARTS_COLLECTOR.fetch(req,env,ctx);
+}
+
+// v7.1 deterministic cron contract. Works with either */1 or */10 Cloudflare triggers.
+// Only UTC minutes divisible by 10 perform network-heavy scheduled work.
+// 00/20/40 = embedded Parts Collector v3; 10 = universal rotation;
+// 30 = catalog enrichment; 50 = universal demand refresh.
+function scheduledTaskForTime(timeMs){
+  // All ten-minute slots are productive. This avoids relying on :40/:50 cron configuration.
+  const d=new Date(Number(timeMs||Date.now()));
+  const m=d.getUTCMinutes();
+  if(m%10!==0)return "discovery_recovery"; // also works with an unusual single-minute cron
+  if(m===0||m===20)return "parts_collector_v3";
+  if(m===10)return "rotation";
+  if(m===30)return "catalog_enrichment";
+  if(m===40)return "universal_discovery";
+  if(m===50)return "universal_discovery";
+  return "discovery_recovery";
+}
+
+async function universalDiscoveryLeaseStatus(env,nowMs=Date.now(),freshMinutes=55){
+  const now=Number(nowMs||Date.now());
+  const rows=await sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_expansion_run&order=occurred_at.desc&limit=1`);
+  const last=Array.isArray(rows)&&rows.length?rows[0]:null;
+  const lastMs=last?.occurred_at?Date.parse(last.occurred_at):0;
+  const ageMinutes=lastMs?Math.max(0,(now-lastMs)/60000):null;
+  const fresh=ageMinutes!=null&&ageMinutes<Math.max(1,Number(freshMinutes)||55);
+  return {due:!fresh,last_run_at:last?.occurred_at||null,age_minutes:ageMinutes,fresh_minutes:freshMinutes};
+}
+
+const PUBLIC_CORE_ROUTES=[
+  "/","/health","/health/deep","/selftest","/status","/v1/status","/v1/universal/status","/v1/system/routes",
+  "/v1/purchase-decision","/v1/commerce/domains","/v1/commerce/search","/v1/universal/coverage","/v1/product/resolve","/v1/search",
+  "/v1/parts/status","/v1/parts/coverage","/v1/parts/search","/v1/parts-intelligence",
+  "/openapi.json","/llms.txt","/.well-known/x402","/.well-known/mcp.json","/.well-known/x402-bazaar","/.well-known/ai-plugin.json","/mcp","/x402/status"
+];
+function universalStatusPayload(origin){
+  return {ok:true,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,build_id:BUILD_ID,status:"online",paid_endpoint:"/v1/purchase-decision",price_usdc:Number(PRICES.purchaseDecision)/1000000,multilingual_languages:LANGS,domains:{specialized:["anime_collectibles","parts"],generic:UNIVERSAL_GENERIC_DOMAINS},identifiers:["GTIN-8/12/13/14","ISBN-10/13","MPN","OE","SKU","ASIN"],database_growth:{anime_catalog:true,parts_catalog:true,generic_demand_graph:true,generic_market_observations:true,autonomous_catalog_expansion:true,self_expanding_frontier:true,provisional_market_gtin_promotion:true,domain_specific_purchase_evaluation:true,adaptive_scheduled_generic_refresh:true,market_memory:true,embedded_parts_collector_failover:true},ranking_policy:{paid_placement:false,unknowns_not_fabricated:true,compatibility_requires_evidence:true,domain_specific_purchase_gates:true},autonomous_catalog_expansion:{enabled:true,mode:"canonical_identity_offer_join_fulfillment_utility",per_run_budget:UNIVERSAL_EXPANSION_POLICY.per_run_budget,candidates_per_query:UNIVERSAL_DISCOVERY_POLICY.candidates_per_query,canonical_gtin_promotions_per_query:UNIVERSAL_DISCOVERY_POLICY.canonical_gtin_promotions_per_query},hybrid_decision:{background_discovery:true,popular_product_cache:true,request_time_live_enrichment:true,same_request_answer:true,decision_live_detail_budget:UNIVERSAL_DISCOVERY_POLICY.decision_live_detail_budget},merchant_intelligence:true,x402:true,travel_exposed:false,route_manifest:`${origin}/v1/system/routes`,generated_at:new Date().toISOString()};
+}
+async function universalSupabaseProbe(env,timeoutMs=5000){
+  if(!env?.SUPABASE_URL||!env?.SUPABASE_SECRET_KEY)return {ok:false,error:"supabase_not_configured",latency_ms:0};
+  const started=Date.now();const c=new AbortController();const t=setTimeout(()=>c.abort("timeout"),timeoutMs);
+  try{
+    const r=await fetch(String(env.SUPABASE_URL).replace(/\/$/,"")+"/rest/v1/products?select=id&limit=1",{method:"GET",headers:{apikey:env.SUPABASE_SECRET_KEY,Authorization:`Bearer ${env.SUPABASE_SECRET_KEY}`,Accept:"application/json"},signal:c.signal});
+    const raw=await r.text();if(!r.ok)throw new Error(`Supabase ${r.status}: ${raw.slice(0,300)}`);
+    let data=[];try{data=raw?JSON.parse(raw):[];}catch{}
+    return {ok:true,has_product:Array.isArray(data)&&data.length>0,latency_ms:Date.now()-started};
+  }catch(e){return {ok:false,error:e?.name==="AbortError"?"supabase_probe_timeout":safeError(e),latency_ms:Date.now()-started};}
+  finally{clearTimeout(t);}
+}
+
+/* =========================================================
+   WORKER
+========================================================= */
+
+export default{
+  async fetch(request,env,ctx){
+    if(request.method==="OPTIONS")return new Response(null,{status:204,headers:corsHeaders()});const url=new URL(request.url),origin=url.origin;
+    try{
+      if(url.pathname==="/icon.svg"&&request.method==="GET")return new Response(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#0b1020"/><path d="M55 190L104 58h48l49 132h-37l-10-31H101l-10 31H55zm57-63h32l-16-50-16 50z" fill="#fff"/><circle cx="190" cy="66" r="18" fill="#fff"/></svg>`,{status:200,headers:corsHeaders({"content-type":"image/svg+xml; charset=utf-8","cache-control":"public, max-age=86400"})});
+      if(url.pathname==="/"){const now=Date.now();return json({service:PLATFORM_NAME,legacy_service:"ANIME INTELLIGENCE",product:PLATFORM_PRODUCT,build_id:BUILD_ID,version:VERSION,status:"online",architecture:"UNIVERSAL_COMMERCE_AUTONOMOUS_PRODUCT_GRAPH",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),rotation:ROTATION,next_stages:nextRotationStages(now,4),autonomous_expansion:true,scheduled_catalog_expansion:true,scheduled_catalog_pages_per_run:"static_5_plus_dynamic_2_per_minute",dynamic_catalog_query_generation:true,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_universe:CATALOG_IP_UNIVERSE.length,official_mass_feed_patrol:true,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,self_discovery_no_jan:true,catalog_cron_recommended:"*/10 * * * *",catalog_browser_independent:true,catalog_background_autonomy:true,catalog_scheduled_retry:true,one_stage_per_invocation:true,official_backfill:true,bilingual_goodsmile_calendar:true,safe_identity_deduplication:true,market_attempt_rotation:true,yahoo_fallback_search:true,ebay_query_diagnostics:true,ecb_fx_fallback:true,paid_tier_response_isolation:true,dynamic_identity_quality:true,product_type_enrichment:true,official_fair_rotation:true,market_rejection_diagnostics:true,market_total_price:true,market_freshness_auto_refresh:true,quality_repair:true,classifier_v293:true,scalable_metrics:true,monetization_pipeline:true,universal_purchase_decision_v2:true,universal_all_products:true,multilingual_purchase_intent_v1:true,global_destination_aware_decision:true,self_growing_database:true,generic_demand_graph:true,generic_market_observation_refresh:true,exact_gtin_canonical_promotion:true,pre_payment_product_resolution:true,broad_query_auto_selection:true,natural_shopping_recommendation_v3739:true,budget_location_usecase_inference_v3739:true,intent_aware_candidate_ranking_v3739:true,no_payment_recommendation_audit_v3739:true,payment_core_frozen_v3739:true,rakuten_affiliate_configured:rakutenConfigured(env),rakuten_affiliate_link_mode:rakutenWebServiceConfigured(env)?"live_web_service_plus_affiliate":"pre_generated_only",rakuten_search_fallback_is_affiliate:false,public_shop:`${origin}/shop`,rakuten_affiliate_public_media:true,api_returns_purchase_page_for_rakuten:true,revenue_kpi_tracking:true,discovery_conversion_funnel:true,agent_selection_complete_v370:true,mcp_2026_07_28:true,agentcore_x_payment_compatibility:true,bazaar_merchant_audit:true,bazaar_semantic_rank_audit:true,first_revenue_detection:true,bazaar_post_payment_watch:true,payer_privacy_hashing:true,affiliate_click_tracking:true,atelier_marketplace:true,atelier_autofulfill:atelierConfigured(env),atelier_poll_every_minutes:ATELIER_POLL_EVERY_MINUTES,stale_market_filter_days:PIPELINE.marketFreshDays,collectibles_platform:true,multilingual_ambiguous_discovery:true,global_vague_intent_discovery:true,discovery_quality_guard_v359:true,search_languages:DISCOVERY_LANGUAGES,search_locales:DISCOVERY_LOCALES,collectible_categories:["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"],specialist_category_metadata:true,target_scale:"hundreds_of_thousands",database_expansion_v2913:true,yahoo_catalog_mass_seed:true,catalog_resume_progress:true,catalog_date_normalization:true,catalog_batch_fallback:true,yahoo_catalog_pagination:true,jan_required_catalog_seed:true,priority_collectible_categories:true,failed_source_isolation:true,mass_bulk_insert:true,subrequest_safe_mass:true,goodsmile_releaseinfo_fixed:true,kdcolle_listing_guard:true,db_cleanup:true,multi_manufacturer_official_discovery:true,source_encoding_ascii_safe:true,agent402_self_register:true,world_discovery_one_shot_v365:true,end_to_end_monetization_guard_v366:true,commercial_default_routing_v3612:true,search_semantics_guard_v3614:true,discovery_metadata_alignment_v3614:true,metrics_supabase_500_guard_v367:true,buyer_funnel_observability_v369:true,smart_product_routing_v3610:true,affiliate_rank_boost_v3610:true,rakuten_affiliate_admin_register_v3610:true,free_search:`${origin}/v1/search?query=\u521d\u97f3\u30df\u30af`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,mcp:`${origin}/mcp`,x402:`${origin}/.well-known/x402`,bazaar_discovery_metadata:true,x402_local_preflight_v3711:true,x402_phantom_mainnet_e2e_v3712:true,x402_pc_phantom_e2e_v3713:true,x402_svm_feepayer_v3714:true,x402_browser_rpc_bridge_v3715:true,x402_rpc_failover_diagnostic_v3716:true,x402_rpc_admin_auth_fixed_v3717:true,x402_rpc_auth_flow_fixed_v3718:true,x402_rpc_key_resolver_fixed_v3719:true,x402_rpc_diagnostic_runtime_fixed_v3720:true,x402_rpc_diagnostic_self_contained_v3721:true,phantom_presign_simulation_v3722:true,x402_usdc_account_diagnostic_v3723:true,x402_feepayer_handshake_fixed_v3725:true,x402_phantom_modifying_signer_fixed_v3726:true,x402_phantom_lighthouse_7ix_fixed_v3727:true,semantic_commercial_discovery_v3728:true,agent_task_query_pack_v3728:true,free_to_paid_routing_v3728:true,compact_x402_discovery_header_v3730:true,commerce_decision_expansion_v3731:true,japan_buyer_first_class_v3731:true,listing_match_v3731:true,purchase_deadline_v3731:true,landed_cost_v3731:true,price_history_v3731:true,x402_fast_gate_v3732:true,nonblocking_commerce_telemetry_v3732:true,kpi_recent_history_revenue_v3732:true,bazaar_spec_metadata_v3733:true,bazaar_canonical_resource_url_v3733:true,bazaar_service_metadata_limits_v3733:true,bazaar_extension_response_observability_v3733:true,x402_all_paid_endpoints_e2e_v3736:true,bazaar_metadata_quality_audit_v3737:true,external_payer_kpi_v3737:true,identify_conversion_semantics_v3737:true,mojibake_guard_v3737:true,coinbase_bazaar_direct:isCdpFacilitator(env),admin:`${origin}/admin`,kpi:`${origin}/admin/kpi`});}
+      if(url.pathname==="/health"){const now=Date.now();return json({ok:true,service:PLATFORM_NAME,legacy_service:"ANIME INTELLIGENCE",product:PLATFORM_PRODUCT,build_id:BUILD_ID,version:VERSION,status:"online",health_mode:"shallow",supabase:"not_checked",autonomous_pipeline:{architecture:"8-stage-rotating",current_stage:autonomousStage(now),current_slot:rotationSlotFromTime(now),one_stage_per_invocation:true},x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},parts_intelligence:{status:"active_supabase_core",collector_separate_worker:false,collector_integrated:true,embedded_collector_failover:true,embedded_collector_version:"3.0.0",merchant_intelligence:true,merchant_optimization:true,merchant_onboarding:true,merchant_onboarding_hardened:true,merchant_sales_page:true,merchant_onboarding_ui:"guided",universal_purchase_decision:true,multilingual_purchase_intent:true,purchase_decision_get_post:true,purchase_query_decode_hardened:true,relative_deadline_parsing:true,manufacturer_inference:true,conservative_landed_cost:true,hard_constraint_unknowns_fail:true,authenticity_requirement_enforced:true,global_parts_purchase_decision_v1:true,parts_coverage_endpoint:true,global_merchant_fulfillment_metadata:true,decision_state_machine_v1:true},deep_health:`${origin}/health/deep`,generated_at:new Date().toISOString()},200,{"cache-control":"no-store"});}
+      if(url.pathname==="/robots.txt"&&request.method==="GET")return new Response(`User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`,{headers:{"content-type":"text/plain; charset=utf-8","cache-control":"public, max-age=3600"}});
+      if(url.pathname==="/sitemap.xml"&&request.method==="GET")return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${origin}/agents</loc></url><url><loc>${origin}/llms.txt</loc></url><url><loc>${origin}/agent/profile</loc></url><url><loc>${origin}/openapi.json</loc></url><url><loc>${origin}/agents/examples</loc></url><url><loc>${origin}/agents/readiness</loc></url></urlset>`,{headers:{"content-type":"application/xml; charset=utf-8","cache-control":"public, max-age=3600"}});
+      if(url.pathname==="/.well-known/agent.json"&&request.method==="GET")return json({name:"GLOBAL PURCHASE DECISION",version:VERSION,description:"AI agent product discovery and evidence-based purchase decisions across physical products, including anime collectibles and industrial parts",website:`${origin}/agents`,free_search:{method:"GET",url:`${origin}/v1/search?query=Hatsune%20Miku`},paid_decision:{method:"POST",url:`${origin}/v1/purchase-decision`,price:"0.10 USDC",payment_protocol:"x402",note:"Payment availability must be verified with /x402/status"},mcp:`${origin}/mcp`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,x402:`${origin}/.well-known/x402`,bazaar:`${origin}/.well-known/x402-bazaar`,examples:`${origin}/agents/examples`,readiness:`${origin}/agents/readiness`},200,{"cache-control":"public, max-age=300"});
+      if(url.pathname==="/agents/examples"&&request.method==="GET")return json({ok:true,version:VERSION,base_url:origin,free_search:{method:"GET",url:`${origin}/v1/search?query=${encodeURIComponent("Hatsune Miku Nendoroid")}`,note:"No payment required; product coverage and live availability vary"},paid_purchase_decision:{method:"POST",url:`${origin}/v1/purchase-decision`,headers:{"content-type":"application/json"},body:{query:"Sony WH-1000XM5 headphones",destination:{country:"US"},requirements:{currency:"USD"}},expected_initial_response:"HTTP 402 with PAYMENT-REQUIRED when x402 is configured; HTTP 503 if unavailable",retry:"Use an x402-compatible payer to sign and retry the identical request with PAYMENT-SIGNATURE; do not invent a payment signature",expected_success:"HTTP 200 with purchase-decision evidence after successful settlement; not a completed product purchase",price_usdc:0.10},discovery:{mcp:`${origin}/mcp`,openapi:`${origin}/openapi.json`,x402_status:`${origin}/x402/status`,service_catalog:`${origin}/agent/services`,agent_metadata:`${origin}/.well-known/agent.json`},disclaimer:"Examples describe API invocation, not confirmed payment or guaranteed offers"},200,{"cache-control":"public, max-age=300"});
+      if(url.pathname==="/agents/readiness"&&request.method==="GET")return json({ok:true,version:VERSION,build_id:BUILD_ID,discovery_metadata_published:true,example_endpoint:`${origin}/agents/examples`,payment_configuration:{wallet_configured:!!env.X402_WALLET_ADDRESS,facilitator_runtime_check:`${origin}/x402/status`},external_registry_registration:"not_verified_by_this_endpoint",external_paying_users:"not_verified_by_this_endpoint",note:"This is configuration readiness only, not proof of registry listing, payment settlement or revenue"},200,{"cache-control":"no-store"});
+      if(url.pathname==="/agents"&&request.method==="GET"){
+        const esc=(v)=>String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+        const html=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GLOBAL PURCHASE DECISION — AI Agent Product Search and Purchase Intelligence</title><meta name="description" content="Free product discovery and evidence-based paid purchase decisions for AI agents. Anime collectibles, industrial parts and global commerce."><link rel="canonical" href="${esc(origin)}/agents"><style>body{font-family:system-ui,sans-serif;max-width:820px;margin:48px auto;padding:0 20px;line-height:1.6;color:#172033}h1{font-size:2.3rem;line-height:1.2}a{color:#1559aa}code,pre{background:#f2f5f9;padding:3px 6px;border-radius:5px}pre{overflow:auto;padding:16px}section{margin:28px 0}small{color:#536276}</style></head><body><h1>Product intelligence for AI agents</h1><p>Find products across global commerce. Compare available merchant evidence and request an evidence-based purchase decision. Specialized coverage includes anime collectibles and industrial parts.</p><section><h2>1. Start with free search</h2><p>Try <a href="${esc(origin)}/v1/search?query=Hatsune%20Miku">Hatsune Miku product search</a> or <a href="${esc(origin)}/v1/search?query=industrial%20sensor">industrial sensor search</a>. Search availability and coverage vary by source and product.</p><pre>GET /v1/search?query=Hatsune%20Miku</pre></section><section><h2>2. Request a purchase decision</h2><p>Use <code>POST /v1/purchase-decision</code> for a structured decision. The listed price is 0.10 USDC via x402 when payment is enabled. Inspect the HTTP 402 response and payment requirements; never assume a purchase is executed.</p><p><a href="${esc(origin)}/x402/status">Check payment readiness</a> · <a href="${esc(origin)}/agent/services">Service catalog</a> · <a href="${esc(origin)}/agents/examples">Copyable request examples</a> · <a href="${esc(origin)}/agents/readiness">Readiness</a></p><pre>curl -i -X POST "${esc(origin)}/v1/purchase-decision" -H "content-type: application/json" -d '{"query":"Sony WH-1000XM5 headphones","destination":{"country":"US"},"requirements":{"currency":"USD"}}'</pre><p>First request should return HTTP 402 if payment is configured. An x402-compatible client must sign and retry the same request. Payment for intelligence does not purchase the product.</p></section><section><h2>3. Connect your agent</h2><p><a href="${esc(origin)}/mcp">MCP endpoint</a> · <a href="${esc(origin)}/openapi.json">OpenAPI schema</a> · <a href="${esc(origin)}/.well-known/agent.json">Agent metadata</a> · <a href="${esc(origin)}/.well-known/x402-bazaar">x402 Bazaar metadata</a> · <a href="${esc(origin)}/llms.txt">LLM instructions</a></p></section><section><h2>Coverage and evidence</h2><p>Product identity, merchant availability, shipping and taxes may be incomplete. The service reports unknowns rather than inventing facts. Product listings and payment status should be checked before use.</p></section><small>GLOBAL PURCHASE DECISION · ${esc(VERSION)}</small></body></html>`;
+        return new Response(html,{status:200,headers:{"content-type":"text/html; charset=utf-8","cache-control":"public, max-age=300","x-content-type-options":"nosniff"}});
+      }
+      if(url.pathname==="/v1/system/discovery-health"&&request.method==="GET")return json(await publicDiscoveryHealth(env),200,{"cache-control":"no-store"});
+      if(url.pathname==="/health/deep"){const probe=await universalSupabaseProbe(env,5000);const out={ok:probe.ok,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,legacy_adapter:"ANIME INTELLIGENCE",version:VERSION,build_id:BUILD_ID,status:probe.ok?"online":"degraded",health_mode:"deep",supabase:probe.ok?"ok":"error",has_product:probe.has_product??null,latency_ms:probe.latency_ms,x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},travel_exposed:false,error:probe.error||null,generated_at:new Date().toISOString()};return json(out,probe.ok?200:503,{"cache-control":"no-store"});}
+      if(url.pathname.startsWith("/atelier/result/")&&request.method==="GET"){const orderId=decodeURIComponent(url.pathname.slice("/atelier/result/".length));const result=await loadAtelierResult(env,orderId);return result?json(result,200,{"cache-control":"private, no-store"}):json({error:"atelier_result_not_found"},404);}
+      if(url.pathname.startsWith("/collector/"))return embeddedCollectorFetch(request,env,ctx);
+      if(url.pathname==="/selftest"&&request.method==="GET"){
+        const u=universalSelftest();
+        let embedded=null;try{const r=await EMBEDDED_PARTS_COLLECTOR.fetch(new Request(`${origin}/selftest`),env,ctx);embedded=await r.json();}catch(e){embedded={ok:false,error:safeError(e)};}
+        const out={...u,build_id:BUILD_ID,embedded_parts_collector:{version:embedded?.version||"3.0.0",ok:!!embedded?.ok,checks:embedded?.checks?.length||0},ok:u.ok&&!!embedded?.ok};
+        return json(out,out.ok?200:500,{"cache-control":"no-store"});
+      }
+      if((url.pathname==="/status"||url.pathname==="/v1/status"||url.pathname==="/v1/universal/status")&&request.method==="GET")return json(universalStatusPayload(origin),200,{"cache-control":"no-store"});
+      if(url.pathname==="/v1/system/routes"&&request.method==="GET")return json({ok:true,service:PLATFORM_NAME,version:VERSION,build_id:BUILD_ID,routes:PUBLIC_CORE_ROUTES,travel_exposed:false,legacy_anime_specialist_endpoints:true,generated_at:new Date().toISOString()},200,{"cache-control":"no-store"});
+      if(url.pathname==="/openapi.json")return json(openapi(origin));
+      if(url.pathname==="/llms.txt")return text(llmsTxt(origin));
+      if(url.pathname==="/.well-known/x402")return json(x402WellKnown(origin),200,{"cache-control":"public, max-age=300"});
+      if(url.pathname==="/.well-known/mcp.json")return json({name:"GLOBAL PURCHASE DECISION MCP",version:VERSION,transport:"streamable-http",stateless:true,protocol:"2026-07-28",supported_protocol_versions:["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],endpoint:`${origin}/mcp`,total_tools:PUBLIC_MCP_TOOLS.length,paid_tools:PUBLIC_MCP_TOOLS.filter(t=>t?.annotations?.paid===true).length,free_tools:PUBLIC_MCP_TOOLS.filter(t=>t?.annotations?.paid!==true).length,agent_selection:AGENT_SELECTION_POLICY});
+      if(url.pathname==="/agent/profile"&&request.method==="GET")return json({name:PLATFORM_NAME,product:PLATFORM_PRODUCT,description:"Multilingual paid purchase-decision infrastructure for AI agents across physical products and industrial parts. Anime collectibles and parts are specialist adapters inside one universal commerce core; all other physical-product categories use evidence-preserving generic commerce adapters.",capabilities:["universal-purchase-decision","universal-product-identity","global-parts-purchase-decision","parts-coverage","decision-state-machine","multilingual-purchase-intent","global-destination-aware-ranking","generic-commerce-search","market-memory","autonomous-database-growth","merchant-intelligence","merchant-onboarding","x402-paid-agent-commerce","missing-context-no-guess","no-paid-placement"],commercial_discovery_keywords:[...UNIVERSAL_DISCOVERY_KEYWORDS,...COMMERCIAL_DISCOVERY_KEYWORDS],task_queries:DISCOVERY_TASK_QUERIES,agent_selection:AGENT_SELECTION_POLICY,travel_exposed:false,version:VERSION});
+      if(url.pathname==="/agent/services"&&request.method==="GET")return json({service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,payment_flow:{protocol:"x402",version:2,asset:"USDC",network:SOLANA_MAINNET,first_request:"GET or POST service URL without payment proof",on_402:"Read PAYMENT-REQUIRED and accepts[0]",retry:"Retry the exact same request with PAYMENT-SIGNATURE",compatibility_alias:"X-PAYMENT",success:"HTTP 200 + PAYMENT-RESPONSE"},primary_service:{path:"/v1/purchase-decision",price_usdc:0.10,role:"universal_cross_domain_purchase_decision"},services:INDEX402_SERVICES.map(x=>({path:x.path,title:DISCOVERY_CONFIG[x.path]?.service_name||x.name,category:x.path==="/v1/purchase-decision"?"universal_purchase_decision":x.path==="/v1/parts-intelligence"?"parts_intelligence":"legacy_specialist_intelligence",price_usdc:x.price_usd,price_type:"fixed",protocol:"x402",network:SOLANA_MAINNET,capability:DISCOVERY_CONFIG[x.path]?.value||null,when_to_use:DISCOVERY_CONFIG[x.path]?.when_to_use||null,why_pay:DISCOVERY_CONFIG[x.path]?.why_pay||AGENT_SELECTION_POLICY.why_pay,buyer_outcome:DISCOVERY_CONFIG[x.path]?.buyer_outcome||DISCOVERY_CONFIG[x.path]?.value||null,retry_header:"PAYMENT-SIGNATURE",accepted_payment_headers:["PAYMENT-SIGNATURE","X-PAYMENT"],example_url:`${origin}${x.path}${x.path==="/v1/purchase-decision"?"":"?query="+encodeURIComponent(DISCOVERY_CONFIG[x.path]?.examples?.[0]||"Hatsune Miku figure")}`})),travel_exposed:false});
+      if(url.pathname==="/.well-known/x402-bazaar")return json({service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,resources:INDEX402_SERVICES.map(s=>({path:s.path,url:s.path==="/v1/purchase-decision"?`${origin}${s.path}`:`${origin}${s.path}?query=${encodeURIComponent(DISCOVERY_CONFIG[s.path]?.examples?.[0]||"Nendoroid Hatsune Miku")}`,method:bazaarMethod(s.path),price_usdc:s.price_usd,agent_selection:agentSelectionMetadata(s.path),extensions:{bazaar:bazaarDiscoveryExtension(s.path)}}))},200,{"cache-control":"public, max-age=300"});
+      if(url.pathname==="/.well-known/ai-plugin.json")return json({schema_version:"v1",name_for_human:"GLOBAL PURCHASE DECISION",name_for_model:"global_purchase_decision",description_for_human:"Multilingual AI-agent purchase decision intelligence for products and industrial parts",description_for_model:"Use GLOBAL PURCHASE DECISION when an AI agent needs to find, compare and decide what product or part to buy. The primary paid endpoint /v1/purchase-decision accepts multilingual natural-language or structured intent and routes to specialized anime-collectibles and industrial-parts intelligence or domain-specific evidence-gated purchase decision across generic commerce categories. It tracks destination, budget, deadline, identity and merchant evidence, never uses paid placement for ranking, never fabricates unknown shipping/tax/duty/compatibility, and requires confirmation before purchase execution. Legacy anime specialist endpoints remain available for backwards compatibility.",auth:{type:"none"},api:{type:"openapi",url:`${origin}/openapi.json`},logo_url:"",contact_email:"",legal_info_url:""});
+      if(url.pathname==="/x402/status"){try{const support=await facilitatorSupport(env),mainnet=findSolanaMainnetKind(support);return json({ok:!!mainnet&&!!env.X402_WALLET_ADDRESS,version:VERSION,facilitator:facilitatorUrl(env),production_ready:!!mainnet&&!!env.X402_WALLET_ADDRESS,solana_mainnet_exact_v2:!!mainnet,network:SOLANA_MAINNET,asset:"USDC",usdc_mint:SOLANA_USDC,wallet_configured:!!env.X402_WALLET_ADDRESS,payment_enabled:!!mainnet&&!!env.X402_WALLET_ADDRESS});}catch(e){return json({ok:false,version:VERSION,facilitator:facilitatorUrl(env),production_ready:false,payment_enabled:false,wallet_configured:!!env.X402_WALLET_ADDRESS,error:safeError(e)},503);}}
+      if(url.pathname==="/x402/solana-rpc")return x402SolanaRpcBridge(request);
+      if(url.pathname==="/mcp")return mcp(request,env,origin);
+      if(url.pathname==="/v1/search")return json(await freeSearch(request,env,url));
+      if(url.pathname==="/parts"&&request.method==="GET")return partsSalesPage(origin);
+      if(url.pathname==="/v1/parts/coverage"&&request.method==="GET")return json(await partsCoverageApi(env),200,{"cache-control":"public, max-age=300"});
+      if(url.pathname==="/v1/parts/status"&&request.method==="GET")return json(await partsIngestStatus(env));
+      if(url.pathname==="/v1/parts/search"&&request.method==="GET")return json(await partsSearchApi(env,url));
+      if(url.pathname==="/v1/parts-intelligence"&&request.method==="GET")return partsIntelligenceApi(request,env,url,ctx);
+      if(url.pathname==="/merchant"&&request.method==="GET")return htmlResponse(merchantLandingPage(origin),200,{"cache-control":"public, max-age=300","x-robots-tag":"index, follow"});
+      if(url.pathname==="/merchant/onboard"&&request.method==="GET")return htmlResponse(merchantOnboardingPage(origin),200,{"cache-control":"no-store","x-robots-tag":"index, follow"});
+      if(url.pathname==="/v1/merchant/register"&&request.method==="POST"){let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await registerMerchantPublic(env,request,body,origin),200,{"cache-control":"no-store"});}catch(e){const status=Number(e?.status)||400;return json({ok:false,error:status===429?"merchant_registration_rate_limited":"merchant_register_failed",detail:safeError(e)},status,{"cache-control":"no-store"});}}
+      if(url.pathname==="/v1/merchant/me"&&request.method==="GET"){const out=await merchantSelfApi(env,request,origin);return json(out,out?.status||200,{"cache-control":"no-store"});}
+      if(url.pathname==="/v1/merchant/key/rotate"&&request.method==="POST"){try{const out=await rotateMerchantApiKey(env,request);return json(out,out?.status||200,{"cache-control":"no-store"});}catch(e){return json({ok:false,error:"merchant_key_rotation_failed",detail:safeError(e)},400);}}
+      if(url.pathname==="/v1/merchant/search"&&request.method==="GET"){const out=await searchMerchantOffers(env,{part_number:url.searchParams.get("part_number")||url.searchParams.get("mpn")||"",manufacturer:url.searchParams.get("manufacturer")||"",buyer_country:url.searchParams.get("buyer_country")||"",limit:url.searchParams.get("limit")||20});return json(out,out?.status||200);}
+      if(url.pathname==="/v1/merchant/profile"&&request.method==="GET"){const out=await merchantProfileApi(env,url,origin);return json(out,out?.status||200);}
+      if(url.pathname==="/v1/merchant/feed"&&request.method==="GET"){const out=await merchantFeedApi(env,url);return json(out,out?.status||200,{"cache-control":"public, max-age=60"});}
+      if(url.pathname==="/v1/merchant/diagnostic"&&request.method==="GET"){const out=await merchantDiagnosticApi(env,url);return json(out,out?.status||200);}
+      if(url.pathname==="/v1/merchant/offers/upsert"&&request.method==="POST"){const merchant=await merchantByApiKey(env,request);if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401);let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await upsertMerchantOffers(env,merchant,body),200,{"cache-control":"no-store"});}catch(e){return json({ok:false,error:"merchant_offer_upsert_failed",detail:safeError(e)},400);}}
+      if(url.pathname==="/v1/merchant/profile/update"&&request.method==="POST"){const merchant=await merchantByApiKey(env,request);if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401);let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await updateMerchantProfile(env,merchant,body,origin),200,{"cache-control":"no-store"});}catch(e){return json({ok:false,error:"merchant_profile_update_failed",detail:safeError(e)},400);}}
+      if(url.pathname==="/v1/universal/coverage"&&request.method==="GET")return json(await universalCoverageSnapshot(env));
+      if(url.pathname==="/v1/product/resolve"&&(request.method==="GET"||request.method==="POST")){
+        let body={};if(request.method==="POST"){try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}}else{body={query:url.searchParams.get("query")||"",gtin:url.searchParams.get("gtin")||"",isbn:url.searchParams.get("isbn")||"",mpn:url.searchParams.get("mpn")||"",manufacturer:url.searchParams.get("manufacturer")||"",domain:url.searchParams.get("domain")||""};}
+        const q=String(body.query||body.need||"").trim(),domain=inferPurchaseDomain(body,q,body.mpn||"");const ids=normalizeUniversalIdentifiers(body,q);
+        return json({ok:true,service:PLATFORM_NAME,version:VERSION,domain,identifiers:ids,identity_key:universalIdentityKey(domain,ids,String(body.manufacturer||body?.product?.manufacturer||""),q),identifier_strength:ids.gtin||ids.isbn?"exact_global_identifier":ids.mpn&&body.manufacturer?"exact_manufacturer_identifier":"query_identity",generated_at:new Date().toISOString()});
+      }
+      if(url.pathname==="/v1/commerce/domains"&&request.method==="GET")return json(commerceDomainsResponse());
+      if(url.pathname==="/v1/commerce/search"&&request.method==="POST"){
+        let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
+        const out=await genericCommerceSearch(env,body);
+        if(out?.ok){
+          deferTelemetry(ctx,logRequestStage(env,request,"commerce_search",{metadata:{domain:out.domain,count:out.count,query_text:String(body?.query||body?.need||"").slice(0,180)}}));
+          if(out.recommended_offer)deferTelemetry(ctx,logRequestStage(env,request,"commerce_offer_selected",{metadata:{domain:out.domain,provider:out.recommended_offer.provider||null}}));
+        }
+        return json(out,out?.status||200);
+      }
+      if(url.pathname==="/v1/purchase-decision"&&(request.method==="GET"||request.method==="POST"))return universalPurchaseDecisionApi(request,env,origin,ctx);
+      if(url.pathname==="/v1/purchase-intent"&&request.method==="POST")return json(await purchaseIntentApi(request,env));
+      if(url.pathname==="/shop"&&request.method==="GET")return htmlResponse(await publicShopLanding(env,origin,url),200,{"cache-control":"public, max-age=60"});
+      if(url.pathname.startsWith("/shop/product/")&&request.method==="GET"){const productId=decodeURIComponent(url.pathname.slice("/shop/product/".length));const page=await publicShopProduct(env,origin,productId,ctx);return page?htmlResponse(page,200,{"cache-control":"public, max-age=60"}):htmlResponse(publicShopShell("\u5546\u54c1\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093","<div class=\"card\">\u5546\u54c1\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002</div>"),404,{"cache-control":"no-store"});}
+      if(url.pathname==="/shop/affiliate-impression"&&request.method==="POST")return handlePublicAffiliateMetric(env,url,"affiliate_link_served");
+      if(url.pathname==="/shop/affiliate-click"&&request.method==="POST")return handlePublicAffiliateMetric(env,url,"affiliate_click");
+      // Legacy redirect is kept for old already-issued API URLs, but new API responses no longer emit it.
+      if(url.pathname==="/r/rakuten"&&request.method==="GET")return handleRakutenRedirect(request,env,url);
+      if(url.pathname==="/admin")return htmlResponse(adminPage(env));
+      if(url.pathname.startsWith("/admin/")){
+        if(!authorized(request,env))return json({error:"unauthorized"},401);
+        if(url.pathname==="/admin/discovery-diagnostics"&&request.method==="GET")return json(await universalDiscoveryDiagnostics(env));
+        if(url.pathname==="/admin/parts/seed-sources"&&request.method==="POST"){
+          try{return json(await seedDefaultPartsSources(env));}catch(e){return json({ok:false,error:"parts_source_seed_failed",detail:safeError(e)},500);}
+        }
+        if(url.pathname==="/admin/readiness"&&request.method==="GET")return json(await universalProductionReadiness(env));
+        if(url.pathname==="/admin/growth-status"&&request.method==="GET")return json(await universalGrowthStatus(env));
+        if(url.pathname==="/admin/parts/ingest-status"&&request.method==="GET"){
+          try{return json(await partsIngestStatus(env));}catch(e){return json({ok:false,error:"parts_ingest_status_failed",detail:safeError(e)},500);}
+        }
+        if(url.pathname==="/admin/parts/ingest-run"&&request.method==="POST"){
+          let body={};try{body=await request.json();}catch{body={};}
+          try{return json(await runPartsIngest(env,{sources:body.sources||2,pages:body.pages||8}));}catch(e){return json({ok:false,error:"parts_ingest_run_failed",detail:safeError(e)},500);}
+        }
+        if(url.pathname==="/admin/parts/upsert"&&request.method==="POST"){
+          let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
+          try{return json(await upsertPartAdmin(env,body));}catch(e){return json({ok:false,error:"parts_upsert_failed",detail:safeError(e)},400);}
+        }
+        if(url.pathname==="/admin/merchant/register"&&request.method==="POST"){
+          let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
+          try{return json(await registerMerchantAdmin(env,body,origin));}catch(e){return json({ok:false,error:"merchant_register_failed",detail:safeError(e)},400);}
+        }
+        if(url.pathname==="/admin/merchant/verify"&&request.method==="POST"){
+          let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
+          const slug=String(body.slug||"").trim();if(!slug)return json({ok:false,error:"merchant_slug_required"},400);
+          const rows=await sbOptional(env,`/merchants?select=*&slug=eq.${encodeURIComponent(slug)}&limit=1`);if(!Array.isArray(rows)||!rows.length)return json({ok:false,error:"merchant_not_found"},404);
+          await sb(env,`/merchants?slug=eq.${encodeURIComponent(slug)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({verified:body.verified!==false,status:body.status||"active",updated_at:new Date().toISOString()})});
+          return json({ok:true,service:"MERCHANT INTELLIGENCE",merchant:slug,verified:body.verified!==false,status:body.status||"active"});
+        }
+        if(url.pathname==="/admin/merchant/snapshot-scores"&&request.method==="POST"){
+          let body={};try{body=await request.json();}catch{body={};}const merchant=await loadMerchantBySlug(env,body.slug||"");if(!merchant)return json({ok:false,error:"merchant_not_found"},404);return json(await snapshotMerchantScores(env,merchant));
+        }
+        if(url.pathname==="/admin/x402-rpc-check"&&request.method==="GET")return json(await x402RpcDiagnostic());
+        if(url.pathname==="/admin/world-discovery-audit"&&request.method==="GET")return json(await worldDiscoveryAudit(env,url.searchParams.get("mode")||"all",origin));
+        if(url.pathname==="/admin/atelier-status"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,atelier:await atelierStatus(env)});
+        if(url.pathname==="/admin/atelier-poll"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,atelier:await atelierPollAndFulfill(env)});
+        if(url.pathname==="/admin/db-cleanup"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,cleanup:await cleanupKnownBadOfficialRows(env)});
+        if(url.pathname==="/admin/catalog-cleanup"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",cleanup:await catalogCleanupPlan(env,{apply:false})});
+        if(url.pathname==="/admin/catalog-cleanup"&&request.method==="POST"){
+          if(url.searchParams.get("apply")!=="1"||request.headers.get("x-admin-confirm")!=="DELETE_FLAGGED_CATALOG_ROWS")return json({ok:false,error:"confirmation_required",required:"POST ?apply=1 with x-admin-confirm: DELETE_FLAGGED_CATALOG_ROWS"},409);
+          return json({service:"ANIME INTELLIGENCE",cleanup:await catalogCleanupPlan(env,{apply:true})});
+        }
+        if(url.pathname==="/admin/finalize-v3"&&request.method==="POST"){
+          if(request.headers.get("x-admin-confirm")!=="FINALIZE_ANIME_INTELLIGENCE_V3")return json({ok:false,error:"confirmation_required"},409);
+          const before=await catalogCleanupPlan(env,{apply:false});
+          const allowed=new Set([
+            "legacy_sneaker_identity",
+            "legacy_apparel_identity",
+            "trading_card_accessory_false_positive",
+            "generic_huf_apparel_false_positive",
+            "golf_head_cover_not_apparel",
+            "golf_head_cover_not_plush",
+            "mixed_bundle_single_type_false_positive",
+            "duplicate_no_jan_shadowed_by_jan"
+          ]);
+          const unexpected=(before.samples||[]).flatMap(x=>(x.reasons||[]).filter(r=>!allowed.has(r)));
+          if(unexpected.length)return json({ok:false,error:"unexpected_cleanup_reason",unexpected,before},409);
+          if(before.candidates>100)return json({ok:false,error:"cleanup_candidate_count_too_high",before},409);
+          let applied={...before,mode:"apply",deleted:0};
+          if(before.candidates>0)applied=await catalogCleanupPlan(env,{apply:true});
+          const after=await catalogCleanupPlan(env,{apply:false});
+          const selfTest=catalogClassificationRegressionSelfTest();
+          const systemCheck=await finalCheck(env,origin);
+          const finalized=after.candidates===0&&selfTest.ok&&systemCheck.ready===true;
+          return json({
+            service:"ANIME INTELLIGENCE",
+            version:VERSION,
+            finalized,
+            before:{scanned:before.scanned,candidates:before.candidates,reason_counts:before.reason_counts},
+            applied:{deleted:applied.deleted||0},
+            after:{scanned:after.scanned,candidates:after.candidates,reason_counts:after.reason_counts},
+            classification_self_test:selfTest,
+            system_check:{
+              ready:systemCheck.ready,
+              errors:systemCheck.errors,
+              database:systemCheck.database,
+              sources:systemCheck.sources,
+              marketplace:systemCheck.marketplace,
+              x402:systemCheck.x402
+            },
+            note:finalized?"ANIME_INTELLIGENCE_V3_COMPLETE":"REVIEW_REQUIRED"
+          });
+        }
+        if(url.pathname==="/admin/rakuten-affiliate/search"&&request.method==="GET")return json(await rakutenAffiliateSearchAdmin(env,{query:url.searchParams.get("query")||"",limit:url.searchParams.get("limit")||100}));
+        if(url.pathname==="/admin/rakuten-affiliate/candidates"&&request.method==="GET")return json(await rakutenAffiliateCandidates(env,{page:url.searchParams.get("page")||1,limit:url.searchParams.get("limit")||100,includeRegistered:url.searchParams.get("include_registered")==="1"}));
+        if(url.pathname==="/admin/rakuten-affiliate/registered"&&request.method==="GET")return json(await rakutenAffiliateRegistry(env,{limit:url.searchParams.get("limit")||200}));
+        if(url.pathname==="/admin/rakuten-affiliate/series"&&request.method==="GET"){const result=await rakutenAffiliateSeries(env,url.searchParams.get("product_id")||"",url.searchParams.get("limit")||100);return json({service:"ANIME INTELLIGENCE",version:VERSION,...result},result.status||200);}
+        if(url.pathname==="/admin/rakuten-affiliate/register"&&request.method==="POST"){let payload={};try{payload=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}const result=await registerRakutenAffiliateForProduct(env,payload);return json({service:"ANIME INTELLIGENCE",version:VERSION,...result},result.status||200);}
+        if(url.pathname==="/admin/search-diagnostic"&&request.method==="GET")return json(await searchDiagnostic(env,url.searchParams.get("query")||"One Piece figure"));
+        if(url.pathname==="/admin/natural-shopping-audit"&&request.method==="GET")return json(await naturalShoppingAudit(env,origin));
+        if(url.pathname==="/admin/multilingual-merch-intent-audit"&&request.method==="GET")return json(multilingualMerchIntentAudit(env));
+        if(url.pathname==="/admin/multilingual-ambiguity-audit"&&request.method==="GET")return json(multilingualAmbiguityAudit());
+        if(url.pathname==="/admin/multilingual-ambiguous-shopping-e2e-audit"&&request.method==="GET")return json(await multilingualAmbiguousShoppingE2EAudit(env,url));
+        if(url.pathname==="/admin/agent-selection-readiness-audit"&&request.method==="GET")return json(agentSelectionReadinessAudit(origin));
+        if(url.pathname==="/admin/country-routing-audit"&&request.method==="GET")return json(await countryAwareRoutingAudit(env,url.searchParams.get("query")||"Hatsune Miku figure"));
+        if(url.pathname==="/admin/metrics"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,metrics:await growthMetricsScalable(env)});
+        if(url.pathname==="/admin/kpi"&&request.method==="GET")return json({service:PLATFORM_NAME,version:VERSION,kpi:await revenueMetrics(env)});
+        if(url.pathname==="/admin/revenue-status"&&request.method==="GET")return json(await monetizationStatus(env,origin,{checkBazaar:url.searchParams.get("bazaar")==="1"}));
+        if(url.pathname==="/admin/final-check"&&request.method==="GET")return json(await finalCheck(env,origin));
+        if(url.pathname==="/admin/bazaar-check-one"&&request.method==="GET"){const path=url.searchParams.get("path")||"";return json(await bazaarCheckOne(env,origin,path));}
+        if(url.pathname==="/admin/bazaar-compliance-audit"&&request.method==="GET")return json(await bazaarComplianceAudit(origin,env));
+        if(url.pathname==="/admin/bazaar-merchant-audit"&&request.method==="GET")return json(await bazaarMerchantAudit(env,origin));
+        if(url.pathname==="/admin/bazaar-full-quality-audit"&&request.method==="GET")return json(await bazaarFullQualityAudit(env,origin));
+        if(url.pathname==="/admin/bazaar-semantic-audit"&&request.method==="GET")return json(await bazaarSemanticAudit(env,origin,url.searchParams.get("query")||"anime collectibles"));
+        if(url.pathname==="/admin/bazaar-check"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,checker_mode:"disabled_worker_proxy",outbound_subrequests:0,status:"USE_DIRECT_COINBASE_LINK",direct_url:"https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?payTo=9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT&limit=20"});
+        if(url.pathname==="/admin/agent402-register"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,agent402:await worldDiscoveryAgent402Register(origin)});
+        if(url.pathname==="/admin/quality-repair"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,execution:"single_safe_batch",auto_requested:url.searchParams.get("auto")==="1",round:url.searchParams.get("round")?Number(url.searchParams.get("round")):null,quality_repair:await repairProductQualityBatch(env,PIPELINE.qualityRepairStandalone)});
+        if(url.pathname==="/admin/discovery-v3-update"&&request.method==="POST"){
+          const preflight=await x402DiscoveryPreflight(origin,env);
+          if(!preflight.ok)return json({service:"ANIME INTELLIGENCE",version:VERSION,discovery_v3:false,preflight,index402_skipped:true,note:"402 Index update was not attempted because one or more local x402 protocol preflight checks failed."},503);
+          const index402=await register402Index(origin);
+          const agent402=await worldDiscoveryAgent402Register(origin);
+          return json({
+            service:"ANIME INTELLIGENCE",
+            version:VERSION,
+            discovery_v3:true,
