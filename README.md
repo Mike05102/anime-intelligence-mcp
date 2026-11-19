@@ -1,3 +1,48 @@
+# GLOBAL PURCHASE DECISION (GPD) — AI Agent Purchase Intelligence
+
+**Production service:** https://anime-intelligence.goodmy0312.workers.dev  
+**Production version last confirmed by operator:** v32.0.0 (2026-11-16). This repository has not been verified as the production deployment source.  
+**MCP endpoint:** https://anime-intelligence.goodmy0312.workers.dev/mcp
+
+GPD is an API and MCP service for AI agents that need to **find, identify, compare and choose physical products and sourcing options**. It supports anime collectibles, industrial parts and broader product discovery. Its business model is paid purchase-decision intelligence, not payment for the physical goods themselves.
+
+## Start here — AI agents and developers
+
+| Resource | URL |
+|---|---|
+| Agent onboarding | https://anime-intelligence.goodmy0312.workers.dev/agents |
+| Example requests and x402 flow | https://anime-intelligence.goodmy0312.workers.dev/agents/examples |
+| Agent readiness | https://anime-intelligence.goodmy0312.workers.dev/agents/readiness |
+| OpenAPI | https://anime-intelligence.goodmy0312.workers.dev/openapi.json |
+| MCP (Streamable HTTP) | https://anime-intelligence.goodmy0312.workers.dev/mcp |
+| LLM instructions | https://anime-intelligence.goodmy0312.workers.dev/llms.txt |
+| Agent metadata | https://anime-intelligence.goodmy0312.workers.dev/.well-known/agent.json |
+| x402 configuration | https://anime-intelligence.goodmy0312.workers.dev/x402/status |
+
+### Try before paying
+
+Use the public free search capabilities to evaluate relevance, identity resolution and coverage. For an actual purchase-decision request, follow the current OpenAPI and the examples endpoint. A paid `POST /v1/purchase-decision` request is configured for **0.10 USDC** via x402 on Solana mainnet.
+
+An x402-capable client sends the request, receives HTTP 402 with payment requirements, authorizes a USDC payment, then retries with the signed payment proof. **The 0.10 USDC charge is for decision intelligence, not a product purchase.** Do not submit a payment without user authorization.
+
+### What the service does and does not guarantee
+
+- Can provide machine-readable product and merchant decision evidence where available.
+- Does not invent compatibility, stock, lead times, shipping, duties or total landed costs when evidence is missing.
+- API readiness does **not** establish that any third-party agent has completed a real paid transaction.
+- An HTTP health check is not a guarantee of successful payment settlement or commercial revenue.
+- Product availability and coverage vary by domain and source.
+
+### Live monitoring
+
+An independent GitHub Actions workflow at `.github/workflows/gpd-independent-monitor.yml` checks connectivity and public health endpoints. It does not test funded payments or prove external revenue.
+
+---
+
+## Historical technical documentation
+
+The material below describes the **older v3.10.2 architecture** and is retained for historical reference. Its version numbers, endpoint prices, ingestion descriptions and deployment instructions must **not** be treated as the current v32 production specification. Refer to the live OpenAPI and onboarding pages above.
+
 # ANIME INTELLIGENCE / AI PURCHASE INTELLIGENCE
 
 Version **3.10.2**
