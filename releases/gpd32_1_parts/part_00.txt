@@ -1,0 +1,1000 @@
+// GLOBAL PURCHASE DECISION — Universal Commerce Production Worker
+// v6.0.0: universal product graph, adaptive autonomous commerce crawler, evidence freshness, identifier normalization, and unified monetization control plane. Travel is intentionally not exposed.
+// Legacy anime-intelligence endpoint names remain for backwards compatibility.
+// @ts-nocheck
+const VERSION="32.0.0";
+const PLATFORM_NAME="GLOBAL PURCHASE DECISION";
+const PLATFORM_PRODUCT="UNIVERSAL PURCHASE DECISION ENGINE";
+const BUILD_ID="20261119-3201-jan-owner-reconciliation-a1";
+
+const YAHOO_ENDPOINT="https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch";
+const EBAY_TOKEN_ENDPOINT="https://api.ebay.com/identity/v1/oauth2/token";
+const EBAY_SEARCH_ENDPOINT="https://api.ebay.com/buy/browse/v1/item_summary/search";
+const EBAY_ITEM_ENDPOINT="https://api.ebay.com/buy/browse/v1/item";
+const EBAY_MARKETPLACE="EBAY_US";
+const ECB_FX_ENDPOINT="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml";
+const DEFAULT_X402_FACILITATOR="https://api.cdp.coinbase.com/platform/v2/x402";
+const INDEX402_API="https://402index.io/api/v1";
+const SOLANA_MAINNET="solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const SOLANA_USDC="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const ATELIER_API="https://api.useatelier.ai";
+const ATELIER_POLL_EVERY_MINUTES=2;
+const ATELIER_MAX_ORDERS_PER_POLL=3;
+
+const BOOKING_DEMAND_PROD_BASE="https://demandapi.booking.com/3.2";
+const BOOKING_DEMAND_SANDBOX_BASE="https://demandapi-sandbox.booking.com/3.2";
+const BOOKING_DEMAND_BETA_BASE="https://demandapi.booking.com/3.2";
+const DUFFEL_API_BASE="https://api.duffel.com";
+const AMADEUS_TEST_BASE="https://test.api.amadeus.com";
+const AMADEUS_PROD_BASE="https://api.amadeus.com";
+const EXPEDIA_RAPID_BASE="https://api.ean.com";
+
+const PRICES={
+  identify:"5000",
+  market:"10000",
+  rarity:"10000",
+  authenticity:"20000",
+  buyWait:"20000",
+  bestPlace:"30000",
+  listingMatch:"10000",
+  deadline:"10000",
+  landedCost:"20000",
+  priceHistory:"20000",
+  full:"50000",
+  shoppingIntelligence:"50000",
+  partsIntelligence:"50000",
+  purchaseDecision:"100000"
+};
+
+const ROTATION=["mass","official","yahoo","ebay","mass","backfill","yahoo","ebay"];
+
+const PIPELINE={
+  massSeedsCron:20,
+  massSeedsStandalone:40,
+  officialDetailCron:4,
+  officialDetailStandalone:12,
+  backfillCron:2,
+  backfillStandalone:4,
+  yahooCron:2,
+  yahooStandalone:3,
+  ebayCron:1,
+  ebayStandalone:1,
+  productPageSize:500,
+  productMaxPages:100,
+  marketFreshDays:30,
+  backfillRetryHours:18,
+  marketRetryHours:6,
+  marketAutoRefreshHours:24,
+  qualityRepairStandalone:40,
+  massInspectMultiplier:2,
+  selfDiscoveryEnabled:true,
+  selfDiscoveryYahooHits:20,
+  kpiEventReadLimit:5000,
+  archiveSeedsStandalone:40,
+  archiveSeedsCron:30,
+  officialMassFeedCron:30,
+  enrichmentCron:4,
+  catalogQueriesTarget:"dynamic_1000_plus",
+  selfDiscoveryNoJanEnabled:true
+};
+
+const EBAY_DETAIL_LIMIT_PER_PRODUCT=2;
+
+const OFFICIAL_CONNECTORS=[
+  {
+    slug:"goodsmile",
+    name:"Good Smile Company",
+    manufacturer:"Good Smile Company",
+    listUrls:[
+      "https://www.goodsmile.com/ja/releaseinfo",
+      "https://www.goodsmile.com/en/releaseinfo"
+    ],
+    detailRegex:/https?:\/\/(?:www\.)?goodsmile\.com\/(?:ja|en)\/product\/\d+/i
+  },
+  {
+    slug:"tamashii",
+    name:"TAMASHII NATIONS / BANDAI SPIRITS",
+    manufacturer:"BANDAI SPIRITS",
+    listUrls:["https://tamashiiweb.com/item/"],
+    detailRegex:/https?:\/\/tamashiiweb\.com\/item\/\d+/i
+  },
+  {
+    slug:"kotobukiya",
+    name:"Kotobukiya",
+    manufacturer:"Kotobukiya",
+    listUrls:["https://www.kotobukiya.co.jp/product/"],
+    detailRegex:/https?:\/\/(?:www\.)?kotobukiya\.co\.jp\/product\/detail\/p\d+/i
+  },
+  {
+    slug:"alter",
+    name:"ALTER",
+    manufacturer:"ALTER",
+    listUrls:["https://alter-web.jp/products/"],
+    detailRegex:/https?:\/\/alter-web\.jp\/products\/\d+/i
+  },
+  {
+    slug:"megahouse",
+    name:"MegaHouse",
+    manufacturer:"MegaHouse",
+    listUrls:["https://www.megahobby.jp/products/"],
+    detailRegex:/https?:\/\/(?:www\.)?megahobby\.jp\/products\/item\/\d+/i
+  },
+  {
+    slug:"kdcolle",
+    name:"KDcolle / KADOKAWA",
+    manufacturer:"KADOKAWA",
+    listUrls:["https://kdcolle.kadokawa.co.jp/product/"],
+    detailRegex:/https?:\/\/kdcolle\.kadokawa\.co\.jp\/product\/(?!20(?:1[0-9]|2[0-9])(?:\/|$))[^?#]+/i
+  }
+];
+
+// High-volume official catalog feeds. These complement detail-page connectors above.
+// Failures are isolated; a feed can change without stopping Yahoo catalog growth or paid APIs.
+const OFFICIAL_MASS_FEEDS=[
+  {slug:"sega-prize",manufacturer:"SEGA FAVE",listUrl:"https://www.sega.jp/prize/",detailRegex:/https?:\/\/segaplaza\.jp\/prize\/[A-Za-z0-9_-]+\/?/i},
+  {slug:"bushiroad-creative",manufacturer:"Bushiroad Creative",listUrl:"https://bushiroad-creative.com/products/",detailRegex:/https?:\/\/(?:www\.)?bushiroad-creative\.com\/(?!products\/?(?:\?|$))[^?#]+/i},
+  {slug:"taito-prize",manufacturer:"TAITO",listUrl:"https://www.taito.co.jp/taito-prize",detailRegex:/https?:\/\/(?:www\.)?taito\.co\.jp\/(?:taito-prize|prize)\/[^?#]+/i},
+  {slug:"ensky",manufacturer:"ensky",listUrl:"https://en.ensky.co.jp/item/",detailRegex:/https?:\/\/en\.ensky\.co\.jp\/item\/[^?#]+/i,language:"en"},
+  {slug:"broccoli-goods",manufacturer:"Broccoli",listUrl:"https://www.broccoli.co.jp/goods_index/",detailRegex:/https?:\/\/(?:www\.)?broccoli\.co\.jp\/goods\/[^?#]+/i},
+  {slug:"cospa",manufacturer:"COSPA",listUrl:"https://www.cospa.com/cospa/",detailRegex:/https?:\/\/(?:www\.)?cospa\.com\/cospa\/(?:detail|event|item|product)\/[^?#]+/i},
+  {slug:"bandai-spirits",manufacturer:"BANDAI SPIRITS",listUrl:"https://www.bandaispirits.co.jp/products/",detailRegex:/https?:\/\/(?:www\.)?(?:bandaispirits\.co\.jp|tamashiiweb\.com|1kuji\.com|banpresto\.jp)\/[^?#]+/i},
+  {slug:"megahouse",manufacturer:"MegaHouse",listUrl:"https://www.megahouse.co.jp/products/",detailRegex:/https?:\/\/(?:www\.)?megahouse\.co\.jp\/products\/[^?#]+/i},
+  {slug:"kdcolle",manufacturer:"KADOKAWA",listUrl:"https://kdcolle.kadokawa.co.jp/product/",detailRegex:/https?:\/\/kdcolle\.kadokawa\.co\.jp\/product\/(?!20(?:1[0-9]|2[0-9])(?:\/|$))[^?#]+/i}
+];
+
+
+/* =========================================================
+   PARTS INTELLIGENCE OFFICIAL SOURCE REGISTRY v3.10.2
+   Public manufacturer sources only. No new external API keys.
+   Crawl is intentionally bounded and evidence-first.
+========================================================= */
+const DEFAULT_PARTS_SOURCES=[
+  {slug:"omron-fa",manufacturer:"OMRON",root_url:"https://www.fa.omron.co.jp/",category:"fa_controls"},
+  {slug:"mitsubishi-fa",manufacturer:"Mitsubishi Electric",root_url:"https://www.mitsubishielectric.co.jp/fa/",category:"fa_controls"},
+  {slug:"smc",manufacturer:"SMC",root_url:"https://www.smcworld.com/",category:"pneumatics"},
+  {slug:"idec",manufacturer:"IDEC",root_url:"https://jp.idec.com/",category:"fa_controls"},
+  {slug:"panasonic-industry",manufacturer:"Panasonic Industry",root_url:"https://industry.panasonic.com/jp/ja/",category:"industrial_components"},
+  {slug:"yaskawa",manufacturer:"Yaskawa",root_url:"https://www.e-mechatronics.com/",category:"servo_inverter"},
+  {slug:"oriental-motor",manufacturer:"Oriental Motor",root_url:"https://www.orientalmotor.co.jp/",category:"motors"},
+  {slug:"thk",manufacturer:"THK",root_url:"https://www.thk.com/",category:"linear_motion"},
+  {slug:"nsk",manufacturer:"NSK",root_url:"https://www.nsk.com/jp-ja/",category:"bearings"},
+  {slug:"azbil",manufacturer:"Azbil",root_url:"https://www.azbil.com/jp/",category:"sensors_controls"}
+];
+
+/* =========================================================
+   UTILITIES
+========================================================= */
+
+function safeError(e){
+  return String(e?.message||e||"unknown_error").slice(0,2000);
+}
+
+function corsHeaders(extra={}){
+  return {
+    "access-control-allow-origin":"*",
+    "access-control-allow-methods":"GET,POST,OPTIONS",
+    "access-control-allow-headers":"content-type,x-refresh-key,x-merchant-key,payment-signature,x-payment,mcp-protocol-version,mcp-method,mcp-name",
+    ...extra
+  };
+}
+
+function b64(value){
+  const bytes=new TextEncoder().encode(String(value));
+  let bin="";
+  for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function unb64(value){
+  const bin=atob(String(value));
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function json(data,status=200,extra={}){
+  return new Response(JSON.stringify(data,null,2),{
+    status,
+    headers:corsHeaders({"content-type":"application/json; charset=utf-8",...extra})
+  });
+}
+
+function text(data,status=200,extra={}){
+  return new Response(String(data),{
+    status,
+    headers:corsHeaders({"content-type":"text/plain; charset=utf-8",...extra})
+  });
+}
+
+function htmlResponse(data,status=200,extra={}){
+  return new Response(String(data),{
+    status,
+    headers:corsHeaders({"content-type":"text/html; charset=utf-8",...extra})
+  });
+}
+
+function decodeHtml(v=""){
+  return String(v)
+    .replace(/&amp;/g,"&")
+    .replace(/&quot;/g,'"')
+    .replace(/&#39;|&apos;/g,"'")
+    .replace(/&lt;/g,"<")
+    .replace(/&gt;/g,">")
+    .replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)));
+}
+
+function stripHtml(v=""){
+  return decodeHtml(String(v).replace(/<script[\s\S]*?<\/script>/gi," ").replace(/<style[\s\S]*?<\/style>/gi," ").replace(/<[^>]+>/g," ")).replace(/\s+/g," ").trim();
+}
+
+function cleanOfficialTitle(v=""){
+  return stripHtml(v)
+    .replace(/\s*[|\uff5c]\s*(GOOD SMILE COMPANY|\u30b0\u30c3\u30c9\u30b9\u30de\u30a4\u30eb\u30ab\u30f3\u30d1\u30cb\u30fc).*$/i,"")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function normalize(v=""){
+  return String(v)
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g,"-")
+    .replace(/[\u201c\u201d\u201e\u201f]/g,'"')
+    .replace(/[\u2019\u2018]/g,"'")
+    .replace(/[\u30fb\uff0f/_,:;|\uff5c\u3010\u3011\u300c\u300d\u300e\u300f\uff08\uff09()[\]{}<>]/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function tokens(v=""){
+  return normalize(v).split(/\s+/).filter(Boolean);
+}
+
+function clamp(n,min=0,max=100){
+  return Math.min(max,Math.max(min,Number(n)||0));
+}
+
+function median(values=[]){
+  const xs=values.filter(Number.isFinite).sort((a,b)=>a-b);
+  if(!xs.length)return null;
+  const m=Math.floor(xs.length/2);
+  return xs.length%2?xs[m]:(xs[m-1]+xs[m])/2;
+}
+
+function daysSince(v){
+  const t=Date.parse(v||"");
+  return Number.isFinite(t)?Math.max(0,(Date.now()-t)/86400000):0;
+}
+
+function hoursSince(v){
+  const t=Date.parse(v||"");
+  return Number.isFinite(t)?Math.max(0,(Date.now()-t)/3600000):Infinity;
+}
+
+function cleanJan(v=""){
+  const s=String(v||"").replace(/\D/g,"");
+  return /^\d{13}$/.test(s)?s:null;
+}
+
+function isoDate(v=""){
+  const s=String(v||"").trim();
+  const m=s.match(/(20\d{2})[\u5e74\/.\-](\d{1,2})[\u6708\/.\-](\d{1,2})/);
+  if(!m)return null;
+  return `${m[1]}-${String(m[2]).padStart(2,"0")}-${String(m[3]).padStart(2,"0")}`;
+}
+
+function normalizeStage(stage=""){
+  const s=String(stage).toLowerCase().trim();
+  return ["mass","official","backfill","yahoo","ebay","metrics"].includes(s)?s:null;
+}
+
+function deterministicWindow(items=[],count=1,timeMs=Date.now(),salt=0){
+  if(!items.length)return [];
+  const start=(Math.floor(Number(timeMs)/3600000)+salt)%items.length;
+  return Array.from({length:Math.min(count,items.length)},(_,i)=>items[(start+i)%items.length]);
+}
+
+function labelSimilarityScore(a="",b=""){
+  const A=[...new Set(tokens(a))];
+  const B=[...new Set(tokens(b))];
+  if(!A.length||!B.length)return 0;
+  const match=A.filter(x=>B.some(y=>y===x||y.includes(x)||x.includes(y))).length;
+  const union=new Set([...A,...B]).size;
+  return Math.round(clamp((match/Math.max(A.length,1))*70+(match/Math.max(union,1))*30));
+}
+
+function sourceEvidence(source,observedAt=new Date().toISOString(),extra={}){
+  return {source,observed_at:observedAt,...extra};
+}
+
+function latestObservationMap(rows=[]){
+  const m=new Map();
+  for(const o of rows){
+    const k=o.external_listing_id||`${o.source_id}:${o.listing_url||o.id}`;
+    const prev=m.get(k);
+    if(!prev||Date.parse(o.observed_at||"")>Date.parse(prev.observed_at||""))m.set(k,o);
+  }
+  return m;
+}
+
+/* =========================================================
+   LANGUAGE
+========================================================= */
+
+const LANGS=["ja","en","zh","ko","es","fr","de","it","pt","id","th","ru","ar","hi","vi","tr","nl","pl"];
+
+function detectLanguage(query="",explicit="",accept=""){
+  const e=String(explicit||"").toLowerCase().slice(0,2);
+  if(LANGS.includes(e))return e;
+  const a=String(accept||"").toLowerCase();
+  const found=LANGS.find(x=>a.startsWith(x)||a.includes(`,${x}`)||a.includes(`;${x}`));
+  if(found)return found;
+  const q=String(query||"");
+  if(/[\uac00-\ud7af]/.test(q))return "ko";
+  if(/[\u3041-\u3093\u30a1-\u30f6]/.test(q))return "ja";
+  if(/[\u0e00-\u0e7f]/.test(q))return "th";
+  if(/[\u0600-\u06ff]/.test(q))return "ar";
+  if(/[\u0900-\u097f]/.test(q))return "hi";
+  if(/[\u0400-\u04ff]/.test(q))return "ru";
+  if(/[\u4e00-\u9fff\u3400-\u4dbf]/.test(q))return "zh";
+  return "en";
+}
+
+function foldLatinForSearch(v=""){
+  return String(v||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+}
+
+function detectSearchLanguage(query="",explicit="",accept=""){
+  const e=String(explicit||"").toLowerCase().slice(0,2);
+  if(LANGS.includes(e))return e;
+  const q=String(query||"");
+  if(/[\uac00-\ud7af]/.test(q))return "ko";
+  if(/[\u3041-\u3093\u30a1-\u30f6]/.test(q))return "ja";
+  if(/[\u0e00-\u0e7f]/.test(q))return "th";
+  if(/[\u0600-\u06ff]/.test(q))return "ar";
+  if(/[\u0900-\u097f]/.test(q))return "hi";
+  if(/[\u0400-\u04ff]/.test(q))return "ru";
+  if(/[\u4e00-\u9fff\u3400-\u4dbf]/.test(q))return "zh";
+  const n=foldLatinForSearch(q);
+  const lexical=[
+    ["fr",/(?:\bfigurines?\b|\bproduits?\b|\bobjets?\b|\bacheter\b|\btrouver\b|\bdoudou\b|\bcollectionner\b|\bcollectionnable\b)/],
+    ["es",/(?:\bfiguras?\b|\bproductos?\b|\bcomprar\b|\bmunecos?\b|\bjuguetes?\b)/],
+    ["de",/(?:\bfigur(?:en)?\b|\bplusch(?:tier|e|en)?\b|\bartikel\b|\bkaufen\b|\bsammel)/],
+    ["it",/(?:\bprodotti?\b|\bcomprare\b|\bmorbido\b|\bpupazzo\b|\bgiocattolo\b)/],
+    ["pt",/(?:\bprodutos?\b|\bpelucia\b|\bcomprar\b|\bboneco\b)/],
+    ["id",/(?:\bboneka\b|\bbarang\b|\bmerch anime indonesia\b)/],
+    ["vi",/(?:\bdo choi\b|\bmo hinh\b|\bgau bong\b|\bthu bong\b)/],
+    ["tr",/(?:\burunleri\b|\bfiguru\b|\bpelus\b|\boyuncak\b)/],
+    ["nl",/(?:\bknuffel\b|\bverzamel\b|\banime merch nederland\b|\bpluche\b)/],
+    ["pl",/(?:\bgadzet\b|\bfigurki?\b|\bpluszak\b|\bzabawka\b)/]
+  ];
+  for(const [lang,re] of lexical)if(re.test(n))return lang;
+  // A Latin-script product query such as "One Piece figure" should not inherit
+  // the browser UI language (e.g. Japanese Safari). If no non-English lexical
+  // language matched above, treat ordinary Latin search text as English.
+  if(/[A-Za-z]/.test(q))return "en";
+  const a=String(accept||"").toLowerCase();
+  const found=LANGS.find(x=>a.startsWith(x)||a.includes(`,${x}`)||a.includes(`;${x}`));
+  return found||"en";
+}
+
+const MESSAGES={
+  en:{
+    avoid:"Authenticity/listing risk is too high.",
+    noMarket:"Not enough fresh market evidence. Keep watching.",
+    nearMsrp:"Preorder or current price is near MSRP.",
+    belowMsrp:"Current best offer is materially below MSRP.",
+    belowMedian:"Current best offer is materially below the market median.",
+    scarce:"Supply is scarce enough that waiting may increase acquisition risk.",
+    watch:"No strong BUY signal yet. Continue watching current offers."
+  },
+  ja:{
+    avoid:"\u771f\u6b63\u6027\u30fb\u51fa\u54c1\u30ea\u30b9\u30af\u304c\u9ad8\u3044\u305f\u3081\u56de\u907f\u5224\u5b9a\u3067\u3059\u3002",
+    noMarket:"\u65b0\u9bae\u306a\u5e02\u5834\u30c7\u30fc\u30bf\u304c\u4e0d\u8db3\u3057\u3066\u3044\u308b\u305f\u3081\u76e3\u8996\u7d99\u7d9a\u3067\u3059\u3002",
+    nearMsrp:"\u4e88\u7d04\u30fb\u73fe\u5728\u4fa1\u683c\u304c\u5b9a\u4fa1\u8fd1\u8fba\u3067\u3059\u3002",
+    belowMsrp:"\u73fe\u5728\u306e\u6700\u5b89\u5024\u304c\u5b9a\u4fa1\u3092\u660e\u78ba\u306b\u4e0b\u56de\u3063\u3066\u3044\u307e\u3059\u3002",
+    belowMedian:"\u73fe\u5728\u306e\u6700\u5b89\u5024\u304c\u5e02\u5834\u4e2d\u592e\u5024\u3092\u660e\u78ba\u306b\u4e0b\u56de\u3063\u3066\u3044\u307e\u3059\u3002",
+    scarce:"\u4f9b\u7d66\u304c\u5c11\u306a\u304f\u3001\u5f85\u3064\u3053\u3068\u3067\u5165\u624b\u6a5f\u4f1a\u304c\u60aa\u5316\u3057\u3084\u3059\u3044\u72b6\u614b\u3067\u3059\u3002",
+    watch:"\u5f37\u3044BUY\u6761\u4ef6\u306b\u306f\u672a\u9054\u3067\u3059\u3002\u73fe\u5728\u306e\u51fa\u54c1\u3092\u76e3\u8996\u3057\u307e\u3059\u3002"
+  }
+};
+
+function msg(lang,key){
+  return (MESSAGES[lang]||MESSAGES.en)[key]||MESSAGES.en[key]||key;
+}
+
+/* =========================================================
+   SUPABASE
+========================================================= */
+
+function sbBase(env){
+  if(!env.SUPABASE_URL)throw new Error("SUPABASE_URL is missing");
+  return String(env.SUPABASE_URL).replace(/\/$/,"")+"/rest/v1";
+}
+
+function sbHeaders(env,extra={}){
+  if(!env.SUPABASE_SECRET_KEY)throw new Error("SUPABASE_SECRET_KEY is missing");
+  return {
+    apikey:env.SUPABASE_SECRET_KEY,
+    authorization:`Bearer ${env.SUPABASE_SECRET_KEY}`,
+    "content-type":"application/json",
+    ...extra
+  };
+}
+
+async function sb(env,path,options={}){
+  const r=await fetch(sbBase(env)+path,{
+    method:options.method||"GET",
+    headers:sbHeaders(env,options.headers||{}),
+    body:options.body
+  });
+  const raw=await r.text();
+  let data=null;
+  try{data=raw?JSON.parse(raw):null;}catch{data={raw};}
+  if(!r.ok)throw new Error(`Supabase ${r.status}: ${raw.slice(0,1200)}`);
+  return data;
+}
+
+async function sbOptional(env,path,options={}){
+  try{return await sb(env,path,options);}catch(e){console.warn("Supabase optional",safeError(e));return null;}
+}
+
+async function sbCount(env,filters="",options={}){
+  const url=sbBase(env)+`/products?select=id${filters?`&${filters}`:""}`;
+  const mode=String(options.mode||"planned");
+  const prefer=mode==="exact"?"count=exact":"count=planned";
+  const r=await fetch(url,{headers:sbHeaders(env,{Prefer:prefer,Range:"0-0"})});
+  if(!r.ok){
+    const raw=await r.text().catch(()=>"");
+    const detail=raw?`: ${raw.slice(0,600)}`:"";
+    throw new Error(`Supabase count ${r.status}${detail}`);
+  }
+  const cr=r.headers.get("content-range")||"";
+  const m=cr.match(/\/(\d+)$/);
+  if(!m)throw new Error(`Supabase count missing content-range: ${cr||"<empty>"}`);
+  return Number(m[1]);
+}
+
+async function loadProductCandidates(env,limit=500){
+  const rows=await sbOptional(env,`/products?select=*&order=source_last_checked_at.asc.nullsfirst&limit=${Math.max(1,Math.min(1000,limit))}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+async function loadBackfillCandidates(env,limit=500){
+  const rows=await sbOptional(env,`/products?select=*&jan_code=not.is.null&order=source_last_checked_at.asc.nullsfirst&limit=${Math.max(1,Math.min(1000,limit))}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+async function loadProductsByJans(env,jans=[]){
+  const clean=[...new Set(jans.map(cleanJan).filter(Boolean))];
+  if(!clean.length)return [];
+  const rows=await sbOptional(env,`/products?select=*&jan_code=in.(${clean.join(",")})&limit=${clean.length*2}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+async function loadProductsBySourceKeys(env,keys=[]){
+  const clean=[...new Set(keys.map(x=>String(x||"").trim()).filter(Boolean))];
+  if(!clean.length)return [];
+  // v3.0.11: one PostgREST IN query instead of one subrequest per key.
+  // This is critical for no-JAN categories such as lottery prizes.
+  const quoted=clean.map(x=>`"${x.replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`).join(",");
+  const rows=await sbOptional(env,`/products?select=*&source_product_key=in.(${encodeURIComponent(quoted)})&limit=${Math.max(2,clean.length*2)}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+function stableHash32(v=""){
+  let h=2166136261;
+  for(const ch of String(v)){h^=ch.codePointAt(0);h=Math.imul(h,16777619)>>>0;}
+  return h.toString(16).padStart(8,"0");
+}
+
+function canonicalCollectibleIdentity(name="",productType="other_collectible"){
+  const cleaned=normalize(cleanOfficialTitle(name))
+    .replace(/^(?:\u9001\u6599\u7121\u6599|\u9001\u6599\u8fbc|\u65b0\u54c1|\u4e2d\u53e4|\u4e88\u7d04|\u5373\u7d0d)\s*/g,"")
+    .replace(/(?:\u767a\u58f2\u6e08|\u5728\u5eab\u54c1|\u4e88\u7d04\u53d7\u4ed8\u4e2d|\u4e88\u7d04\u5546\u54c1|\u4e88\u7d04|\u518d\u8ca9|\u65b0\u54c1|\u4e2d\u53e4|\u672a\u958b\u5c01)/g," ")
+    .replace(/(?:20\d{2}[\/.-]\d{1,2}(?:[\/.-]\d{1,2})?\u767a\u58f2?)/g," ")
+    .replace(/\s+/g," ").trim();
+  return `${productType}|${cleaned}`;
+}
+
+function apparelBrand(name=""){
+  const raw=String(name||"");
+  const up=raw.toUpperCase();
+  const brands=[
+    [["NEW ERA","NEWERA","\u30cb\u30e5\u30fc\u30a8\u30e9"],"NEW ERA"],
+    [["NORTON","\u30ce\u30fc\u30c8\u30f3"],"NORTON"],
+    [["HUF","\u30cf\u30d5"],"HUF"],
+    [["UNIQLO","\u30e6\u30cb\u30af\u30ed"],"UNIQLO"],
+    [["GU","\u30b8\u30fc\u30e6\u30fc"],"GU"],
+    [["GRANIPH","\u30b0\u30e9\u30cb\u30d5"],"GRANIPH"],
+    [["COSPA","\u30b3\u30b9\u30d1"],"COSPA"],
+    [["AVIREX","\u30a2\u30f4\u30a3\u30ec\u30c3\u30af\u30b9"],"AVIREX"]
+  ];
+  for(const [tokens,label] of brands)for(const token of tokens)if(token.charCodeAt(0)>127?raw.includes(token):up.includes(token))return label;
+  return null;
+}
+function apparelCollaboration(name=""){
+  const raw=String(name||"");
+  const compact=raw.normalize("NFKC").toUpperCase().replace(/[\s\u30fb_\-\/]+/g,"");
+  const rules=[
+    [/(?:DORAEMON|\u30c9\u30e9\u3048\u3082\u3093|\u30a2\u30a4\u30e0\u30c9\u30e9\u3048\u3082\u3093)/,"DORAEMON"],
+    [/(?:TOKYOREVENGERS|\u6771\u4eac\u30ea\u30d9\u30f3\u30b8\u30e3\u30fc\u30ba|\u6771\u4eac\u5350\u6703)/,"TOKYO REVENGERS"],
+    [/(?:NARUTO(?:SHIPPUDEN)?|\u30ca\u30eb\u30c8(?:\u75be\u98a8\u4f1d|\u30b7\u30c3\u30d7\u30a6\u30c7\u30f3)?)/,"NARUTO SHIPPUDEN"],
+    [/(?:EVANGELION|\u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3|\u30a8\u30f4\u30a1)/,"EVANGELION"],
+    [/(?:ONEPIECE|\u30ef\u30f3\u30d4\u30fc\u30b9)/,"ONE PIECE"],
+    [/(?:POKEMON|\u30dd\u30b1\u30e2\u30f3)/,"POKEMON"],
+    [/(?:HATSUNEMIKU|\u521d\u97f3\u30df\u30af)/,"HATSUNE MIKU"],
+    [/(?:AVENGERS|\u30a2\u30d9\u30f3\u30b8\u30e3\u30fc\u30ba)/,"AVENGERS"],
+    [/(?:BATMAN|\u30d0\u30c3\u30c8\u30de\u30f3)/,"BATMAN"],
+    [/(?:DEMONSLAYER|\u9b3c\u6ec5\u306e\u5203)/,"DEMON SLAYER"],
+    [/(?:MYHEROACADEMIA|\u50d5\u306e\u30d2\u30fc\u30ed\u30fc\u30a2\u30ab\u30c7\u30df\u30a2|\u30d2\u30ed\u30a2\u30ab)/,"MY HERO ACADEMIA"],
+    [/(?:JUJUTSUKAISEN|\u546a\u8853\u5efb\u6226)/,"JUJUTSU KAISEN"],
+    [/(?:DRAGONBALL|\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb)/,"DRAGON BALL"],
+    [/(?:SANRIO|\u30b5\u30f3\u30ea\u30aa)/,"SANRIO"],
+    [/(?:MICKEY|\u30df\u30c3\u30ad\u30fc)/,"MICKEY"],
+    [/(?:HELLOKITTY|\u30ad\u30c6\u30a3)/,"HELLO KITTY"]
+  ];
+  for(const [re,label] of rules)if(re.test(compact))return label;
+  return null;
+}
+function apparelItemType(name=""){
+  const n=String(name||"").normalize("NFKC");
+  const rules=[
+    [/(?:59FIFTY|\u30ad\u30e3\u30c3\u30d7|\u5e3d\u5b50|\u30d9\u30fc\u30b9\u30dc\u30fc\u30eb\u30ad\u30e3\u30c3\u30d7)/i,"cap"],
+    [/(?:T[\s-]?\u30b7\u30e3\u30c4|\u30c6\u30a3\u30fc\u30b7\u30e3\u30c4|\bTEE\b)/i,"t_shirt"],
+    [/(?:\u30cb\u30c3\u30c8\u30b7\u30e3\u30c4|\u9577\u8896\u30b7\u30e3\u30c4|\u30b7\u30e3\u30c4)/i,"shirt"],
+    [/(?:\u30d1\u30fc\u30ab\u30fc|\u30d5\u30fc\u30c7\u30a3|\bHOODIE\b)/i,"hoodie"],
+    [/(?:\u30b9\u30a6\u30a7\u30c3\u30c8|\u30c8\u30ec\u30fc\u30ca\u30fc)/i,"sweatshirt"],
+    [/(?:\u30b8\u30e3\u30b1\u30c3\u30c8|\u30d6\u30eb\u30be\u30f3|\u30b3\u30fc\u30c8)/i,"outerwear"],
+    [/(?:\u30c4\u30a4\u30eb\u30d1\u30f3\u30c4|\u30ab\u30fc\u30b4\u30d1\u30f3\u30c4|\u30d1\u30f3\u30c4|\u30ba\u30dc\u30f3|\u30b7\u30e7\u30fc\u30c4)/i,"pants"],
+    [/(?:\u30cb\u30c3\u30c8|\u30bb\u30fc\u30bf\u30fc|\u30ab\u30fc\u30c7\u30a3\u30ac\u30f3)/i,"knitwear"],
+    [/(?:\u30ef\u30f3\u30d4\u30fc\u30b9|\u30b9\u30ab\u30fc\u30c8)/i,"dress_skirt"]
+  ];
+  for(const [re,label] of rules)if(re.test(n))return label;
+  return null;
+}
+function apparelStyleCode(name=""){
+  const raw=String(name||"").normalize("NFKC");
+  // Numeric merchandise codes are useful when 7-10 digits, but reject common model/series names.
+  const pureNums=[...raw.matchAll(/(?:^|[^\d])(\d{7,10})(?=$|[^\d])/g)].map(m=>m[1]);
+  for(const n of pureNums){
+    if(/^20\d{6}$/.test(n))continue;
+    return n;
+  }
+  const tokens=raw.match(/\b[A-Z0-9][A-Z0-9_-]{5,15}\b/gi)||[];
+  const deny=new Set(["59FIFTY","9FIFTY","39THIRTY","9FORTY"]);
+  for(const t0 of tokens){
+    const t=t0.toUpperCase().replace(/_/g,"-");
+    if(deny.has(t))continue;
+    if(!/[A-Z]/.test(t)||!/\d/.test(t))continue;
+    if(/^(?:IPHONE|ANDROID)/.test(t))continue;
+    return t;
+  }
+  return null;
+}
+function apparelObservedSize(name=""){
+  let raw=String(name||"").normalize("NFKC").toUpperCase();
+  raw=raw.replace(/\bS\/S\b/g," ").replace(/\bL\/S\b/g," ");
+  const m=raw.match(/(?:^|[\s\/,(])((?:XXS|XS|S|M|L|XL|XXL|XXXL|3L|4L|5L))(?:$|[\s\/,).])/);
+  return m?m[1]:null;
+}
+function normalizeApparelCanonicalName(name=""){
+  return normalize(cleanOfficialTitle(name))
+    .replace(/(?:\u7206\u8cb7|\u9001\u6599\u7121\u6599|\u9001\u6599\u8fbc|\u65b0\u54c1|\u4e2d\u53e4|\u672a\u4f7f\u7528|\u6b63\u898f\u53d6\u6271\u5e97|\u6b63\u898f\u54c1|\u4e88\u7d04|\u5373\u7d0d|\u5728\u5eab\u54c1)/g," ")
+    .replace(/(?:20\d{2}|\d{2})(?:\u5e74)?(?:\u6625\u590f|\u79cb\u51ac|\u6625|\u590f|\u79cb|\u51ac)(?:\u65b0\u4f5c)?/g," ")
+    .replace(/\b(?:SS|AW|FW)\s*2?\d{2}\b/gi," ")
+    .replace(/\bS\/S\b/gi," ")
+    .replace(/\bL\/S\b/gi," ")
+    .replace(/(?:^|[\s\/,(])(?:XXS|XS|S|M|L|XL|XXL|XXXL|3L|4L|5L)(?=$|[\s\/,).])/gi," ")
+    .replace(/\s+/g," ").trim();
+}
+function apparelHasCollabSignal(name=""){
+  const raw=String(name||"");
+  const collab=apparelCollaboration(raw);
+  if(collab)return true;
+  if(/(?:\u30b3\u30e9\u30dc|\u30b3\u30e9\u30dc\u30ec\u30fc\u30b7\u30e7\u30f3|\u30a2\u30cb\u30e1\u30ad\u30e3\u30e9\u30af\u30bf\u30fc|\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba|\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30a2\u30d1\u30ec\u30eb|\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc)/i.test(raw))return true;
+  return false;
+}
+function apparelIdentity(name=""){
+  const brand=apparelBrand(name);
+  const collaboration=apparelCollaboration(name);
+  const item_type=apparelItemType(name);
+  const style_code=apparelStyleCode(name);
+  const observed_size=apparelObservedSize(name);
+  const normalized_name=normalizeApparelCanonicalName(name);
+  let identity,identity_method;
+  if(style_code){
+    identity=`apparel|${brand||"unknown"}|${style_code}|${collaboration||"unknown"}`;
+    identity_method="apparel_style_code";
+  }else if(brand&&collaboration&&item_type){
+    identity=`apparel|${brand}|${collaboration}|${item_type}|${normalized_name}`;
+    identity_method="apparel_brand_collab_type";
+  }else{
+    identity=`apparel|${brand||"unknown"}|${collaboration||"unknown"}|${item_type||"unknown"}|${normalized_name}`;
+    identity_method="apparel_canonical_name";
+  }
+  const fingerprint=stableHash32(identity);
+  return {brand,collaboration,item_type,style_code,observed_size,normalized_name,identity,identity_method,fingerprint,source_key:`catalog:apparel:v2:${fingerprint}`};
+}
+function apparelClassifierOverride(name="",classification=null){
+  const n=String(name||"");
+  // Never turn obvious non-wearable accessories/other goods into apparel.
+  if(/(?:\u30dd\u30fc\u30c1|\u30b9\u30de\u30db\u30b1\u30fc\u30b9|iPhone\s*\d*\s*(?:Pro|Plus|Max)?\s*\u30b1\u30fc\u30b9|\u30de\u30eb\u30c1\u30b1\u30fc\u30b9|\u30b3\u30b9\u30e1\u53ce\u7d0d|\u30b8\u30b0\u30bd\u30fc\u30d1\u30ba\u30eb|\u30d1\u30ba\u30eb)/i.test(n))return classification;
+  const item=apparelItemType(n);
+  if(!item)return classification;
+  if(!apparelHasCollabSignal(n))return classification;
+  return {type:"apparel",confidence:0.96,reason:`apparel_collab_item:${item}`};
+}
+
+function sneakerBrand(name=""){
+  const raw=String(name||"");
+  const n=raw.toUpperCase();
+  const brands=[
+    [["CONVERSE","\u30b3\u30f3\u30d0\u30fc\u30b9"],"CONVERSE"],
+    [["PUMA","\u30d7\u30fc\u30de"],"PUMA"],
+    [["SPINGLE","\u30b9\u30d4\u30f3\u30b0\u30eb"],"SPINGLE"],
+    [["NIKE","\u30ca\u30a4\u30ad"],"NIKE"],
+    [["ADIDAS","\u30a2\u30c7\u30a3\u30c0\u30b9"],"ADIDAS"],
+    [["VANS","\u30f4\u30a1\u30f3\u30ba","\u30d0\u30f3\u30ba"],"VANS"],
+    [["NEW BALANCE","\u30cb\u30e5\u30fc\u30d0\u30e9\u30f3\u30b9"],"NEW BALANCE"],
+    [["REEBOK","\u30ea\u30fc\u30dc\u30c3\u30af"],"REEBOK"],
+    [["ASICS","\u30a2\u30b7\u30c3\u30af\u30b9"],"ASICS"],
+    [["ONITSUKA TIGER","\u30aa\u30cb\u30c4\u30ab\u30bf\u30a4\u30ac\u30fc"],"ONITSUKA TIGER"]
+  ];
+  for(const [tokens,label] of brands)for(const token of tokens)if(token.charCodeAt(0)>127?raw.includes(token):n.includes(token))return label;
+  return null;
+}
+function sneakerStyleCode(name=""){
+  const raw=String(name||"");
+  const alpha=raw.match(/\b(?:[A-Z]{2,}[A-Z0-9]*[-_][A-Z0-9][A-Z0-9_-]{3,}|[A-Z]{1,5}\d{4,}[A-Z0-9_-]*)\b/i);
+  if(alpha)return alpha[0].toUpperCase().replace(/_/g,"-");
+  const nums=[...raw.matchAll(/(?:^|[^\d])(\d{8})(?=$|[^\d])/g)].map(m=>m[1]);
+  for(const x of nums){if(/^20\d{6}$/.test(x))continue;return x;}
+  return null;
+}
+function sneakerObservedSize(name=""){
+  const n=String(name||"");
+  let m=n.match(/(\d{2}(?:\.\d)?)-(\d{2}(?:\.\d)?)\s*cm\b/i);
+  if(m)return `${m[1]}-${m[2]}cm`;
+  m=n.match(/(?:^|[\s\/,(])(\d{2}(?:\.\d)?)\s*cm\b/i);
+  if(m)return `${m[1]}cm`;
+  m=n.match(/\b(?:US|UK)\s*(\d{1,2}(?:\.\d)?)\b/i);
+  return m?m[0].toUpperCase():null;
+}
+function sneakerCollaboration(name=""){
+  const raw=String(name||"");
+  const compact=raw.normalize("NFKC").toUpperCase().replace(/[\s\u30fb\u30fb_\-\/]+/g,"");
+  const rules=[
+    [/(?:NARUTOSHIPPUDEN|\u30ca\u30eb\u30c8(?:\u75be\u98a8\u4f1d|\u30b7\u30c3\u30d7\u30a6\u30c7\u30f3|\u30b7\u30c3\u30d7\u30a6\u30c7\u30f3)?)/,"NARUTO SHIPPUDEN"],
+    [/(?:GHOSTINTHESHELL|\u653b\u6bbb\u6a5f\u52d5\u968a)/,"GHOST IN THE SHELL"],
+    [/(?:PAWPATROL|\u30d1\u30a6\u30d1\u30c8\u30ed\u30fc\u30eb|\u30d1\u30a6\u30d1\u30c8)/,"PAW PATROL"],
+    [/(?:POWERPUFFGIRLS|\u30d1\u30ef\u30fc\u30d1\u30d5\u30ac\u30fc\u30eb\u30ba)/,"POWERPUFF GIRLS"],
+    [/(?:SPONGEBOB|\u30b9\u30dd\u30f3\u30b8\u30dc\u30d6)/,"SPONGEBOB"]
+  ];
+  for(const [re,label] of rules)if(re.test(compact))return label;
+  return null;
+}
+function sneakerModelFamily(name="",brand=null){
+  const raw=String(name||"").normalize("NFKC");
+  const compact=raw.toUpperCase().replace(/[\s\u30fb_\-\/]+/g,"");
+  if(brand==="CONVERSE"){
+    if(/(?:ALLSTAR|\u30aa\u30fc\u30eb\u30b9\u30bf\u30fc)/i.test(raw)){
+      if(/(?:\bOX\b|\u30ed\u30fc\u30ab\u30c3\u30c8)/i.test(raw))return "ALL STAR OX";
+      if(/(?:\bHI\b|\u30cf\u30a4\u30ab\u30c3\u30c8)/i.test(raw))return "ALL STAR HI";
+      if(/(?:CHUNKYLINE|\u30c1\u30e3\u30f3\u30ad\u30fc\u30e9\u30a4\u30f3)/i.test(compact))return "ALL STAR CHUNKYLINE";
+      return "ALL STAR";
+    }
+  }
+  if(brand==="ADIDAS"&&/(?:SUPERSTAR|\u30b9\u30fc\u30d1\u30fc\u30b9\u30bf\u30fc)/i.test(raw))return "SUPERSTAR";
+  return null;
+}
+function normalizeSneakerCanonicalName(name=""){
+  return normalize(cleanOfficialTitle(name))
+    .replace(/(?:\u9001\u6599\u7121\u6599|\u9001\u6599\u8fbc|\u65b0\u54c1|\u4e2d\u53e4|\u672a\u4f7f\u7528|\u6b63\u898f\u53d6\u6271\u5e97|\u6b63\u898f\u54c1|\u4e88\u7d04|\u5373\u7d0d|\u767a\u58f2\u6e08|\u5728\u5eab\u54c1)/g," ")
+    .replace(/(?:20\d{2}|\d{2})(?:\u5e74)?(?:\u6625\u590f|\u79cb\u51ac|\u6625|\u590f|\u79cb|\u51ac)(?:\u65b0\u4f5c)?/g," ")
+    .replace(/(?:\u6625\u590f|\u79cb\u51ac|\u6625|\u590f|\u79cb|\u51ac)(?:20\d{2}|\d{2})(?:\u65b0\u4f5c)?/g," ")
+    .replace(/\b(?:SS|AW|FW)\s*2?\d{2}\b/gi," ")
+    .replace(/(?:20\d{2}\u5e74)?\d{1,2}\u6708(?:\u4e0a\u65ec|\u4e2d\u65ec|\u4e0b\u65ec|\u672a\u5b9a)?(?:\u767a\u58f2|\u5165\u8377|\u767a\u9001)?(?:\u4e88\u5b9a)?/g," ")
+    .replace(/\b\d{2}(?:\.\d)?-\d{2}(?:\.\d)?\s*cm\b/gi," ")
+    .replace(/\b\d{2}(?:\.\d)?\s*cm\b/gi," ")
+    .replace(/\b(?:US|UK)\s*\d{1,2}(?:\.\d)?\b/gi," ")
+    .replace(/\s+/g," ").trim();
+}
+function sneakerIdentity(name=""){
+  const brand=sneakerBrand(name);
+  const style_code=sneakerStyleCode(name);
+  const collaboration=sneakerCollaboration(name);
+  const model=sneakerModelFamily(name,brand);
+  const observed_size=sneakerObservedSize(name);
+  const normalized_name=normalizeSneakerCanonicalName(name);
+  let identity;
+  let identity_method;
+  if(style_code){
+    identity=`sneaker|${brand||"unknown"}|${style_code}|${collaboration||"unknown"}`;
+    identity_method="sneaker_style_code";
+  }else if(brand&&collaboration&&model){
+    identity=`sneaker|${brand}|${collaboration}|${model}`;
+    identity_method="sneaker_brand_collab_model";
+  }else{
+    identity=`sneaker|${brand||"unknown"}|${collaboration||"unknown"}|${model||"unknown"}|${normalized_name}`;
+    identity_method="sneaker_canonical_name";
+  }
+  const fingerprint=stableHash32(identity);
+  return {brand,style_code,collaboration,model,observed_size,normalized_name,identity,identity_method,fingerprint,source_key:`catalog:sneaker:v3:${fingerprint}`};
+}
+
+/* =========================================================
+   SPECIALIST COLLECTIBLES INTELLIGENCE v3.1
+   Category-specific identity attributes are stored in metadata
+   and reused by market matching, rarity and paid responses.
+========================================================= */
+
+function firstMatch(v,re,group=1){const m=String(v||"").normalize("NFKC").match(re);return m?String(m[group]||m[0]).trim():null;}
+function upperOrNull(v){return v?String(v).trim().toUpperCase():null;}
+
+function tradingCardGame(name=""){
+  const n=String(name||"");
+  if(/\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9|pokemon\s*(?:card|tcg)/i.test(n))return "POKEMON";
+  if(/ONE\s*PIECE\s*(?:\u30ab\u30fc\u30c9|CARD)|\u30ef\u30f3\u30d4\u30fc\u30b9\u30ab\u30fc\u30c9/i.test(n))return "ONE PIECE CARD GAME";
+  if(/\u904a\u622f\u738b|YU-?GI-?OH/i.test(n))return "YU-GI-OH!";
+  if(/UNION\s*ARENA|\u30e6\u30cb\u30aa\u30f3\u30a2\u30ea\u30fc\u30ca/i.test(n))return "UNION ARENA";
+  if(/\u30f4\u30a1\u30a4\u30b9\u30b7\u30e5\u30f4\u30a1\u30eb\u30c4|WEISS\s*SCHWARZ/i.test(n))return "WEISS SCHWARZ";
+  if(/\u30c7\u30e5\u30a8\u30eb.?\u30de\u30b9\u30bf\u30fc\u30ba|DUEL\s*MASTERS/i.test(n))return "DUEL MASTERS";
+  if(/\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb.*(?:\u30ab\u30fc\u30c9|FUSION\s*WORLD)|FUSION\s*WORLD/i.test(n))return "DRAGON BALL SUPER CARD GAME";
+  return null;
+}
+function tradingCardSetCode(name=""){
+  return upperOrNull(firstMatch(name,/\b((?:OP|EB|ST|PRB|SV|S|SM|XY|BW|DP|PROMO|UA|EX|BT|FB|FS)[-_]?[A-Z0-9]{1,8})\b/i));
+}
+function tradingCardNumber(name=""){
+  const patterns=[
+    /\b((?:OP|EB|ST|P|PRB|UA|EX|BT|FB|FS)\d{1,3}[-_]\d{2,4})\b/i,
+    /\b(\d{1,3}\/\d{1,3})\b/,
+    /(?:\u30ab\u30fc\u30c9\u756a\u53f7|CARD\s*NO\.?)\s*[:\uff1a#]?\s*([A-Z0-9_-]{3,20})/i
+  ];
+  for(const re of patterns){const x=firstMatch(name,re);if(x)return upperOrNull(x);}
+  return null;
+}
+function tradingCardRarity(name=""){
+  const m=firstMatch(name,/(?:^|[\s\u3010[(])((?:SAR|SR|UR|AR|CHR|CSR|HR|RRR|RR|R|SEC|SP|SSP|L|C|UC|PR|P|\u30d1\u30e9\u30ec\u30eb|\u30b7\u30fc\u30af\u30ec\u30c3\u30c8))(?:[\s\u3011)\]]|$)/i);
+  return m?upperOrNull(m):null;
+}
+function tradingCardGrade(name=""){
+  const company=firstMatch(name,/(?:^|[^A-Z0-9])(PSA|BGS|CGC|ARS)(?=\s*\d|[^A-Z0-9]|$)/i);
+  const grade=firstMatch(name,/\b(?:PSA|BGS|CGC|ARS)\s*(10(?:\.0)?|9\.5|9|8\.5|8|7\.5|7)\b/i);
+  return {grading_company:upperOrNull(company),grade:grade?Number(grade):null};
+}
+function tradingCardLanguage(name=""){
+  const n=String(name||"");
+  if(/\u65e5\u672c\u8a9e\u7248|JAPANESE\b/i.test(n))return "ja";
+  if(/\u82f1\u8a9e\u7248|ENGLISH\b/i.test(n))return "en";
+  if(/\u4e2d\u56fd\u8a9e\u7248|CHINESE\b/i.test(n))return "zh";
+  if(/\u97d3\u56fd\u8a9e\u7248|KOREAN\b/i.test(n))return "ko";
+  return null;
+}
+function tradingCardCondition(name=""){
+  const n=String(name||"");
+  if(/\u672a\u958b\u5c01|SEALED/i.test(n))return "sealed";
+  if(/\u7f8e\u54c1|NEAR\s*MINT|\bNM\b/i.test(n))return "near_mint";
+  if(/\u65b0\u54c1|MINT\b/i.test(n))return "mint_or_new";
+  if(/\u4e2d\u53e4|USED|PLAYED/i.test(n))return "used";
+  return null;
+}
+function tradingCardProfile(name=""){
+  const grade=tradingCardGrade(name);
+  return {
+    card_game:tradingCardGame(name),
+    form:tradingCardForm(name),
+    set_code:tradingCardSetCode(name),
+    card_number:tradingCardNumber(name),
+    rarity:tradingCardRarity(name),
+    language:tradingCardLanguage(name),
+    foil_parallel:/\u30d1\u30e9\u30ec\u30eb|PARALLEL|FOIL|HOLO|\u30db\u30ed/i.test(String(name||""))?true:null,
+    condition:tradingCardCondition(name),
+    grading_company:grade.grading_company,
+    grade:grade.grade
+  };
+}
+function lotteryPrizeProfile(name=""){
+  // Keep Japanese matcher tokens ASCII-only in source so deployment/editor transcoding cannot corrupt them.
+  const rank=firstMatch(name,new RegExp("(?:^|[\\s\u3010[(])((?:\u30e9\u30b9\u30c8\u30ef\u30f3|LAST\\s*ONE|[A-H])\u8cde)(?:[\\s\u3011)\\]]|$)","i"));
+  const lotterySeries=firstMatch(name,new RegExp("(\u4e00\u756a\u304f\u3058[^\u3010\\[(]{0,80})","i"));
+  return {prize_rank:rank?upperOrNull(rank.replace(/\s+/g," ")):null,lottery_series:lotterySeries};
+}
+function modelKitProfile(name=""){
+  const n=String(name||"");
+  const grade=firstMatch(n,/\b(PG|MGEX|MGSD|MG|RG|HGUC|HG|EG|SDCS|SD|RE\/100)\b/i);
+  const scale=firstMatch(n,/\b(1\/(?:24|32|35|48|60|72|100|144|350))\b/i);
+  return {grade:upperOrNull(grade),scale:scale||null,limited:/\u9650\u5b9a|PREMIUM\s*BANDAI|\u30d7\u30ec\u30df\u30a2\u30e0\u30d0\u30f3\u30c0\u30a4|EXCLUSIVE/i.test(n)?true:null};
+}
+function plushProfile(name=""){
+  const size=firstMatch(name,/(\d{1,3}(?:\.\d+)?)\s*cm\b/i);
+  return {size_cm:size?Number(size):null,prize:/\u30d7\u30e9\u30a4\u30ba|\u666f\u54c1|AMUSEMENT|SEGA|TAITO|BANPRESTO/i.test(String(name||""))?true:null};
+}
+function acrylicProfile(name=""){
+  const size=firstMatch(name,/(\d{1,3}(?:\.\d+)?)\s*cm\b/i);
+  return {size_cm:size?Number(size):null,event_limited:/\u9650\u5b9a|\u4f1a\u5834|\u30a4\u30d9\u30f3\u30c8|\u30b3\u30df\u30b1|C\d{2,3}|EXCLUSIVE/i.test(String(name||""))?true:null};
+}
+function smallGoodsProfile(name=""){
+  const n=String(name||"");
+  return {event_limited:/\u9650\u5b9a|\u4f1a\u5834|\u30a4\u30d9\u30f3\u30c8|\u30b3\u30df\u30b1|EXCLUSIVE/i.test(n)?true:null,blind_random:/\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0|\u30e9\u30f3\u30c0\u30e0|BLIND|RANDOM/i.test(n)?true:null};
+}
+function figureProfile(name=""){
+  const n=String(name||"");
+  const scale=firstMatch(n,/\b(1\/(?:4|6|7|8|10|12))\b/i);
+  const edition=firstMatch(n,/(?:ver\.?|version|\u7248)\s*([A-Za-z0-9\u3041-\u3093\u30a1-\u30f6\u4e00-\u9fa0\u30fb _-]{1,40})/i);
+  return {scale:scale||null,edition:edition||null,rerelease:/\u518d\u8ca9|\u518d\u751f\u7523|RERELEASE|REISSUE/i.test(n)?true:null,limited:/\u9650\u5b9a|EXCLUSIVE/i.test(n)?true:null};
+}
+function apparelProfile(name=""){
+  const x=apparelIdentity(name);
+  const color=firstMatch(name,/(?:\u30ab\u30e9\u30fc|COLOR)\s*[:\uff1a]?\s*([A-Za-z\u3041-\u3093\u30a1-\u30f6\u4e00-\u9fa0]{2,20})/i);
+  return {brand:x.brand,item_type:x.item_type,style_code:x.style_code,collaboration:x.collaboration,size:x.observed_size,color:color||null};
+}
+function sneakerProfile(name=""){
+  const x=sneakerIdentity(name);
+  const colorway=firstMatch(name,/(?:COLORWAY|\u30ab\u30e9\u30fc)\s*[:\uff1a]?\s*([A-Za-z0-9\u3041-\u3093\u30a1-\u30f6\u4e00-\u9fa0 /_-]{2,50})/i);
+  return {brand:x.brand,model:x.model,style_code:x.style_code,collaboration:x.collaboration,size:x.observed_size,colorway:colorway||null};
+}
+function specialistProfile(name="",productType="other"){
+  const t=String(productType||"other");
+  if(t==="trading_card")return tradingCardProfile(name);
+  if(t==="sneaker")return sneakerProfile(name);
+  if(t==="apparel")return apparelProfile(name);
+  if(t==="lottery_prize")return lotteryPrizeProfile(name);
+  if(t==="model_kit")return modelKitProfile(name);
+  if(t==="plush")return plushProfile(name);
+  if(t==="acrylic_goods")return acrylicProfile(name);
+  if(t==="keychain"||t==="badge")return smallGoodsProfile(name);
+  if(t==="figure"||t==="nendoroid"||t==="figma")return figureProfile(name);
+  return {};
+}
+function productSpecialistProfile(product){
+  const stored=product?.metadata?.specialist||{};
+  const parsed=specialistProfile(`${product?.canonical_name_ja||""} ${product?.canonical_name_en||""}`,product?.product_type);
+  return {...parsed,...Object.fromEntries(Object.entries(stored).filter(([,v])=>v!==null&&v!==""&&v!==undefined))};
+}
+function specialistIdentityAnalysis(product,title=""){
+  const type=String(product?.product_type||"other"),expected=productSpecialistProfile(product),candidate=specialistProfile(title,type);
+  let score=0,conflict=false;const matched=[],conflicts=[];
+  const exact=(key,weight)=>{
+    const a=expected?.[key],b=candidate?.[key];
+    if(a==null||a===""||b==null||b==="")return;
+    if(String(a).toUpperCase()===String(b).toUpperCase()){score+=weight;matched.push(key);}
+    else{conflict=true;conflicts.push(key);}
+  };
+  if(type==="trading_card"){exact("card_game",12);exact("card_number",35);exact("set_code",18);exact("rarity",12);exact("grading_company",18);exact("grade",18);exact("language",8);exact("form",18);}
+  else if(type==="sneaker"){exact("brand",15);exact("style_code",35);exact("model",15);exact("collaboration",18);exact("size",12);}
+  else if(type==="apparel"){exact("brand",15);exact("style_code",35);exact("item_type",18);exact("collaboration",18);exact("size",10);}
+  else if(type==="lottery_prize"){exact("prize_rank",30);}
+  else if(type==="model_kit"){exact("grade",20);exact("scale",18);}
+  else if(type==="plush"||type==="acrylic_goods"){exact("size_cm",12);}
+  else if(type==="figure"||type==="nendoroid"||type==="figma"){exact("scale",18);exact("edition",18);}
+  return {score,conflict,matched,conflicts,expected,candidate};
+}
+function categoryMarketThreshold(product){
+  const t=String(product?.product_type||"");
+  if(["trading_card","sneaker","apparel","lottery_prize"].includes(t))return 34;
+  return 40;
+}
+
+
+function specialistIntelligenceSelfTest(){
+  const cases=[
+    {type:"trading_card",name:"\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 SV8a 205/187 SAR PSA10 \u65e5\u672c\u8a9e\u7248",expect:{card_game:"POKEMON",set_code:"SV8A",card_number:"205/187",rarity:"SAR",grading_company:"PSA",grade:10}},
+    {type:"sneaker",name:"CONVERSE NARUTO SHIPPUDEN 31317140 27.5cm",expect:{brand:"CONVERSE",style_code:"31317140",collaboration:"NARUTO SHIPPUDEN",size:"27.5cm"}},
+    {type:"apparel",name:"NEW ERA NARUTO 59FIFTY 14312345",expect:{brand:"NEW ERA",item_type:"cap",style_code:"14312345",collaboration:"NARUTO SHIPPUDEN"}},
+    {type:"lottery_prize",name:"\u4e00\u756a\u304f\u3058 ONE PIECE \u30e9\u30b9\u30c8\u30ef\u30f3\u8cde \u30eb\u30d5\u30a3",expect:{prize_rank:"\u30e9\u30b9\u30c8\u30ef\u30f3\u8cde"}},
+    {type:"model_kit",name:"MG 1/100 \u30ac\u30f3\u30c0\u30e0 \u9650\u5b9a",expect:{grade:"MG",scale:"1/100",limited:true}},
+    {type:"plush",name:"\u521d\u97f3\u30df\u30af \u306c\u3044\u3050\u308b\u307f 30cm",expect:{size_cm:30}},
+    {type:"acrylic_goods",name:"\u521d\u97f3\u30df\u30af \u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 15cm \u30a4\u30d9\u30f3\u30c8\u9650\u5b9a",expect:{size_cm:15,event_limited:true}},
+    {type:"keychain",name:"ONE PIECE \u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0 \u30ad\u30fc\u30db\u30eb\u30c0\u30fc",expect:{blind_random:true}},
+    {type:"figure",name:"\u521d\u97f3\u30df\u30af 1/7 \u30b9\u30b1\u30fc\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2 \u9650\u5b9a\u7248",expect:{scale:"1/7",limited:true}}
+  ];
+  const results=cases.map(c=>{const got=specialistProfile(c.name,c.type),ok=Object.entries(c.expect).every(([k,v])=>String(got?.[k])===String(v));return {...c,got,ok};});
+  return {ok:results.every(x=>x.ok),passed:results.filter(x=>x.ok).length,total:results.length,results};
+}
+function collectibleIdentityKey(name,productType,jan=null){
+  if(productType==="sneaker"){
+    const x=sneakerIdentity(name);
+    return x;
+  }
+  if(productType==="apparel"){
+    const x=apparelIdentity(name);
+    return x;
+  }
+  if(jan)return {identity:`jan|${jan}`,fingerprint:null,source_key:`catalog:yahoo:jan:${jan}`,identity_method:"jan"};
+  const x=noJanCanonicalKey(name,productType);
+  return {...x,identity_method:"canonical_fingerprint"};
+}
+
+function noJanCanonicalKey(name,productType){
+  const identity=canonicalCollectibleIdentity(name,productType);
+  return {identity,fingerprint:stableHash32(identity),source_key:`catalog:canonical:v1:${stableHash32(identity)}`};
+}
+
+async function getObservations(env,productId){
+  const rows=await sbOptional(env,`/market_observations?select=*&product_id=eq.${encodeURIComponent(productId)}&order=observed_at.desc&limit=1000`);
+  return Array.isArray(rows)?rows:[];
+}
+
+/* =========================================================
+   SOURCES
+========================================================= */
+
+async function loadSources(env){
+  const rows=await sbOptional(env,"/sources?select=*");
+  return Array.isArray(rows)?rows:[];
+}
+
+function sourceIdBySlugOrName(sources=[],slug,names=[]){
+  const wanted=[slug,...names].map(normalize);
+  const x=sources.find(s=>wanted.includes(normalize(s.slug||""))||wanted.includes(normalize(s.name||"")));
+  return x?.id||null;
+}
+
+async function ensureSource(env,{slug,name,type="marketplace",base_url=null}){
+  const sources=await loadSources(env);
+  const existing=sourceIdBySlugOrName(sources,slug,[name]);
+  if(existing)return {source_id:existing,created:false};
+  const rows=await sb(env,"/sources",{
+    method:"POST",
+    headers:{Prefer:"return=representation"},
+    body:JSON.stringify({
+      slug,
+      name,
+      source_type:type,
+      base_url,
+      access_method:"api",
+      priority:100,
+      enabled:true,
+      metadata:{created_by:"anime-intelligence",version:VERSION}
+    })
+  });
+  return {source_id:Array.isArray(rows)?rows[0]?.id:null,created:true};
+}
+
+async function ensureYahooSource(env){
+  return ensureSource(env,{slug:"yahoo-shopping",name:"Yahoo! Shopping",base_url:"https://shopping.yahoo.co.jp/"});
+}
+
+/* =========================================================
+   PRODUCT CLASSIFICATION / QUALITY
+========================================================= */
+
+function classifyProduct(v=""){
+  const s=normalize(v);
+  // Product-head precedence: classify the item actually being sold before incidental theme/style words.
+  if(/happy\s*bag|\u798f\u888b|\u8a70\u3081\u5408\u308f\u305b|\u8a70\u5408\u305b|\u30d0\u30e9\u30a8\u30c6\u30a3\u30bb\u30c3\u30c8/i.test(v)){
+    return {type:"other",confidence:.99,reason:"mixed_bundle"};
+  }
+  if(/head\s*cover|\u30d8\u30c3\u30c9\u30ab\u30d0\u30fc/i.test(v)){
+    return {type:"accessory",confidence:.99,reason:"golf_head_cover"};
+  }
+  // Strong merchandise nouns win over words such as uniform, clothes or figure used descriptively.
+  if(/acrylic stand|acrylic figure|\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9|\u30a2\u30af\u30b9\u30bf|\u30a2\u30af\u30ea\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2/i.test(s))return {type:"acrylic_goods",confidence:.995,reason:"explicit_acrylic_merchandise"};
+  if(/key ?chain|keyholder|\u30ad\u30fc\u30db\u30eb\u30c0\u30fc|\u30ad\u30fc\u30c1\u30a7\u30fc\u30f3/i.test(s))return {type:"keychain",confidence:.995,reason:"explicit_keychain"};
+  if(/badge|button badge|\u7f36\u30d0\u30c3\u30b8|\u30d4\u30f3\u30d0\u30c3\u30b8/i.test(s))return {type:"badge",confidence:.995,reason:"explicit_badge"};
+  if(/trading card|collectible card|tcg|pokemon card|one piece card|union arena|weiss schwarz|duel masters|\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9|\u30c8\u30ec\u30ab|\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9|\u30ef\u30f3\u30d4\u30fc\u30b9\u30ab\u30fc\u30c9|\u30e6\u30cb\u30aa\u30f3\u30a2\u30ea\u30fc\u30ca|\u30f4\u30a1\u30a4\u30b9\u30b7\u30e5\u30f4\u30a1\u30eb\u30c4/i.test(s))return {type:"trading_card",confidence:.99,reason:"explicit_trading_card"};
+  if(/ichiban kuji|lottery prize|kuji prize|\u4e00\u756a\u304f\u3058|\u304f\u3058\u666f\u54c1|[A-H]\u8cde/i.test(s))return {type:"lottery_prize",confidence:.99,reason:"explicit_lottery_prize"};
+  if(/plush|stuffed|\u306c\u3044\u3050\u308b\u307f|\u306c\u3044/i.test(s))return {type:"plush",confidence:.99,reason:"explicit_plush"};
+  if(/moderoid|plastic model|model kit|\u30d7\u30e9\u30e2\u30c7\u30eb|\u7d44\u307f\u7acb\u3066\u30ad\u30c3\u30c8|\u30ac\u30f3\u30d7\u30e9/i.test(s))return {type:"model_kit",confidence:.99,reason:"explicit_model_kit"};
+  // Cosplay listings may contain shoes as part of a set; do not misclassify the whole listing as sneakers.
+  if(/cosplay|\u30b3\u30b9\u30d7\u30ec|\u4eee\u88c5|\u8863\u88c5|\u30a6\u30a3\u30c3\u30b0/i.test(s))return {type:"apparel",confidence:.97,reason:"cosplay_apparel"};
+  if(/s\.h\.figuarts|figuarts|pop up parade|scale figure|\u30b9\u30b1\u30fc\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2|\u5857\u88c5\u6e08\u307f(?:\u53ef\u52d5)?\u30d5\u30a3\u30ae\u30e5\u30a2|\u30d5\u30a3\u30ae\u30e5\u30a2|statue|g\.e\.m\.|look up|\u308b\u304b\u3063\u3077|portrait\.of\.pirates|p\.o\.p/i.test(s)){
+    return {type:"figure",confidence:.99,reason:"explicit_figure_product"};
+  }
+  const rules=[
+    ["replacement_part",/replacement|option care parts|spare parts|\u4ea4\u63db\u7528|\u30aa\u30d7\u30b7\u30e7\u30f3\u30d1\u30fc\u30c4|\u4ed8\u3051\u66ff\u3048|\u4ea4\u63db\u30d1\u30fc\u30c4|care parts|root \(feet\)|hand parts|face parts/,0.99,"replacement_or_option_part"],
+    ["trading_card",/trading card|collectible card|tcg|pokemon card|one piece card|union arena|weiss schwarz|duel masters|\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9|\u30c8\u30ec\u30ab|\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9|\u30ef\u30f3\u30d4\u30fc\u30b9\u30ab\u30fc\u30c9|\u30e6\u30cb\u30aa\u30f3\u30a2\u30ea\u30fc\u30ca|\u30f4\u30a1\u30a4\u30b9\u30b7\u30e5\u30f4\u30a1\u30eb\u30c4/,0.98,"trading_card"],
+    ["sneaker",/sneaker|shoe|footwear|air jordan|dunk low|air force 1|adidas|puma|converse|vans|asics|\u30b9\u30cb\u30fc\u30ab\u30fc|\u30b7\u30e5\u30fc\u30ba|\u9774/,0.94,"footwear_or_collaboration_sneaker"],
+    ["lottery_prize",/ichiban kuji|lottery prize|kuji prize|\u4e00\u756a\u304f\u3058|\u304f\u3058\u666f\u54c1|[A-H]\u8cde/,0.97,"lottery_prize"],
+    ["apparel",/t-?shirt|hoodie|sweat|jacket|cap\b|hat\b|shirt\b|apparel|clothing|\u30a2\u30d1\u30ec\u30eb|\u30a6\u30a7\u30a2|\u30b8\u30e3\u30b1\u30c3\u30c8|\u30d1\u30fc\u30ab\u30fc|\u30b7\u30e3\u30c4|\u5e3d\u5b50|\u8863\u88c5|\u304a\u3088\u3046\u3075\u304f|clothes|costume|wear\b/,0.98,"apparel_or_doll_clothes"],
+    ["acrylic_goods",/acrylic stand|acrylic figure|\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9|\u30a2\u30af\u30b9\u30bf|\u30a2\u30af\u30ea\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2/,0.99,"acrylic_goods"],
+    ["keychain",/key ?chain|keyholder|\u30ad\u30fc\u30db\u30eb\u30c0\u30fc|\u30ad\u30fc\u30c1\u30a7\u30fc\u30f3/,0.99,"keychain"],
+    ["badge",/badge|button badge|\u7f36\u30d0\u30c3\u30b8|\u30d4\u30f3\u30d0\u30c3\u30b8/,0.99,"badge"],
+    ["plush",/plush|stuffed|\u306c\u3044\u3050\u308b\u307f|\u306c\u3044/,0.98,"plush"],
+    ["accessory",/decal|\u30c7\u30ab\u30fc\u30eb|clear file|\u30af\u30ea\u30a2\u30d5\u30a1\u30a4\u30eb|poster|\u30dd\u30b9\u30bf\u30fc|stand base|\u53f0\u5ea7|display case|\u30b1\u30fc\u30b9|sticker|\u30b7\u30fc\u30eb/,0.97,"accessory"],
+    ["model_kit",/moderoid|plastic model|model kit|\u30d7\u30e9\u30e2\u30c7\u30eb|\u7d44\u307f\u7acb\u3066\u30ad\u30c3\u30c8|\u30ac\u30f3\u30d7\u30e9/,0.98,"model_kit"],
+    ["figma",/\bfigma\b/,0.99,"figma_brand"],
+    ["nendoroid",/nendoroid|\u306d\u3093\u3069\u308d\u3044\u3069(?!\u3077\u3089\u3059)/,0.99,"nendoroid_brand"],
+    ["figure",/s\.h\.figuarts|figuarts|pop up parade|scale figure|\u30b9\u30b1\u30fc\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2|\u30d5\u30a3\u30ae\u30e5\u30a2|statue|g\.e\.m\.|look up|\u308b\u304b\u3063\u3077|portrait\.of\.pirates|p\.o\.p/,0.96,"physical_figure"],
+    ["other",/.*/,0.50,"fallback"]
