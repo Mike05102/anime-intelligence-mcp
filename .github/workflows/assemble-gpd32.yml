@@ -1,0 +1,36 @@
+name: Assemble GPD v32.1 complete Worker
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/assemble-gpd32.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble and verify complete source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          folder=Path('releases/gpd32_1_parts')
+          parts=sorted(folder.glob('part_*.txt'))
+          assert len(parts)==14, f'Expected 14 parts, got {len(parts)}'
+          data='\n'.join(p.read_text(encoding='utf-8') for p in parts)+'\n'
+          dest=Path('releases/GPD32_1_COMPLETE_WORKER.js')
+          dest.write_text(data,encoding='utf-8')
+          digest=hashlib.sha256(dest.read_bytes()).hexdigest()
+          print('bytes',dest.stat().st_size,'sha256',digest)
+          assert digest=='87b0d63d6c0cf3af0b31f18fb937fc6fa68e58a3df7f732069397e62fecb81d3', 'Source hash mismatch: do not publish'
+          PY
+          node --check releases/GPD32_1_COMPLETE_WORKER.js
+      - name: Publish full copy-paste file to GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/GPD32_1_COMPLETE_WORKER.js
+          git commit -m "Publish complete GPD v32.1 Worker for direct copy-paste" || exit 0
+          git push
