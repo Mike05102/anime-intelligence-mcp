@@ -1,0 +1,1000 @@
+  ];
+  for(const [type,re,confidence,reason] of rules){if(re.test(s))return {type,confidence,reason};}
+  return {type:"other",confidence:.5,reason:"fallback"};
+}
+
+function catalogClassificationRegressionSelfTest(){
+  const cases=[
+    ["S.H.Figuarts \u300e\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30ebZ\u300f \u30c8\u30e9\u30f3\u30af\u30b9\u3008Z\u6226\u58eb\u3009(\u521d\u56de\u9650\u5b9a\u3008Z\u6226\u58eb\u3009\u96c6\u7d50\u53f0\u5ea7B\u4ed8\u5c5e\u7248) (\u5857\u88c5\u6e08\u307f\u53ef\u52d5\u30d5\u30a3\u30ae\u30e5\u30a2)","figure"],
+    ["(\u671f\u9593\u9650\u5b9a) \u3061\u3044\u304b\u308f\u30b4\u30eb\u30d5 \u30d8\u30c3\u30c9\u30ab\u30d0\u30fc DR \u30cb\u30c3\u30c8","accessory"],
+    ["HANSA \u30b4\u30eb\u30d5 \u30d8\u30c3\u30c9\u30ab\u30d0\u30fc \u30ea\u30a2\u30eb\u306a\u52d5\u7269\u306c\u3044\u3050\u308b\u307f","accessory"],
+    ["\u3059\u307f\u3063\u30b3\u3050\u3089\u3057 \u798f\u888b 2026 Happy Bag \u96d1\u8ca8 \u306c\u3044\u3050\u308b\u307f \u6587\u623f\u5177","other"],
+    ["\u30ef\u30f3\u30d4\u30fc\u30b9 ONE PIECE \u7f36\u30d0\u30c3\u30b8\u30b3\u30ec\u30af\u30b7\u30e7\u30f3","badge"],
+    ["\u521d\u97f3\u30df\u30af \u30a2\u30af\u30ea\u30eb\u30ad\u30fc\u30db\u30eb\u30c0\u30fc","keychain"],
+    ["\u30dd\u30b1\u30e2\u30f3 \u30b3\u30e9\u30dc \u30b9\u30cb\u30fc\u30ab\u30fc","sneaker"],
+    ["\u30ad\u30e3\u30e9\u30af\u30bf\u30fc \u30b3\u30e9\u30dc hoodie","apparel"],
+    ["\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 \u30d6\u30fc\u30b9\u30bf\u30fc\u30d1\u30c3\u30af","trading_card"],
+    ["\u521d\u97f3\u30df\u30af \u306c\u3044\u3050\u308b\u307f","plush"],
+    ["\u30ac\u30f3\u30c0\u30e0 \u30ac\u30f3\u30d7\u30e9 \u30d7\u30e9\u30e2\u30c7\u30eb","model_kit"],
+    ["\u521d\u97f3\u30df\u30af \u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9","acrylic_goods"],
+    ["\u4e00\u756a\u304f\u3058 ONE PIECE A\u8cde","lottery_prize"],
+    ["EVANGELION \u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 \u5f0f\u6ce2\u30fb\u30a2\u30b9\u30ab \u5236\u670dVer.","acrylic_goods"],
+    ["\u9b3c\u6ec5\u306e\u5203 \u3053\u3053\u307f\u3048\u30a2\u30af\u30ea\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2","acrylic_goods"],
+    ["\u521d\u97f3\u30df\u30af \u30b3\u30b9\u30d7\u30ec\u8863\u88c5 \u30a6\u30a3\u30c3\u30b0 \u9774 cosplay","apparel"],
+    ["\u30e9\u30d6\u30e9\u30a4\u30d6 \u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30a2\u30af\u30ea\u30eb\u30ad\u30fc\u30db\u30eb\u30c0\u30fc \u5236\u670dver.","keychain"]
+  ];
+  const results=cases.map(([name,expected])=>{const got=classifyProduct(name).type;return {name,expected,got,ok:got===expected};});
+  return {ok:results.every(x=>x.ok),passed:results.filter(x=>x.ok).length,total:results.length,results};
+}
+
+function normalizedManufacturer(v=""){
+  const s=normalize(v);
+  if(/good smile|\u30b0\u30c3\u30c9\u30b9\u30de\u30a4\u30eb/.test(s))return "good smile company";
+  if(/bandai spirits|tamashii|\u30d0\u30f3\u30c0\u30a4\u30b9\u30d4\u30ea\u30c3\u30c4/.test(s))return "bandai spirits";
+  if(/kotobukiya|\u58fd\u5c4b|\u30b3\u30c8\u30d6\u30ad\u30e4/.test(s))return "kotobukiya";
+  if(/megahouse|\u30e1\u30ac\u30cf\u30a6\u30b9/.test(s))return "megahouse";
+  if(/kadokawa|kdcolle|\u30ab\u30c9\u30ab\u30ef/.test(s))return "kadokawa";
+  if(/alter|\u30a2\u30eb\u30bf\u30fc/.test(s))return "alter";
+  return s;
+}
+
+function identityQualityReasons(p){
+  let score=0;const reasons=[];
+  const add=(n,k)=>{score+=n;reasons.push(k);};
+  if(cleanJan(p.jan_code)){add(45,"jan");}
+  if(p.official_url)add(15,"official_url");
+  if(p.manufacturer)add(10,"manufacturer");
+  if(p.model_number)add(10,"model_number");
+  if(p.canonical_name_en)add(8,"english_name");
+  if(p.source_product_key)add(5,"source_key");
+  if(p.official_image_url)add(3,"image");
+  if(Number(p.msrp_jpy)>0)add(2,"msrp");
+  if(p.original_release_date)add(2,"release_date");
+  const specialist=productSpecialistProfile(p),specialCount=Object.values(specialist||{}).filter(v=>v!==null&&v!==""&&v!==false&&v!==undefined).length;
+  if(specialCount>=3)add(15,"specialist_identity");
+  else if(specialCount>=2)add(10,"specialist_identity");
+  else if(specialCount>=1)add(5,"specialist_identity");
+  return {score:Math.min(100,score),reasons};
+}
+
+function marketIdentityQuality(p){return identityQualityReasons(p).score;}
+
+function identificationConfidenceFor(p){
+  const q=identityQualityReasons(p).score;
+  if(cleanJan(p.jan_code)&&p.official_url)return .99;
+  if(cleanJan(p.jan_code)&&p.manufacturer)return .97;
+  if(cleanJan(p.jan_code))return .93;
+  if(p.official_url&&p.manufacturer)return .90;
+  if(q>=40)return .80;
+  return .60;
+}
+
+function productTypeConflict(product,title=""){
+  const candidate=classifyProduct(title);
+  const current=String(product.product_type||"other");
+  const collectibleTypes=new Set(["figure","nendoroid","figma","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel","accessory"]);
+  if(candidate.type==="replacement_part"&&candidate.confidence>=.95)return true;
+  if(current==="other"||candidate.type==="other")return false;
+  if(collectibleTypes.has(current)&&collectibleTypes.has(candidate.type)&&current!==candidate.type&&candidate.confidence>=.98){
+    const figureFamily=new Set(["figure","nendoroid","figma"]);
+    if(figureFamily.has(current)&&figureFamily.has(candidate.type))return false;
+    return true;
+  }
+  return false;
+}
+
+function janNameCompatible(a,b){return labelSimilarityScore(a,b)>=30;}
+
+function detectRerelease(v=""){
+  return /\u518d\u8ca9|\u518d\u53d7\u6ce8|re-?release|rerelease|second production|\u518d\u751f\u7523/i.test(String(v));
+}
+
+/* =========================================================
+   OFFICIAL PARSING / GOOD SMILE MASS DISCOVERY
+========================================================= */
+
+function htmlMeta(html,key){
+  const escaped=key.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  const regs=[
+    new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["']`,`i`),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["']`,`i`)
+  ];
+  for(const r of regs){const m=html.match(r);if(m)return decodeHtml(m[1]).trim();}
+  return null;
+}
+
+function htmlTitle(html){
+  return htmlMeta(html,"og:title")||cleanOfficialTitle((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]||"");
+}
+
+function parsePriceJpy(html){
+  const text=stripHtml(html);
+  const m=text.match(/(?:\u4fa1\u683c|\u8ca9\u58f2\u4fa1\u683c|\u5b9a\u4fa1|price)[^\d\u00a5\uffe5]{0,20}[\u00a5\uffe5]?\s*([\d,]{3,})/i)||text.match(/[\u00a5\uffe5]\s*([\d,]{3,})/);
+  return m?Number(m[1].replace(/,/g,"")):null;
+}
+
+function parseJanFromText(v=""){
+  const all=[...String(v).matchAll(/\b(45\d{11}|49\d{11})\b/g)].map(x=>x[1]);
+  return all.find(cleanJan)||null;
+}
+
+function parseReleaseDate(html){
+  const text=stripHtml(html);
+  const m=text.match(/(?:\u767a\u58f2(?:\u6642\u671f|\u65e5)?|release(?: date)?)[^\d]{0,30}((?:20\d{2})[\u5e74\/.\-]\d{1,2}[\u6708\/.\-]\d{1,2})/i);
+  return m?isoDate(m[1]):null;
+}
+
+async function fetchOfficial(url){
+  const r=await fetch(url,{headers:{"user-agent":"Mozilla/5.0 ANIME-INTELLIGENCE/2.9","accept-language":"ja,en;q=0.8"},redirect:"follow"});
+  if(!r.ok)throw new Error(`Official fetch ${r.status}: ${url}`);
+  return {html:await r.text(),url:r.url};
+}
+
+function canonicalOfficialUrl(url){
+  try{const u=new URL(url);u.hash="";u.search="";return u.toString().replace(/\/$/,"");}catch{return url;}
+}
+
+function sourceKeyFromOfficial(connector,url,jan=null){
+  return jan?`${connector.slug}:jan:${jan}`:`${connector.slug}:url:${canonicalOfficialUrl(url)}`;
+}
+
+function discoverOfficialLinks(html,baseUrl,regex){
+  const out=[];
+  for(const m of html.matchAll(/href=["']([^"'#]+)["']/gi)){
+    try{
+      const u=new URL(decodeHtml(m[1]),baseUrl).toString();
+      if(regex.test(u))out.push(canonicalOfficialUrl(u));
+    }catch{}
+  }
+  return [...new Set(out)];
+}
+
+function goodSmileEnglishUrl(url){
+  if(!/goodsmile\.com\/ja\//.test(url))return null;
+  return url.replace("/ja/","/en/");
+}
+
+function parseOfficial(connector,url,html){
+  const title=htmlTitle(html);
+  const text=stripHtml(html);
+  const jan=parseJanFromText(text);
+  const classification=classifyProduct(title);
+  return {
+    canonical_name_ja:title,
+    canonical_name_en:/\/en\//.test(url)?title:null,
+    manufacturer:connector.manufacturer,
+    jan_code:jan,
+    msrp_jpy:parsePriceJpy(html),
+    original_release_date:parseReleaseDate(html),
+    official_url:canonicalOfficialUrl(url),
+    official_image_url:htmlMeta(html,"og:image"),
+    source_product_key:sourceKeyFromOfficial(connector,url,jan),
+    product_type:classification.type,
+    product_status:/\u4e88\u7d04|pre-?order/i.test(text)?"preorder":"active",
+    metadata:{rerelease:detectRerelease(text),classification:{...classification,version:VERSION}}
+  };
+}
+
+function parseGoodSmileCalendar(html,lang="ja"){
+  const text=decodeHtml(html)
+    .replace(/<br\s*\/?\s*>/gi,"\n")
+    .replace(/<\/p>|<\/li>|<\/tr>|<\/div>/gi,"\n")
+    .replace(/<[^>]+>/g," ")
+    .replace(/\r/g,"");
+  const lines=text.split("\n").map(x=>x.replace(/\s+/g," ").trim()).filter(Boolean);
+  const out=[];
+  let currentDate=null;
+  for(const line of lines){
+    const d=isoDate(line);
+    if(d)currentDate=d;
+    const jan=parseJanFromText(line);
+    if(!jan||/box|carton|\u30b1\u30fc\u30b9|\u30dc\u30c3\u30af\u30b9/i.test(line))continue;
+    let name=line.replace(jan,"").replace(/^[-\u2013\u2014\u30fb\u25cf\u25a0\u25c6\s]+/,"").replace(/(?:JAN|JAN\u30b3\u30fc\u30c9|JAN Code)[:\uff1a]?\s*/i,"").trim();
+    name=name.replace(/\s{2,}/g," ");
+    if(name.length<2)continue;
+    out.push({jan_code:jan,name,date:currentDate,lang,rerelease:detectRerelease(line),raw:line});
+  }
+  const byJan=new Map();
+  for(const x of out){if(!byJan.has(x.jan_code))byJan.set(x.jan_code,x);}
+  return [...byJan.values()];
+}
+
+function mergeBilingualCalendar(ja=[],en=[]){
+  const map=new Map();
+  for(const x of ja)map.set(x.jan_code,{jan_code:x.jan_code,name_ja:x.name,name_en:null,date:x.date,rerelease:x.rerelease,ja:x,en:null});
+  for(const x of en){
+    const prev=map.get(x.jan_code)||{jan_code:x.jan_code,name_ja:null,name_en:null,date:null,rerelease:false,ja:null,en:null};
+    prev.name_en=x.name;prev.en=x;prev.date=prev.date||x.date;prev.rerelease=prev.rerelease||x.rerelease;map.set(x.jan_code,prev);
+  }
+  return [...map.values()];
+}
+
+async function fetchGoodSmileCalendars(){
+  const [jaR,enR]=await Promise.allSettled([
+    fetchOfficial("https://www.goodsmile.com/ja/releaseinfo"),
+    fetchOfficial("https://www.goodsmile.com/en/releaseinfo")
+  ]);
+  const ja=jaR.status==="fulfilled"?parseGoodSmileCalendar(jaR.value.html,"ja"):[];
+  const en=enR.status==="fulfilled"?parseGoodSmileCalendar(enR.value.html,"en"):[];
+  return {ja,en,merged:mergeBilingualCalendar(ja,en),errors:[jaR,enR].filter(x=>x.status==="rejected").map(x=>safeError(x.reason))};
+}
+
+function goodSmileReleaseSeedPayload(rec,now=new Date().toISOString()){
+  const c=classifyProduct(`${rec.name_ja||""} ${rec.name_en||""}`);
+  return {
+    canonical_name_ja:rec.name_ja||rec.name_en,canonical_name_en:rec.name_en||null,manufacturer:"Good Smile Company",
+    brand:null,series:null,franchise:null,character_names:[],jan_code:rec.jan_code,model_number:null,product_type:c.type,scale:null,edition:null,limited_type:null,
+    msrp_jpy:null,original_release_date:rec.date||null,official_url:null,official_image_url:null,image_source_url:null,image_status:"pending",
+    source_product_key:`goodsmile:jan:${rec.jan_code}`,product_status:"active",identification_confidence:.97,source_last_checked_at:now,
+    metadata:{created_by:"v2.9.7_mass_discovery",calendar:{date:rec.date||null,date_type:"official_release_schedule",rerelease_generation:rec.rerelease?"rerelease":"unknown"},latest_official_schedule_date:rec.date||null,release_date_type:"official_release_schedule",rerelease:!!rec.rerelease,classification:{...c,version:VERSION},identity_quality_score:68,field_provenance:{jan_code:sourceEvidence("goodsmile_release_calendar",now),canonical_name_ja:sourceEvidence("goodsmile_release_calendar",now)},ingestion_version:VERSION}
+  };
+}
+
+async function saveGoodSmileReleaseSeed(env,rec){
+  const existing=await loadProductsByJans(env,[rec.jan_code]);
+  if(existing.length)return {status:"existing",product:existing[0]};
+  const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(goodSmileReleaseSeedPayload(rec))});
+  return {status:"inserted",product:Array.isArray(rows)?rows[0]:null};
+}
+
+async function massDiscoverGoodSmile(env,limit=20,options={}){
+  const cal=await fetchGoodSmileCalendars();
+  const existing=await loadProductsByJans(env,cal.merged.map(x=>x.jan_code));
+  const existingJans=new Set(existing.map(x=>cleanJan(x.jan_code)).filter(Boolean));
+  const missing=cal.merged.filter(x=>!existingJans.has(x.jan_code));
+  const inspect=Math.min(missing.length,Math.max(limit,limit*PIPELINE.massInspectMultiplier));
+  const candidates=deterministicWindow(missing,inspect,options.timeMs||Date.now(),17);
+  const selected=candidates.slice(0,Math.max(1,Math.min(50,Number(limit)||40)));
+  let inserted=0,updated=0,deduplicatedByJan=0,sameJanNameConflicts=0;
+  const errors=[];
+  if(selected.length){
+    try{
+      const now=new Date().toISOString();
+      const payloads=selected.map(rec=>goodSmileReleaseSeedPayload(rec,now));
+      const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});
+      inserted=Array.isArray(rows)?rows.length:selected.length;
+    }catch(e){
+      errors.push({batch:true,selected:selected.length,error:safeError(e)});
+    }
+  }
+  return {
+    discovered:cal.merged.length,
+    inspected:candidates.length,
+    japanese_calendar_records:cal.ja.length,
+    english_calendar_records:cal.en.length,
+    bilingual_jan_matches:cal.merged.filter(x=>x.name_ja&&x.name_en).length,
+    already_in_database:existing.length,
+    missing_from_database:missing.length,
+    deduplicated_by_jan:deduplicatedByJan,
+    deduplicated_by_source_key:0,
+    same_jan_name_conflicts:sameJanNameConflicts,
+    selected:selected.length,
+    inserted,updated,
+    errors:[...cal.errors.map(error=>({error})),...errors]
+  };
+}
+
+
+
+function officialFeedAnchorCandidates(html,feed){
+  const out=[],seen=new Set();
+  for(const m of String(html||"").matchAll(/<a\b[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)){
+    try{
+      const url=canonicalOfficialUrl(new URL(decodeHtml(m[1]),feed.listUrl).toString());
+      const name=htmlTextCompact(m[2]);
+      if(!name||name.length<4||name.length>180)continue;
+      const c=classifyProduct(name);if(!COLLECTIBLE_CATALOG_TYPES.has(c.type))continue;
+      if(/(?:\u30c8\u30c3\u30d7|HOME|\u4e00\u89a7|\u691c\u7d22|\u5e97\u8217|\u30cb\u30e5\u30fc\u30b9|MORE|\u8a73\u7d30\u3092\u898b\u308b)$/i.test(name))continue;
+      if(feed.detailRegex&&!feed.detailRegex.test(url)&&new URL(url).pathname!==new URL(feed.listUrl).pathname)continue;
+      const key=`${name}|${url}`;if(seen.has(key))continue;seen.add(key);out.push({name,url,classification:c});
+    }catch{}
+  }
+  // Some JS-backed official lists expose titles as text but not crawlable product anchors.
+  // Keep strong product-like lines as feed evidence; they still dedupe by deterministic identity.
+  if(out.length<5){
+    const text=decodeHtml(String(html||"")).replace(/<br\s*\/?\s*>/gi,"\n").replace(/<\/li>|<\/article>|<\/section>|<\/div>/gi,"\n").replace(/<[^>]+>/g," ");
+    for(const raw of text.split("\n")){
+      const name=raw.replace(/\s+/g," ").trim();if(name.length<8||name.length>160)continue;
+      const c=classifyProduct(name);if(!COLLECTIBLE_CATALOG_TYPES.has(c.type))continue;
+      const key=`${name}|text`;if(seen.has(key))continue;seen.add(key);out.push({name,url:null,classification:c});if(out.length>=80)break;
+    }
+  }
+  return out;
+}
+function officialFeedSeedPayload(feed,x,now=new Date().toISOString()){
+  const sp=specialistProfile(x.name,x.classification.type),ident=collectibleIdentityKey(x.name,x.classification.type,null);
+  return {canonical_name_ja:x.name,canonical_name_en:feed.language==="en"?x.name:null,manufacturer:feed.manufacturer,brand:sp.brand||null,series:sp.set_code||sp.lottery_series||null,franchise:sp.card_game||sp.collaboration||null,character_names:[],jan_code:null,model_number:sp.style_code||sp.card_number||null,product_type:x.classification.type,scale:sp.scale||null,edition:sp.edition||sp.rarity||null,limited_type:(sp.limited||sp.event_limited)?"limited":null,msrp_jpy:null,original_release_date:null,official_url:x.url||null,official_image_url:null,image_source_url:x.url||feed.listUrl,image_status:"pending",source_product_key:`officialfeed:${feed.slug}:${ident.fingerprint||simpleHash(x.name)}`,product_status:"active",identification_confidence:x.url?.74:.68,source_last_checked_at:now,metadata:{connector:"official_mass_feed",official_feed:true,official_feed_slug:feed.slug,official_feed_url:feed.listUrl,specialist_intelligence:true,specialist:sp,classification:{...x.classification,version:VERSION},canonical_identity_method:ident.identity_method,canonical_identity:ident.identity||null,canonical_fingerprint:ident.fingerprint||null,field_provenance:{canonical_name_ja:sourceEvidence(feed.slug,now),manufacturer:sourceEvidence(feed.slug,now)},quality_version:VERSION,ingestion_version:VERSION}};
+}
+async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,options={}){
+  const feed=deterministicWindow(OFFICIAL_MASS_FEEDS,1,options.timeMs||Date.now(),29)[0];
+  if(!feed)return {status:"no_feeds"};
+  const report={feed:feed.slug,manufacturer:feed.manufacturer,list_url:feed.listUrl,discovered:0,selected:0,inserted:0,existing:0,errors:[]};
+  try{
+    const page=await fetchOfficial(feed.listUrl),all=officialFeedAnchorCandidates(page.html,feed);report.discovered=all.length;
+    const selected=deterministicWindow(all,Math.min(Math.max(1,Number(limit)||30),50),options.timeMs||Date.now(),31);report.selected=selected.length;
+    if(!selected.length)return report;
+    const payloads=selected.map(x=>officialFeedSeedPayload(feed,x));
+    const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key));const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
+    const missing=payloads.filter(x=>!keys.has(x.source_product_key));report.existing=payloads.length-missing.length;
+    if(missing.length){const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(missing)});report.inserted=Array.isArray(rows)?rows.length:missing.length;}
+  }catch(e){report.errors.push({error:safeError(e)});}
+  return report;
+}
+
+const GOODSMILE_ARCHIVE_CATEGORIES=[
+  {id:6,slug:"nendoroid",priority:100},
+  {id:2,slug:"figma",priority:95},
+  {id:1,slug:"scale",priority:100},
+  {id:12,slug:"pop-up-parade",priority:98}
+];
+
+function htmlTextCompact(x){return decodeHtml(String(x||"").replace(/<[^>]+>/g," ")).replace(/\s+/g," ").trim();}
+
+function discoverGoodSmileArchiveCards(html,baseUrl){
+  const out=[],seen=new Set();
+  const re=/<a\b[^>]*href=["']([^"']*\/ja\/product\/\d+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  for(const m of html.matchAll(re)){
+    try{
+      const url=canonicalOfficialUrl(new URL(decodeHtml(m[1]),baseUrl).toString());
+      if(seen.has(url))continue;
+      let name=htmlTextCompact(m[2]);
+      if(!name||name.length<2)continue;
+      name=name.replace(/\s+[\uffe5\u00a5]\s*[\d,]+.*$/," ").trim();
+      if(!name||/^(?:\u8a73\u7d30|more|image)$/i.test(name))continue;
+      seen.add(url);out.push({url,name});
+    }catch{}
+  }
+  return out;
+}
+
+function archiveSeedPayload(card,category,page,now=new Date().toISOString()){
+  const c=classifyProduct(card.name);
+  return {canonical_name_ja:card.name,canonical_name_en:null,manufacturer:null,brand:null,series:null,franchise:null,character_names:[],jan_code:null,model_number:null,product_type:c.type,scale:null,edition:null,limited_type:null,msrp_jpy:null,original_release_date:null,official_url:card.url,official_image_url:null,image_source_url:null,image_status:"pending",source_product_key:`goodsmile:archive:${canonicalOfficialUrl(card.url)}`,product_status:"active",identification_confidence:.72,source_last_checked_at:now,metadata:{created_by:"v2.9.8_archive_discovery",archive_category:category.slug,archive_category_id:category.id,archive_page:page,archive_priority:category.priority,classification:{...c,version:VERSION},identity_quality_score:32,field_provenance:{canonical_name_ja:sourceEvidence("goodsmile_archive",now),official_url:sourceEvidence("goodsmile_archive",now)},ingestion_version:VERSION}};
+}
+
+async function archiveDiscoverGoodSmile(env,categoryId=6,page=1,limit=40){
+  const category=GOODSMILE_ARCHIVE_CATEGORIES.find(x=>x.id===Number(categoryId))||GOODSMILE_ARCHIVE_CATEGORIES[0];
+  const pg=Math.max(1,Math.min(999,Number(page)||1));
+  const listUrl=`https://www.goodsmile.com/ja/search?search_category=${category.id}&page=${pg}`;
+  const listing=await fetchOfficial(listUrl);
+  const cards=discoverGoodSmileArchiveCards(listing.html,listing.url);
+  const selected=cards.slice(0,Math.max(1,Math.min(50,Number(limit)||40)));
+  if(!selected.length)return {category:category.slug,category_id:category.id,page:pg,list_url:listUrl,discovered:0,selected:0,inserted:0,existing:0,exhausted:true,errors:[]};
+  const urls=selected.map(x=>canonicalOfficialUrl(x.url));
+  const existingRows=await sbOptional(env,`/products?select=id,official_url&official_url=in.(${urls.map(x=>'"'+x.replace(/"/g,'')+'"').join(',')})&limit=100`)||[];
+  const existing=new Set(existingRows.map(x=>canonicalOfficialUrl(x.official_url||"")));
+  const missing=selected.filter(x=>!existing.has(canonicalOfficialUrl(x.url)));
+  let inserted=0;const errors=[];
+  if(missing.length){
+    try{
+      const now=new Date().toISOString(),payloads=missing.map(x=>archiveSeedPayload(x,category,pg,now));
+      const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});
+      inserted=Array.isArray(rows)?rows.length:missing.length;
+    }catch(e){errors.push({batch:true,error:safeError(e)});}
+  }
+  return {category:category.slug,category_id:category.id,page:pg,list_url:listUrl,discovered:cards.length,selected:selected.length,inserted,existing:selected.length-missing.length,exhausted:false,errors};
+}
+
+function invalidOfficialProductPage(connector,url,parsed){
+  const u=canonicalOfficialUrl(url);
+  const title=String(parsed?.canonical_name_ja||parsed?.canonical_name_en||"");
+  if(connector?.slug==="kdcolle"&&(/\/product\/20\d{2}(?:\/\d{1,2})?$/.test(new URL(u).pathname.replace(/\/$/,""))||/\u691c\u7d22\u7d50\u679c/.test(title)))return "kdcolle_listing_or_archive";
+  if(/(?:search|category|archive|products?)$/i.test(new URL(u).pathname.replace(/\/$/,"")))return "listing_or_archive";
+  return null;
+}
+
+async function saveOfficialProduct(env,connector,url,parsed){
+  const invalid=invalidOfficialProductPage(connector,url,parsed);
+  if(invalid)throw new Error(`Rejected non-product official page: ${invalid}`);
+  const jan=cleanJan(parsed.jan_code);
+  let existing=[];
+  if(jan)existing=await loadProductsByJans(env,[jan]);
+  if(!existing.length){
+    existing=await sbOptional(env,`/products?select=*&official_url=eq.${encodeURIComponent(canonicalOfficialUrl(url))}&limit=1`)||[];
+  }
+  const now=new Date().toISOString();
+  const base=existing[0]||{};
+  if(base.jan_code&&jan&&cleanJan(base.jan_code)!==jan&&base.canonical_name_ja&&!janNameCompatible(base.canonical_name_ja,parsed.canonical_name_ja))throw new Error("JAN/name conflict guard");
+  const merged={...base,...parsed};
+  const quality=identityQualityReasons(merged);
+  const metadata={...(base.metadata||{}),...(parsed.metadata||{}),official_connector:connector.slug,quality_version:VERSION,identity_quality_score:quality.score,official_english_url:connector.slug==="goodsmile"?goodSmileEnglishUrl(url):base.metadata?.official_english_url||null,field_provenance:{...(base.metadata?.field_provenance||{}),official_url:sourceEvidence(connector.slug,now),jan_code:jan?sourceEvidence(connector.slug,now):base.metadata?.field_provenance?.jan_code}};
+  const patch={
+    canonical_name_ja:parsed.canonical_name_ja||base.canonical_name_ja,
+    canonical_name_en:parsed.canonical_name_en||base.canonical_name_en,
+    manufacturer:parsed.manufacturer||base.manufacturer,
+    jan_code:jan||base.jan_code,
+    msrp_jpy:parsed.msrp_jpy||base.msrp_jpy,
+    original_release_date:parsed.original_release_date||base.original_release_date,
+    official_url:parsed.official_url||base.official_url,
+    official_image_url:parsed.official_image_url||base.official_image_url,
+    source_product_key:parsed.source_product_key||base.source_product_key,
+    product_type:parsed.product_type||base.product_type,
+    product_status:parsed.product_status||base.product_status,
+    identification_confidence:identificationConfidenceFor(merged),
+    source_last_checked_at:now,
+    metadata
+  };
+  if(base.id){
+    await sb(env,`/products?id=eq.${encodeURIComponent(base.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify(patch)});
+    return {status:"updated",id:base.id};
+  }
+  const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({...patch,brand:null,series:null,franchise:null,character_names:[],model_number:null,scale:null,edition:null,limited_type:null,image_source_url:parsed.official_image_url||null,image_status:parsed.official_image_url?"found":"pending"})});
+  return {status:"inserted",id:rows?.[0]?.id||null};
+}
+
+async function refreshOfficialBatch(env,limit=2,options={}){
+  const connectors=deterministicWindow(OFFICIAL_CONNECTORS,OFFICIAL_CONNECTORS.length,options.timeMs||Date.now(),3);
+  const max=Math.max(1,Math.min(12,Number(limit)||4));
+  const report=[];
+  let processed=0;
+  for(const connector of connectors){
+    if(processed>=max)break;
+    for(const listUrl of connector.listUrls){
+      if(processed>=max)break;
+      try{
+        const listing=await fetchOfficial(listUrl);
+        const links=discoverOfficialLinks(listing.html,listing.url,connector.detailRegex);
+        const chosen=deterministicWindow(links,Math.min(3,max-processed),options.timeMs||Date.now(),processed+1);
+        for(const url of chosen){
+          if(processed>=max)break;
+          try{
+            const page=await fetchOfficial(url);
+            const parsed=parseOfficial(connector,page.url,page.html);
+            const saved=await saveOfficialProduct(env,connector,page.url,parsed);
+            report.push({connector:connector.slug,url:page.url,...saved,jan_code:parsed.jan_code,name:parsed.canonical_name_ja});
+          }catch(e){report.push({connector:connector.slug,url,error:safeError(e)});}
+          processed++;
+        }
+      }catch(e){
+        report.push({connector:connector.slug,list_url:listUrl,error:safeError(e),non_fatal:connector.slug==="kotobukiya"});
+      }
+    }
+  }
+  return report;
+}
+
+async function cleanupKnownBadOfficialRows(env){
+  const rows=await sbOptional(env,"/products?select=id,canonical_name_ja,official_url,source_product_key&limit=1000");
+  if(!Array.isArray(rows))return {scanned:0,deleted:0};
+  const bad=rows.filter(p=>{
+    const u=String(p.official_url||"");
+    const n=String(p.canonical_name_ja||"");
+    return /kdcolle\.kadokawa\.co\.jp\/product\/20\d{2}(?:\/\d{1,2})?\/?$/i.test(u)||(/\u691c\u7d22\u7d50\u679c/.test(n)&&/KDcolle|KADOKAWA/i.test(n));
+  });
+  let deleted=0;
+  for(const p of bad){
+    try{await sb(env,`/products?id=eq.${encodeURIComponent(p.id)}`,{method:"DELETE",headers:{Prefer:"return=minimal"}});deleted++;}catch{}
+  }
+  return {scanned:rows.length,found:bad.length,deleted};
+}
+
+function recentBackfillFailure(p){
+  const t=p.metadata?.backfill_last_attempt_at;
+  return t&&hoursSince(t)<PIPELINE.backfillRetryHours&&p.metadata?.backfill_last_error;
+}
+
+async function backfillOfficialDetails(env,limit=1){
+  const candidates=await loadBackfillCandidates(env,500);
+  const selected=candidates.filter(p=>!recentBackfillFailure(p)).slice(0,Math.max(1,Math.min(PIPELINE.backfillStandalone,Number(limit)||1)));
+  const results=[];
+  for(const p of selected){
+    const now=new Date().toISOString();
+    try{
+      if(p.official_url){
+        const connector=OFFICIAL_CONNECTORS.find(c=>c.detailRegex.test(p.official_url))||OFFICIAL_CONNECTORS[0];
+        const page=await fetchOfficial(p.official_url);
+        const parsed=parseOfficial(connector,page.url,page.html);
+        if(parsed.jan_code&&cleanJan(parsed.jan_code)!==cleanJan(p.jan_code))throw new Error("Backfill JAN mismatch");
+        await saveOfficialProduct(env,connector,page.url,{...parsed,jan_code:p.jan_code});
+        results.push({id:p.id,status:"updated_from_official_url"});
+        continue;
+      }
+      if(normalizedManufacturer(p.manufacturer)==="good smile company"||String(p.source_product_key||"").startsWith("goodsmile:")){
+        const cal=await fetchGoodSmileCalendars();
+        const rec=cal.merged.find(x=>x.jan_code===cleanJan(p.jan_code));
+        if(rec){
+          const patch={canonical_name_en:p.canonical_name_en||rec.name_en||null,original_release_date:p.original_release_date||rec.date||null,source_last_checked_at:now,metadata:{...(p.metadata||{}),backfill_last_attempt_at:now,backfill_last_error:null,calendar:{...(p.metadata?.calendar||{}),date:rec.date||p.metadata?.calendar?.date||null,rerelease_generation:rec.rerelease?"rerelease":p.metadata?.calendar?.rerelease_generation||"unknown"}}};
+          await sb(env,`/products?id=eq.${encodeURIComponent(p.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify(patch)});
+          results.push({id:p.id,status:"calendar_backfilled"});
+          continue;
+        }
+      }
+      throw new Error("No safe official backfill match");
+    }catch(e){
+      await sbOptional(env,`/products?id=eq.${encodeURIComponent(p.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({metadata:{...(p.metadata||{}),backfill_last_attempt_at:now,backfill_last_error:safeError(e)}})});
+      results.push({id:p.id,error:safeError(e)});
+    }
+  }
+  return {selected:selected.length,results};
+}
+
+const MULTILINGUAL_PRODUCT_TYPE_ALIASES={
+  "figure":["figure","figures","figurine","figurines","figura","figuras","figur","figuren","statuette","statue","nendoroid","nendoroids","ねんどろいど","\u30d5\u30a3\u30ae\u30e5\u30a2","\u624b\u529e","\u624b\u8fa6","\u516c\u4ed4","\ud53c\uaddc\uc5b4","figurka","\u0444\u0438\u0433\u0443\u0440\u043a\u0430","\u0444\u0438\u0433\u0443\u0440\u043a\u0438","\u0645\u062c\u0633\u0645","\u0645\u062c\u0633\u0645\u0627\u062a","\u062a\u0645\u062b\u0627\u0644","\u0641\u093f\u0917\u0930","\u092b\u093f\u0917\u0930","\u092e\u0942\u0930\u094d\u0924\u093f","figure anime","m\u00f4 h\u00ecnh","mo hinh","\u0e1f\u0e34\u0e01\u0e40\u0e01\u0e2d\u0e23\u0e4c","fig\u00fcr","figur","figuur"],
+  "plush":["plush","plushie","plushies","stuffed toy","stuffed animal","soft toy","peluche","peluches","plushtier","plueschtier","pl\u00fcschtier","plush toy","stofftier","\u306c\u3044\u3050\u308b\u307f","\u30cc\u30a4\u30b0\u30eb\u30df","\u6bdb\u7ed2\u73a9\u5177","\u6bdb\u7d68\u73a9\u5177","\u7d68\u6bdb\u73a9\u5177","\ubd09\uc81c\uc778\ud615","\uc778\ud615","pelucia","pel\u00facia","\u043c\u044f\u0433\u043a\u0430\u044f \u0438\u0433\u0440\u0443\u0448\u043a\u0430","\u043c\u044f\u0433\u043a\u0438\u0435 \u0438\u0433\u0440\u0443\u0448\u043a\u0438","boneka","boneka plush","boneka lembut","\u0e15\u0e38\u0e4a\u0e01\u0e15\u0e32","\u0e15\u0e38\u0e4a\u0e01\u0e15\u0e32\u0e19\u0e38\u0e48\u0e21","\u0e15\u0e38\u0e4a\u0e01\u0e15\u0e32\u0e42\u0e1b\u0e40\u0e01\u0e21\u0e2d\u0e19","th\u00fa b\u00f4ng","thu bong","g\u1ea5u b\u00f4ng","gau bong","pelu\u015f","pelus","oyuncak pelu\u015f","knuffel","pluche","pluszak","pluszowa zabawka","\u062f\u0645\u064a\u0629 \u0645\u062d\u0634\u0648\u0629","\u0644\u0639\u0628\u0629 \u0645\u062d\u0634\u0648\u0629","\u062f\u0645\u064a\u0629","\u0938\u0949\u092b\u094d\u091f \u091f\u0949\u092f","\u092a\u094d\u0932\u0936","\u0916\u093f\u0932\u094c\u0928\u093e","\u092d\u0930\u0935\u093e\u0902 \u0916\u093f\u0932\u094c\u0928\u093e"],
+  "trading_card":["trading card","trading cards","card game","tcg","carta","cartas","carte","cartes","sammelkarte","sammelkarten","\u30c8\u30ec\u30ab","\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9","\u30ab\u30fc\u30c9","\u96c6\u6362\u5f0f\u5361\u724c","\u96c6\u63db\u5f0f\u5361\u724c","\u5361\u724c","\ud2b8\ub808\uc774\ub529 \uce74\ub4dc","\u043a\u043e\u043b\u043b\u0435\u043a\u0446\u0438\u043e\u043d\u043d\u044b\u0435 \u043a\u0430\u0440\u0442\u044b","\u0628\u0637\u0627\u0642\u0627\u062a \u062a\u062f\u0627\u0648\u0644","\u091f\u094d\u0930\u0947\u0921\u093f\u0902\u0917 \u0915\u093e\u0930\u094d\u0921"],
+  "model_kit":["model kit","model kits","gunpla","plastic model","maquette","kit maquette","maqueta","bausatz","modellbausatz","\u30d7\u30e9\u30e2\u30c7\u30eb","\u30ac\u30f3\u30d7\u30e9","\u6a21\u578b\u5957\u4ef6","\u6a21\u578b","\ud504\ub77c\ubaa8\ub378","\uac74\ud504\ub77c","\u043c\u043e\u0434\u0435\u043b\u044c \u0434\u043b\u044f \u0441\u0431\u043e\u0440\u043a\u0438","\u0645\u062c\u0633\u0645 \u062a\u0631\u0643\u064a\u0628","\u092e\u0949\u0921\u0932 \u0915\u093f\u091f"],
+  "acrylic_goods":["acrylic stand","acrylic stands","acrylic figure","acrylic goods","acrylic","standee","standees","acrilico","acr\u00edlico","acrylique","acryl","\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9","\u30a2\u30af\u30b9\u30bf","\u4e9a\u514b\u529b\u7acb\u724c","\u4e9e\u514b\u529b\u7acb\u724c","\uc544\ud06c\ub9b4 \uc2a4\ud0e0\ub4dc","acrylic standee"],
+  "keychain":["keychain","keychains","key ring","keyring","llavero","llaveros","porte-cles","porte-cl\u00e9s","schluesselanhaenger","schl\u00fcsselanh\u00e4nger","\u30ad\u30fc\u30db\u30eb\u30c0\u30fc","\u94a5\u5319\u6263","\u9470\u5319\u6263","\ud0a4\ub9c1","\u0431\u0440\u0435\u043b\u043e\u043a","\u0645\u064a\u062f\u0627\u0644\u064a\u0629 \u0645\u0641\u0627\u062a\u064a\u062d","\u0915\u0940\u091a\u0947\u0928"],
+  "badge":["badge","badges","pin badge","button badge","pin","pins","chapa","chapas","badge anime","anstecker","\u7f36\u30d0\u30c3\u30b8","\u5fbd\u7ae0","\u80f8\u7ae0","\uce94\ubc43\uc9c0","\u0437\u043d\u0430\u0447\u043e\u043a","\u0634\u0627\u0631\u0629","\u092c\u0948\u091c"],
+  "lottery_prize":["lottery prize","prize figure","ichiban kuji","ichibankuji","kuji","prize","lottery","\u4e00\u756a\u304f\u3058","\u304f\u3058","\u30d7\u30e9\u30a4\u30ba","\u666f\u54c1","\u4e00\u756a\u8d4f","\u4e00\u756a\u8cde","\u62bd\u5956\u5956\u54c1","\u62bd\u734e\u734e\u54c1","\uc81c\uc77c\ubcf5\uad8c","\ubcf5\uad8c \uacbd\ud488"],
+  "sneaker":["sneaker","sneakers","shoe","shoes","zapatilla","zapatillas","basket","baskets","sneaker anime","\u30b9\u30cb\u30fc\u30ab\u30fc","\u9774","\u8fd0\u52a8\u978b","\u904b\u52d5\u978b","\uc6b4\ub3d9\ud654","\u043a\u0440\u043e\u0441\u0441\u043e\u0432\u043a\u0438"],
+  "apparel":["apparel","clothing","shirt","shirts","t-shirt","t shirt","tshirt","tee","hoodie","hooded sweatshirt","sweatshirt","jacket","jersey","swimsuit","ropa","camiseta","sudadera","chaqueta","vetement","vêtement","tee-shirt","sweat à capuche","veste","kleidung","kapuzenpullover","jacke","maglietta","felpa con cappuccio","giacca","moletom","jaqueta","アパレル","Tシャツ","ティーシャツ","パーカー","スウェット","ジャケット","衣服","服装","T恤","短袖T恤","连帽衫","連帽衫","티셔츠","후드티","재킷","футболка","футболку","худи","куртка","تي شيرت","هودي","سترة","टी-शर्ट","टी शर्ट","हुडी","เสื้อยืด","เสื้อฮู้ด","áo thun","ao thun","áo hoodie","ao hoodie","tişört","tisort","kapüşonlu","kapusonlu","koszulka","koszulkę","bluza z kapturem","kaos","의류","одежда"]
+}
+const MULTILINGUAL_FRANCHISE_ALIASES={"Pokemon":["Pokemon","Pok\u00e9mon","\u30dd\u30b1\u30e2\u30f3","\u30dd\u30b1\u30c3\u30c8\u30e2\u30f3\u30b9\u30bf\u30fc","\u5b9d\u53ef\u68a6","\u5bf6\u53ef\u5922","\u795e\u5947\u5b9d\u8d1d","\u795e\u5947\u5bf6\u8c9d","\ud3ec\ucf13\ubaac","\u0e42\u0e1b\u0e40\u0e01\u0e21\u0e2d\u0e19","\u0628\u0648\u0643\u064a\u0645\u0648\u0646","\u092a\u094b\u0915\u0947\u092e\u094b\u0928"],"ONE PIECE":["ONE PIECE","One Piece","ワンピース","海贼王","海賊王","航海王","원피스","ون بيس","وان بيس","ван пис","वन पीस","วันพีซ"],"Hatsune Miku":["Hatsune Miku","\u521d\u97f3\u30df\u30af","\u521d\u97f3\u672a\u6765","\u521d\u97f3\u672a\u4f86","\ud558\uce20\ub124 \ubbf8\ucfe0"],"Gundam":["Gundam","\u30ac\u30f3\u30c0\u30e0","\u9ad8\u8fbe","\u9ad8\u9054","\uac74\ub2f4"],"Dragon Ball":["Dragon Ball","\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb","\u9f99\u73e0","\u9f8d\u73e0","\ub4dc\ub798\uace4\ubcfc"],"Demon Slayer":["Demon Slayer","Kimetsu no Yaiba","\u9b3c\u6ec5\u306e\u5203","\u9b3c\u706d\u4e4b\u5203","\uadc0\uba78\uc758 \uce7c\ub0a0"],"Jujutsu Kaisen":["Jujutsu Kaisen","\u546a\u8853\u5efb\u6226","\u5492\u672f\u56de\u6218","\u5492\u8853\u8ff4\u6230","\uc8fc\uc220\ud68c\uc804"],"NARUTO":["NARUTO","Naruto","\u30ca\u30eb\u30c8","\u706b\u5f71\u5fcd\u8005","\ub098\ub8e8\ud1a0"],"BLEACH":["BLEACH","Bleach","\u30d6\u30ea\u30fc\u30c1","\u6b7b\u795e","\ube14\ub9ac\uce58"],"My Hero Academia":["My Hero Academia","Boku no Hero Academia","\u50d5\u306e\u30d2\u30fc\u30ed\u30fc\u30a2\u30ab\u30c7\u30df\u30a2","\u6211\u7684\u82f1\u96c4\u5b66\u9662","\u6211\u7684\u82f1\u96c4\u5b78\u9662","\ub098\uc758 \ud788\uc5b4\ub85c \uc544\uce74\ub370\ubbf8\uc544"],"Attack on Titan":["Attack on Titan","Shingeki no Kyojin","\u9032\u6483\u306e\u5de8\u4eba","\u8fdb\u51fb\u7684\u5de8\u4eba","\u9032\u64ca\u7684\u5de8\u4eba","\uc9c4\uaca9\uc758 \uac70\uc778"],"Evangelion":["Evangelion","\u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3","EVA","\u65b0\u4e16\u7eaa\u798f\u97f3\u6218\u58eb","\u65b0\u4e16\u7d00\u798f\u97f3\u6230\u58eb","\uc5d0\ubc18\uac8c\ub9ac\uc628"],"Fate":["Fate","\u30d5\u30a7\u30a4\u30c8"],"Hololive":["Hololive","\u30db\u30ed\u30e9\u30a4\u30d6","\ud640\ub85c\ub77c\uc774\ube0c"],"Genshin Impact":["Genshin Impact","\u539f\u795e","\uc6d0\uc2e0"],"Honkai Star Rail":["Honkai Star Rail","Honkai: Star Rail","\u5d29\u58ca\u30b9\u30bf\u30fc\u30ec\u30a4\u30eb","\u5d29\u574f\u661f\u7a79\u94c1\u9053","\u5d29\u58de\u661f\u7a79\u9435\u9053","\ubd95\uad34 \uc2a4\ud0c0\ub808\uc77c"],"Blue Archive":["Blue Archive","\u30d6\u30eb\u30fc\u30a2\u30fc\u30ab\u30a4\u30d6","\u78a7\u84dd\u6863\u6848","\u851a\u85cd\u6a94\u6848","\ube14\ub8e8 \uc544\uce74\uc774\ube0c"],"Uma Musume":["Uma Musume","\u30a6\u30de\u5a18","\u8d5b\u9a6c\u5a18","\u8cfd\u99ac\u5a18","\uc6b0\ub9c8\ubb34\uc2a4\uba54"],"Love Live":["Love Live","\u30e9\u30d6\u30e9\u30a4\u30d6","\ub7ec\ube0c\ub77c\uc774\ube0c"],"Haikyu":["Haikyu","Haikyuu","\u30cf\u30a4\u30ad\u30e5\u30fc","\u6392\u7403\u5c11\u5e74","\ud558\uc774\ud050"],"Detective Conan":["Detective Conan","Case Closed","\u540d\u63a2\u5075\u30b3\u30ca\u30f3","\u540d\u4fa6\u63a2\u67ef\u5357","\u540d\u5075\u63a2\u67ef\u5357","\uba85\ud0d0\uc815 \ucf54\ub09c"],"Frieren":["Frieren","\u846c\u9001\u306e\u30d5\u30ea\u30fc\u30ec\u30f3","\u846c\u9001\u7684\u8299\u8389\u83b2","\u846c\u9001\u7684\u8299\u8389\u84ee","\uc7a5\uc1a1\uc758 \ud504\ub9ac\ub80c"]};
+const MULTILINGUAL_CHARACTER_ALIASES=[
+  {character:"Monkey D. Luffy",franchise:"ONE PIECE",aliases:["luffy","monkey d luffy","monkey d. luffy","ルフィ","モンキー d ルフィ","モンキー・d・ルフィ","路飞","魯夫","루피"]},
+  {character:"Roronoa Zoro",franchise:"ONE PIECE",aliases:["zoro","roronoa zoro","ゾロ","ロロノア ゾロ","ロロノア・ゾロ","索隆","조로"]},
+  {character:"Naruto Uzumaki",franchise:"NARUTO",aliases:["naruto uzumaki","uzumaki naruto","うずまきナルト","うずまき ナルト","漩涡鸣人","漩渦鳴人"]},
+  {character:"Sasuke Uchiha",franchise:"NARUTO",aliases:["sasuke","sasuke uchiha","サスケ","うちはサスケ","うちは サスケ","佐助","사스케"]},
+  {character:"Pikachu",franchise:"Pokemon",aliases:["pikachu","ピカチュウ","皮卡丘","피카츄"]},
+  {character:"Hatsune Miku",franchise:"Hatsune Miku",aliases:["hatsune miku","初音ミク","初音未来","初音未來","하츠네 미쿠"]}
+];
+const MULTILINGUAL_GENERIC_TERMS=["anime","animation","manga","collectible","collectibles","merch","merchandise","goods","stuff","toys","toy","character goods","character merchandise","japanese","japan","recommend","recommendation","best","buy","find","search","looking for","want","please","gift","gifts","cool","popular","cheap","rare","\u30a2\u30cb\u30e1","\u30b0\u30c3\u30ba","\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba","\u304a\u3059\u3059\u3081","\u63a2\u3057\u3066","\u6b32\u3057\u3044","\u30c8\u30a4","\u304a\u3082\u3061\u3083","\u52d5\u6f2b","\u52a8\u6f2b","\u5468\u8fb9","\u5468\u908a","\u5468\u8fb9\u5546\u54c1","\u5468\u908a\u5546\u54c1","\u73a9\u5177","\u63a8\u8350","\u63a8\u85a6","\ucc3e\uc544","\ucd94\ucc9c","\uc560\ub2c8","\uad7f\uc988","\uc7a5\ub09c\uac10","figurine anime","figura anime","figura de anime","anime figur","anime figurine","anime figure","anime merch","merch anime","produits anime","produits derives anime","objets anime","merchandising anime","productos anime","merch de anime","productos de anime","anime artikel","anime merch artikel","anime waren","anime merchandise","prodotti anime","prodotti manga","produtos anime","merch de anime","\u0430\u043d\u0438\u043c\u0435","\u0430\u043d\u0438\u043c\u0435 \u043c\u0435\u0440\u0447","coleccionable","coleccionables","objet de collection","sammlerstueck","sammlerst\u00fcck","merch anime indonesia","barang anime","merch anime thailand","\u0e02\u0e2d\u0e07\u0e2a\u0e30\u0e2a\u0e21\u0e2d\u0e19\u0e34\u0e40\u0e21\u0e30","\u0e2a\u0e34\u0e19\u0e04\u0e49\u0e32\u0e2d\u0e19\u0e34\u0e40\u0e21\u0e30","\u0111\u1ed3 ch\u01a1i anime","do choi anime","h\u00e0ng anime","anime \u00fcr\u00fcnleri","anime urunleri","anime merch nederland","anime spullen","gad\u017cet anime","gadzet anime","produkty anime","\u0645\u0646\u062a\u062c\u0627\u062a \u0627\u0644\u0623\u0646\u0645\u064a","\u0628\u0636\u0627\u0626\u0639 \u0627\u0644\u0623\u0646\u0645\u064a","\u0627\u0646\u0645\u064a","\u090f\u0928\u0940\u092e\u0947 \u092e\u0930\u094d\u091a","\u090f\u0928\u0940\u092e\u0947 \u0938\u093e\u092e\u093e\u0928","\u090f\u0928\u0940\u092e\u0947 \u0916\u093f\u0932\u094c\u0928\u0947"];
+const GLOBAL_VAGUE_INTENT_TERMS=["anime","anime merch","anime merchandise","anime goods","anime stuff","anime toys","manga merch","character goods","Japanese collectibles","Pokemon","Pokemon merch","Pokemon stuff","Pokemon toys","ONE PIECE","One Piece merch","Nendoroid","Gunpla","\u30a2\u30cb\u30e1","\u30a2\u30cb\u30e1 \u30b0\u30c3\u30ba","\u30dd\u30b1\u30e2\u30f3 \u30b0\u30c3\u30ba","\u30ef\u30f3\u30d4\u30fc\u30b9 \u30b0\u30c3\u30ba","figurine manga","produits anime","merch anime","peluche Pokemon","figuras anime","merch de anime","productos anime","Anime Figuren","Anime Merch","Pokemon Pluesch","prodotti anime","produtos anime","merch de anime","\u52a8\u6f2b\u5468\u8fb9","\u52a8\u6f2b\u624b\u529e","\u5b9d\u53ef\u68a6\u5468\u8fb9","\u52d5\u6f2b\u5468\u908a","\u5bf6\u53ef\u5922\u5468\u908a","\uc560\ub2c8 \uad7f\uc988","\ud3ec\ucf13\ubaac \uad7f\uc988","\u0430\u043d\u0438\u043c\u0435 \u043c\u0435\u0440\u0447","\u0645\u0646\u062a\u062c\u0627\u062a \u0627\u0644\u0623\u0646\u0645\u064a","\u090f\u0928\u0940\u092e\u0947 \u092e\u0930\u094d\u091a","merch anime indonesia","merch anime thailand","do choi anime","anime urunleri","anime merch nederland","gadzet anime"];
+
+const PRODUCT_TYPE_SEARCH_EQUIVALENTS={figure:["figure","nendoroid","figma"],plush:["plush"],trading_card:["trading_card"],model_kit:["model_kit"],acrylic_goods:["acrylic_goods"],keychain:["keychain"],badge:["badge"],lottery_prize:["lottery_prize"],sneaker:["sneaker"],apparel:["apparel"]};
+
+function repairUtf8Mojibake(v=""){
+  const s=String(v||"");
+  if(!/[\u00c2\u00c3\u00d0\u00d1\u00d8\u00d9\u00e0\u00e1\u00e2\u00e3\u00ec\u00ed]/.test(s))return s;
+  try{
+    const bytes=[];
+    const map={0x20AC:0x80,0x201A:0x82,0x0192:0x83,0x201E:0x84,0x2026:0x85,0x2020:0x86,0x2021:0x87,0x02C6:0x88,0x2030:0x89,0x0160:0x8A,0x2039:0x8B,0x0152:0x8C,0x017D:0x8E,0x2018:0x91,0x2019:0x92,0x201C:0x93,0x201D:0x94,0x2022:0x95,0x2013:0x96,0x2014:0x97,0x02DC:0x98,0x2122:0x99,0x0161:0x9A,0x203A:0x9B,0x0153:0x9C,0x017E:0x9E,0x0178:0x9F};
+    for(const ch of s){const cp=ch.codePointAt(0);if(cp<=255)bytes.push(cp);else if(map[cp]!==undefined)bytes.push(map[cp]);else return s;}
+    const decoded=new TextDecoder("utf-8",{fatal:true}).decode(new Uint8Array(bytes));
+    const before=(s.match(/[\u00c2\u00c3\u00d0\u00d1\u00d8\u00d9]/g)||[]).length;
+    const after=(decoded.match(/[\u00c2\u00c3\u00d0\u00d1\u00d8\u00d9]/g)||[]).length;
+    return after<before?decoded:s;
+  }catch{return s;}
+}
+function normalizedUnicodePhrase(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
+function normalizedSearchPhrase(v){return foldLatinForSearch(String(v||"").normalize("NFKC")).replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
+function phraseIncludes(haystack,needle){
+  const hu=normalizedUnicodePhrase(haystack),nu=normalizedUnicodePhrase(needle);
+  if(nu&&hu.includes(nu))return true;
+  const h=normalizedSearchPhrase(haystack),n=normalizedSearchPhrase(needle);
+  return !!n&&h.includes(n);
+}
+function strictEntityAliasMatch(haystack,needle){
+  const hu=normalizedUnicodePhrase(haystack),nu=normalizedUnicodePhrase(needle);
+  if(!nu)return false;
+  if(/^[a-z0-9 ]+$/.test(nu)){if((` ${hu} `).includes(` ${nu} `))return true;}else if(hu.includes(nu))return true;
+  const h=normalizedSearchPhrase(haystack),n=normalizedSearchPhrase(needle);
+  if(!n)return false;
+  if(/^[a-z0-9 ]+$/.test(n))return (` ${h} `).includes(` ${n} `);
+  return h.includes(n);
+}
+function directMultilingualProductTypeHints(raw=""){
+  const x=String(raw||"").normalize("NFKC");const out=[];const add=t=>{if(!out.includes(t))out.push(t);};
+  if(/(?:figure|figurine|nendoroid|figma|\u30d5\u30a3\u30ae\u30e5\u30a2|\u306d\u3093\u3069\u308d\u3044\u3069|\u624b\u529e|\u624b\u8fa6|\ud53c\uaddc\uc5b4|\u0444\u0438\u0433\u0443\u0440\u043a|\u0645\u062c\u0633\u0645|figurka|figura)/i.test(x))add("figure");
+  if(/(?:plush|plushie|stuffed toy|soft toy|\u306c\u3044\u3050\u308b\u307f|\u6bdb\u7ed2\u73a9\u5177|\u6bdb\u7d68\u73a9\u5177|\ubd09\uc81c\uc778\ud615|peluche|plushtier|stofftier|boneka|\u0e15\u0e38\u0e4a\u0e01\u0e15\u0e32|thú bông|thu bong|knuffel)/i.test(x))add("plush");
+  if(/(?:trading card|tcg|\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9|\u30c8\u30ec\u30ab|\u96c6\u6362\u5f0f\u5361\u724c|\u96c6\u63db\u5f0f\u5361\u724c|\ud2b8\ub808\uc774\ub529 \uce74\ub4dc)/i.test(x))add("trading_card");
+  if(/(?:model kit|gunpla|plastic model|\u30d7\u30e9\u30e2\u30c7\u30eb|\u30ac\u30f3\u30d7\u30e9|\u6a21\u578b\u5957\u4ef6|\ud504\ub77c\ubaa8\ub378)/i.test(x))add("model_kit");
+  if(/(?:acrylic stand|standee|\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9|\u30a2\u30af\u30b9\u30bf|\u4e9a\u514b\u529b\u7acb\u724c|\uc544\ud06c\ub9b4 \uc2a4\ud0e0\ub4dc)/i.test(x))add("acrylic_goods");
+  if(/(?:keychain|key ring|\u30ad\u30fc\u30db\u30eb\u30c0\u30fc|\u94a5\u5319\u6263|\ud0a4\ub9c1)/i.test(x))add("keychain");
+  if(/(?:badge|pin badge|\u7f36\u30d0\u30c3\u30b8|\u5fbd\u7ae0|\uce94\ubc43\uc9c0)/i.test(x))add("badge");
+  if(/(?:lottery prize|ichiban kuji|\u4e00\u756a\u304f\u3058|\u30d7\u30e9\u30a4\u30ba|\u666f\u54c1|\u4e00\u756a\u8d4f)/i.test(x))add("lottery_prize");
+  if(/(?:sneaker|sneakers|\u30b9\u30cb\u30fc\u30ab\u30fc|\u8fd0\u52a8\u978b|\u904b\u52d5\u978b|\uc6b4\ub3d9\ud654)/i.test(x))add("sneaker");
+  if(/(?:apparel|clothing|t[ -]?shirt|tee|hoodie|sweatshirt|jacket|jersey|swimsuit|\u30a2\u30d1\u30ec\u30eb|T\u30b7\u30e3\u30c4|\u30c6\u30a3\u30fc\u30b7\u30e3\u30c4|\u30d1\u30fc\u30ab\u30fc|\u30b9\u30a6\u30a7\u30c3\u30c8|\u30b8\u30e3\u30b1\u30c3\u30c8|\u6c34\u7740|T\u6064|\u8fde\u5e3d\u886b|\ud2f0\uc154\uce20|\ud6c4\ub4dc\ud2f0|camiseta|tee-shirt|kapuzenpullover|maglietta|moletom|\u0444\u0443\u0442\u0431\u043e\u043b\u043a\u0430|\u062a\u064a \u0634\u064a\u0631\u062a|\u0e40\u0e2a\u0e37\u0e49\u0e2d\u0e22\u0e37\u0e14|áo thun|ao thun|tişört|tisort|koszulka|kaos)/i.test(x))add("apparel");
+  return out;
+}
+function directMultilingualFranchiseHints(raw=""){
+  const x=String(raw||"").normalize("NFKC");const out=[];const add=f=>{if(!out.includes(f))out.push(f);};
+  if(/(?:pokemon|pokémon|\u30dd\u30b1\u30e2\u30f3|\u30dd\u30b1\u30c3\u30c8\u30e2\u30f3\u30b9\u30bf\u30fc|\u5b9d\u53ef\u68a6|\ud3ec\ucf13\ubaac)/i.test(x))add("Pokemon");
+  if(/(?:one\s*piece|\u30ef\u30f3\u30d4\u30fc\u30b9|\u6d77\u8d3c\u738b|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\uc6d0\ud53c\uc2a4)/i.test(x))add("ONE PIECE");
+  if(/(?:hatsune\s*miku|\u521d\u97f3\u30df\u30af|\ud558\uce20\ub124 \ubbf8\ucfe0)/i.test(x))add("Hatsune Miku");
+  if(/(?:naruto|\u30ca\u30eb\u30c8|\u706b\u5f71\u5fcd\u8005|\ub098\ub8e8\ud1a0)/i.test(x))add("NARUTO");
+  return out;
+}
+
+function asciiSafeUnicodeIntentFallback(raw=""){
+  const x=String(raw||"").normalize("NFKC");
+  const franchises=[],characters=[],subtypes=[],preferences=[],priorities=[];
+  const add=(arr,v)=>{if(v&&!arr.includes(v))arr.push(v);};
+  const pref=(facet,value,weight=8)=>{if(!preferences.some(p=>p.facet===facet&&p.value===value))preferences.push({facet,value,weight});};
+
+  // Franchise + character: use only ASCII-safe regex source (Unicode escapes).
+  if(/(?:pokemon|pok\u00e9mon|\u30dd\u30b1\u30e2\u30f3|\u30dd\u30b1\u30c3\u30c8\u30e2\u30f3\u30b9\u30bf\u30fc|\u5b9d\u53ef\u68a6|\u5bf6\u53ef\u5922|\ud3ec\ucf13\ubaac)/i.test(x))add(franchises,"Pokemon");
+  if(/(?:one\s*piece|\u6d77\u8d3c\u738b|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\uc6d0\ud53c\uc2a4|\u0432\u0430\u043d\s*\u043f\u0438\u0441|\u0648\u0646\s*\u0628\u064a\u0633|\u0648\u0627\u0646\s*\u0628\u064a\u0633|\u0935\u0928\s*\u092a\u0940\u0938|\u0e27\u0e31\u0e19\u0e1e\u0e35\u0e0b)/i.test(x))add(franchises,"ONE PIECE");
+  if(/(?:hatsune\s*miku|\u521d\u97f3\u30df\u30af|\u521d\u97f3\u672a\u6765|\u521d\u97f3\u672a\u4f86|\ud558\uce20\ub124\s*\ubbf8\ucfe0)/i.test(x)){add(franchises,"Hatsune Miku");add(characters,"Hatsune Miku");}
+  if(/(?:naruto|\u30ca\u30eb\u30c8|\u706b\u5f71\u5fcd\u8005|\ub098\ub8e8\ud1a0)/i.test(x))add(franchises,"NARUTO");
+
+  if(/(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(x)){add(characters,"Pikachu");add(franchises,"Pokemon");}
+  if(/(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(x)){add(characters,"Roronoa Zoro");add(franchises,"ONE PIECE");}
+  if(/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|(?<![\u30a1-\u30f6\u30fc])\u30eb\u30d5\u30a3|\u30ef\u30f3\u30d4\u30fc\u30b9\s*\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(x)){add(characters,"Monkey D. Luffy");add(franchises,"ONE PIECE");}
+
+  // Japanese bare ワンピース is context-sensitive. Merchandise words make franchise use likely;
+  // dress/swimsuit context keeps it as ordinary apparel.
+  if(/\u30ef\u30f3\u30d4\u30fc\u30b9/i.test(x)){
+    const garment=/(?:\u590f\u7528|\u30c9\u30ec\u30b9|\u6c34\u7740|\u670d|\u30b3\u30fc\u30c7|\u30b9\u30bf\u30a4\u30eb)/i.test(x);
+    const merch=/(?:\u30b0\u30c3\u30ba|\u30d5\u30a3\u30ae\u30e5\u30a2|\u306c\u3044\u3050\u308b\u307f|t[ -]?\u30b7\u30e3\u30c4|\u30a2\u30af\u30ea\u30eb|\u7f36\u30d0\u30c3\u30b8|\u30ad\u30fc\u30db\u30eb\u30c0\u30fc|\u30ab\u30fc\u30c9|\u30b9\u30cb\u30fc\u30ab\u30fc)/i.test(x);
+    if(merch&&!garment)add(franchises,"ONE PIECE");
+  }
+
+  // Merch subtypes, also ASCII-safe.
+  if(/(?:t[ -]?shirt|tshirt|tee|shirt|\u0054\u30b7\u30e3\u30c4|\u30c6\u30a3\u30fc\u30b7\u30e3\u30c4|\u0054\u6064|\u77ed\u8896\u0054\u6064|\ud2f0\uc154\uce20|camiseta|tee-shirt|maglietta|\u0444\u0443\u0442\u0431\u043e\u043b\u043a\u0430|\u0444\u0443\u0442\u0431\u043e\u043b\u043a\u0443|\u062a\u064a\s*\u0634\u064a\u0631\u062a|\u091f\u0940[- ]?\u0936\u0930\u094d\u091f|\u0e40\u0e2a\u0e37\u0e49\u0e2d\u0e22\u0e37\u0e14|\u00e1o\s*thun|ao\s*thun|ti\u015f\u00f6rt|tisort|koszulka|koszulk\u0119|kaos)/i.test(x))add(subtypes,"tshirt");
+  if(/(?:hoodie|\u30d1\u30fc\u30ab\u30fc|\u8fde\u5e3d\u886b|\u9023\u5e3d\u886b|\ud6c4\ub4dc\ud2f0)/i.test(x))add(subtypes,"hoodie");
+  if(/(?:jacket|\u30b8\u30e3\u30b1\u30c3\u30c8|\u5939\u514b|\u593e\u514b|\uc7ac\ud0b7)/i.test(x))add(subtypes,"jacket");
+  if(/(?:sweatshirt|\u30b9\u30a6\u30a7\u30c3\u30c8|\u536b\u8863|\u885b\u8863|\ub9e8\ud22c\ub9e8)/i.test(x))add(subtypes,"sweatshirt");
+  if(/(?:swimsuit|one[- ]piece\s+swimsuit|\u6c34\u7740|\u6cf3\u8863|\uc218\uc601\ubcf5)/i.test(x))add(subtypes,"swimsuit");
+
+  // Priorities.
+  if(/(?:cheap|affordable|budget|value|best price|\u5b89\u3044|\u304a\u624b\u9803|\u30b3\u30b9\u30d1|\u4fbf\u5b9c|\u5be6\u60e0|\uc800\ub834)/i.test(x))add(priorities,"value");
+  if(/(?:gift|present|birthday|\u30d7\u30ec\u30bc\u30f3\u30c8|\u30ae\u30d5\u30c8|\u8d08\u308a\u7269|\u793c\u7269|\u79ae\u7269|\uc120\ubb3c)/i.test(x))add(priorities,"gift");
+  if(/(?:cute|kawaii|\u304b\u308f\u3044\u3044|\u53ef\u611b\u3044|\u53ef\u7231|\u53ef\u611b|\uadc0\uc5ec)/i.test(x))add(priorities,"cute");
+
+  // Soft preferences needed for ambiguity handling.
+  if(/(?:large|big|huge|oversized|\u5927\u578b|\u5927\u304d\u3044|\u5927\u304d\u304f\u3066|\u5927\u304d\u306a|\u5927\u7684|\u5f88\u5927|\ud06c\uace0|\ud070|\ub300\ud615)/i.test(x))pref("size","large",8);
+  if(/(?:small|mini|tiny|compact|\u5c0f\u3055\u3044|\u5c0f\u3055\u304f\u3066|\u5c0f\u3055\u306a|\u5c0f\u7684|\uc791\uace0|\uc791\uc740|\ubbf8\ub2c8)/i.test(x))pref("size","small",8);
+  if(/(?:red|\u8d64|\u8d64\u3044|\u8d64\u304f\u3066|\u7ea2\u8272|\u7d05\u8272|\ube68\uac04)/i.test(x))pref("color","red",8);
+  if(/(?:black|\u9ed2|\u9ed2\u3044|\u9ed1\u8272|\uac80\uc815)/i.test(x))pref("color","black",8);
+  if(/(?:cool|badass|stylish|\u304b\u3063\u3053\u3044\u3044|\u683c\u597d\u3044\u3044|\u30af\u30fc\u30eb|\u5e05|\uba4b\uc9c4)/i.test(x))pref("style","cool",10);
+  if(/(?:premium|high end|luxury|\u9ad8\u7d1a|\u8c6a\u83ef|\u9ad8\u7ea7|\uace0\uae09)/i.test(x))pref("style","premium",10);
+  if(/(?:gift|present|\u30d7\u30ec\u30bc\u30f3\u30c8|\u30ae\u30d5\u30c8|\u8d08\u308a\u7269|\u793c\u7269|\u79ae\u7269|\uc120\ubb3c)/i.test(x))pref("use_case","gift",12);
+  if(/(?:display|shelf|room decoration|\u98fe\u308b|\u98fe\u308c\u308b|\u90e8\u5c4b\u306b\u98fe\u308b|\u90e8\u5c4b\u306b\u98fe\u308c\u308b|\u5c55\u793a|\u6446\u4ef6|\uc7a5\uc2dd|\uc804\uc2dc)/i.test(x))pref("use_case","display",9);
+  if(/(?:child|kids|\u5b50\u4f9b\u5411\u3051|\u3053\u3069\u3082\u5411\u3051|\u30ad\u30c3\u30ba|\u513f\u7ae5|\u5152\u7ae5|\uc544\uc774\uc6a9)/i.test(x))pref("use_case","child",10);
+  if(/(?:sealed|unopened|factory sealed|\u672a\u958b\u5c01|\u672a\u62c6\u5c01|\ubbf8\uac1c\ubd09)/i.test(x))pref("condition","sealed",10);
+  if(/(?:old|older|vintage|\u6614|\u53e4\u3044|\u65e7\u4f5c|\u8001\u6b3e|\uc608\uc804)/i.test(x))pref("time","older",7);
+  if(/(?:newest|latest|recent|\u6700\u65b0|\u65b0\u4f5c|\u6700\u65b0\u6b3e|\ucd5c\uc2e0)/i.test(x))pref("time","recent",7);
+  if(/(?:japan[- ]only|japan exclusive|\u65e5\u672c\u9650\u5b9a|\u56fd\u5185\u9650\u5b9a|\u65e5\u672c\u9650\u91cf|\uc77c\ubcf8\s*\ud55c\uc815)/i.test(x))pref("exclusivity","japan_exclusive",12);
+  if(/(?:limited|exclusive|\u9650\u5b9a|\u9650\u91cf|\ud55c\uc815)/i.test(x))pref("exclusivity","limited",9);
+  if(/(?:international shipping|ships overseas|worldwide shipping|\u6d77\u5916\u767a\u9001\u3057\u3084\u3059\u3044|\u6d77\u5916\u914d\u9001|\u56fd\u9645\u914d\u9001|\u570b\u969b\u914d\u9001|\ud574\uc678\ubc30\uc1a1)/i.test(x))pref("shipping","easy_overseas",8);
+  if(/(?:tiktok|instagram|youtube|\u0054\u0069\u006b\u0054\u006f\u006b\u3067\u898b\u305f|\u30a4\u30f3\u30b9\u30bf\u3067\u898b\u305f|\u0059\u006f\u0075\u0054\u0075\u0062\u0065\u3067\u898b\u305f)/i.test(x))pref("reference","social_seen",0);
+  return {franchises,characters,subtypes,preferences,priorities};
+}
+
+const MULTILINGUAL_MERCH_SUBTYPE_ALIASES={
+  tshirt:["t-shirt","t shirt","tshirt","tee","shirt","Tシャツ","ティーシャツ","T恤","短袖T恤","티셔츠","camiseta","tee-shirt","maglietta","футболка","футболку","تي شيرت","टी-शर्ट","टी शर्ट","เสื้อยืด","áo thun","ao thun","tişört","tisort","koszulka","koszulkę","kaos"],
+  hoodie:["hoodie","hooded sweatshirt","パーカー","连帽衫","連帽衫","후드티","sudadera con capucha","sweat à capuche","kapuzenpullover","felpa con cappuccio","moletom com capuz","худи","هودي","हुडी","เสื้อฮู้ด","áo hoodie","ao hoodie","kapüşonlu","kapusonlu","bluza z kapturem"],
+  jacket:["jacket","ジャケット","夹克","夾克","재킷","chaqueta","veste","jacke","giacca","jaqueta","куртка","سترة","जैकेट","เสื้อแจ็กเก็ต","áo khoác","ceket","jas","kurtka","jaket"],
+  sweatshirt:["sweatshirt","sweat","スウェット","卫衣","衛衣","맨투맨","sudadera","sweat-shirt","felpa","moletom","свитшот","سويت شيرت","स्वेटशर्ट","เสื้อสเวตเชิ้ต","áo nỉ","sweatshirt","bluza","sweater"],
+  swimsuit:["swimsuit","one-piece swimsuit","bathing suit","水着","ワンピース水着","泳衣","泳裝","수영복","bañador","maillot de bain","badeanzug","costume da bagno","maiô","купальник","ملابس سباحة","स्विमसूट","ชุดว่ายน้ำ","đồ bơi","mayo","badpak","strój kąpielowy","baju renang"]
+};
+function merchSubtypeHints(query=""){
+  // Start with the ASCII-safe multilingual fallback so Cloudflare copy/deploy
+  // encoding can never disable CJK/Arabic/Indic/Thai/Vietnamese/Turkish/Polish
+  // merchandise subtype recognition. Human-readable aliases remain a secondary layer.
+  const safe=asciiSafeUnicodeIntentFallback(query).subtypes||[];
+  const normalized=normalizedSearchPhrase(query),out=[...safe];
+  for(const [subtype,aliases] of Object.entries(MULTILINGUAL_MERCH_SUBTYPE_ALIASES))if(aliases.some(a=>strictEntityAliasMatch(normalized,a)))out.push(subtype);
+  return [...new Set(out)];
+}
+function onePieceQueryContext(raw="",productTypes=[],merchSubtypes=[],characterGroups=[]){
+  const text=String(raw||"");
+  const n=normalizedSearchPhrase(text);
+  // ASCII-safe garment override MUST run before franchise/title fallback.
+  // This protects Japanese ordinary clothing queries such as "summer one-piece dress"
+  // from being re-promoted to the ONE PIECE franchise later in the pipeline.
+  const explicitGarmentOnly=/(?:\u590f\u7528|\u30b5\u30de\u30fc|\u30ef\u30f3\u30d4\u30fc\u30b9\s*(?:\u670d|\u30c9\u30ec\u30b9|\u6c34\u7740|\u30b3\u30fc\u30c7|\u30b9\u30bf\u30a4\u30eb)|one[- ]piece\s+(?:dress|swimsuit|bathing suit)|(?:dress|swimsuit|bathing suit)\s+one[- ]piece)/i.test(text)||merchSubtypes.includes("swimsuit");
+  if(explicitGarmentOnly)return {mentioned:true,franchise:false,reason:"garment_context"};
+  const characterImpliesOnePiece=characterGroups.some(g=>g.franchise==="ONE PIECE");
+  const hasAlias=(MULTILINGUAL_FRANCHISE_ALIASES["ONE PIECE"]||[]).some(a=>strictEntityAliasMatch(n,a))||/(?:one\s*piece|\u30ef\u30f3\u30d4\u30fc\u30b9|\u6d77\u8d3c\u738b|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\uc6d0\ud53c\uc2a4|\u0432\u0430\u043d\s*\u043f\u0438\u0441|\u0648\u0646\s*\u0628\u064a\u0633|\u0648\u0627\u0646\s*\u0628\u064a\u0633|\u0935\u0928\s*\u092a\u0940\u0938|\u0e27\u0e31\u0e19\u0e1e\u0e35\u0e0b)/i.test(text);
+  if(!hasAlias&&!characterImpliesOnePiece)return {mentioned:false,franchise:false,reason:"not_mentioned"};
+  const strongFranchise=characterImpliesOnePiece||/(?:海賊王|海贼王|航海王|원피스|ون\s*بيس|وان\s*بيس|ван\s*пис|वन\s*पीस|วันพีซ|anime|manga|アニメ|漫画|マンガ|ルフィ|ゾロ|サンジ|ナミ|チョッパー|ロビン|エース|シャンクス|luffy|zoro|sanji|nami|chopper|robin|ace|shanks)/i.test(text);
+  const explicitMerch=/(?:グッズ|goods|merch|merchandise|周辺|周邊|굿즈)/i.test(text)||merchSubtypes.some(x=>["tshirt","hoodie","jacket","sweatshirt"].includes(x))||productTypes.some(x=>["figure","plush","trading_card","model_kit","acrylic_goods","keychain","badge","lottery_prize","sneaker"].includes(x));
+  const garmentOnly=/(?:夏用|サマー|ドレス|ワンピース\s*(?:服|ドレス|水着|コーデ|スタイル)|one[- ]piece\s+(?:dress|swimsuit|bathing suit)|(?:dress|swimsuit|bathing suit)\s+one[- ]piece|robe\s+une\s+pi[eè]ce|vestido\s+de\s+una\s+pieza|einteiliger\s+badeanzug|abito\s+intero|mai[oô]\s+inteiro)/i.test(text)||merchSubtypes.includes("swimsuit");
+  if(strongFranchise||explicitMerch)return {mentioned:true,franchise:true,reason:strongFranchise?"strong_franchise_signal":"merchandise_context"};
+  if(garmentOnly)return {mentioned:true,franchise:false,reason:"garment_context"};
+  if(/ワンピース/i.test(text)&&!/[A-Za-z]/.test(text))return {mentioned:true,franchise:false,reason:"bare_japanese_ambiguous"};
+  return {mentioned:true,franchise:true,reason:"title_phrase_default"};
+}
+function candidateMatchesMerchSubtype(p,subtypes=[]){
+  if(!subtypes?.length)return true;
+  const text=normalizedSearchPhrase([discoveryTitle(p),p?.product_type,p?.series,p?.brand].filter(Boolean).join(" "));
+  return subtypes.some(st=>(MULTILINGUAL_MERCH_SUBTYPE_ALIASES[st]||[]).some(a=>strictEntityAliasMatch(text,a)));
+}
+
+const MULTILINGUAL_AMBIGUOUS_PREFERENCE_RULES=[
+  {facet:"color",value:"red",weight:8,aliases:["red","赤","赤い","红色","紅色","빨간","rojo","rouge","rot","rosso","vermelho","красн","أحمر","लाल","แดง","đỏ","kırmızı","rood","czerwony","merah"]},
+  {facet:"color",value:"black",weight:8,aliases:["black","黒","黒い","黑色","검정","negro","noir","schwarz","nero","preto","черн","أسود","काला","ดำ","đen","siyah","zwart","czarny","hitam"]},
+  {facet:"color",value:"white",weight:8,aliases:["white","白","白い","白色","흰색","blanco","blanc","weiss","weiß","bianco","branco","бел","أبيض","सफेद","ขาว","trắng","beyaz","wit","biały","putih"]},
+  {facet:"size",value:"large",weight:8,aliases:["large","big","huge","oversized","大型","大きい","大きくて","大きな","大き","でかい","ビッグ","大号","大的","很大","크고","큰","대형","grande","grand","groß","больш","كبير","बड़ा","ใหญ่","lớn","büyük","groot","duży","besar"]},
+  {facet:"size",value:"small",weight:8,aliases:["small","mini","tiny","compact","小さい","小さくて","小さな","小さ","ミニ","コンパクト","小型","迷你","小的","작고","작은","미니","pequeño","petit","klein","piccolo","pequeno","маленьк","صغير","छोटा","เล็ก","nhỏ","küçük","mały","kecil"]},
+  {facet:"style",value:"cute",weight:10,aliases:["cute","kawaii","adorable","かわいい","可愛い","可爱","可愛","귀여운","bonito","mignon","süß","carino","fofo","мил","لطيف","क्यूट","น่ารัก","dễ thương","sevimli","schattig","słodki","lucu"]},
+  {facet:"style",value:"cool",weight:10,aliases:["cool","badass","stylish","かっこいい","格好いい","クール","帅","帥","멋진","guay","fico","legal","круто","رائع","कूल","เท่","ngầu","havalı","stoer","fajny","keren"]},
+  {facet:"style",value:"premium",weight:10,aliases:["premium","high end","luxury","高級","豪華","ハイエンド","高级","고급","lujo","haut de gamme","lusso","премиум","فاخر","प्रीमियम","พรีเมียม","cao cấp"]},
+  {facet:"use_case",value:"gift",weight:12,aliases:["gift","present","birthday gift","プレゼント","ギフト","贈り物","誕生日","礼物","禮物","선물","regalo","cadeau","geschenk","подарок","هدية","उपहार","ของขวัญ","quà tặng","hediye","prezent","hadiah"]},
+  {facet:"use_case",value:"display",weight:9,aliases:["display","desk","shelf","room decoration","飾る","飾れる","部屋に飾る","部屋に飾れる","机に置く","展示","摆件","擺設","장식","전시","decorar","décoration","deko","decorazione","decoração","декор","عرض","डिस्प्ले","ตกแต่ง","trưng bày","dekor","decoratie","dekoracja","pajangan"]},
+  {facet:"use_case",value:"child",weight:10,aliases:["for a child","for kids","kid friendly","子供向け","こども向け","キッズ","儿童","兒童","아이용","para niños","pour enfant","für kinder","per bambini","para criança","для детей","للأطفال","बच्चों","สำหรับเด็ก","trẻ em","çocuk","kinderen","dla dziecka","anak"]},
+  {facet:"condition",value:"new",weight:10,aliases:["brand new","new","新品","未使用","全新","새상품","nuevo","neuf","neu","nuovo","novo","новый","جديد","नया","ใหม่","mới","yeni","nieuw","nowy","baru"]},
+  {facet:"condition",value:"sealed",weight:10,aliases:["sealed","unopened","factory sealed","未開封","未拆封","미개봉","sellado","scellé","versiegelt","sigillato","lacrado","запечатан","مختوم","सीलबंद","ยังไม่แกะ","chưa mở","açılmamış","ongeopend","nieotwierany","segel"]},
+  {facet:"condition",value:"used",weight:10,aliases:["used","preowned","pre-owned","second hand","中古","二手","중고","usado","occasion","gebraucht","usato","б/у","مستعمل","पुराना","มือสอง","đã qua sử dụng","ikinci el","tweedehands","używany","bekas"]},
+  {facet:"availability",value:"preorder",weight:9,aliases:["preorder","pre-order","reservation","予約","予約品","预售","預購","예약","preventa","précommande","vorbestellung","preordine","pré-venda","предзаказ","طلب مسبق","प्रीऑर्डर","พรีออเดอร์","đặt trước","ön sipariş","przedsprzedaż"]},
+  {facet:"availability",value:"in_stock",weight:9,aliases:["in stock","available now","ready to ship","在庫あり","即納","現貨","现货","재고 있음","en stock","disponible","auf lager","em estoque","в наличии","متوفر","स्टॉक में","พร้อมส่ง","có sẵn","stokta","op voorraad","dostępny","ready stock"]},
+  {facet:"exclusivity",value:"limited",weight:10,aliases:["limited","exclusive","limited edition","限定","限定版","限量","한정","limitado","édition limitée","limitiert","edizione limitata","edição limitada","лимитирован","حصري","सीमित","ลิมิเต็ด","giới hạn","sınırlı","limitowany","terbatas"]},
+  {facet:"exclusivity",value:"japan_exclusive",weight:12,aliases:["japan exclusive","japan only","日本限定","国内限定","일본 한정","exclusivo de japón","exclusif japon","japan exklusiv","esclusiva giappone","exclusivo do japão","только япония","حصري لليابان","जापान एक्सक्लूसिव","ญี่ปุ่นเท่านั้น","độc quyền nhật","japonya özel","japan exclusief","tylko japonia","khusus jepang"]},
+  {facet:"time",value:"recent",weight:7,aliases:["latest","recent","newest","new release","最新","新作","最近","최신","nuevo lanzamiento","récent","neueste","recente","mais recente","новинка","أحدث","नया रिलीज़","ล่าสุด","mới nhất","yeni çıkan","nieuwste","najnowszy","terbaru"]},
+  {facet:"time",value:"older",weight:7,aliases:["old","older","vintage","retro","昔の","古い","旧版","예전","antiguo","ancien","alt","vecchio","antigo","старый","قديم","पुराना","เก่า","cũ","eski","oud","stary","lama"]},
+  {facet:"shipping",value:"easy_overseas",weight:8,aliases:["international shipping","ships overseas","worldwide shipping","海外発送しやすい","海外配送","国际配送","國際配送","해외배송","envío internacional","livraison internationale","internationaler versand","spedizione internazionale","envio internacional","международная доставка","شحن دولي","अंतरराष्ट्रीय शिपिंग","ส่งต่างประเทศ","giao hàng quốc tế","uluslararası kargo","internationale verzending","wysyłka międzynarodowa","pengiriman internasional"]},
+  {facet:"reference",value:"prior_seen",weight:0,aliases:["the one I saw before","the one I saw","前に見た","この前見た","以前見た","我之前看到的","전에 본","que vi antes","que j'ai vu","das ich gesehen habe","che ho visto","который я видел","الذي رأيته","जो मैंने देखा","ที่เคยเห็น","tôi đã thấy","daha önce gördüğüm","die ik zag","który widziałem","yang pernah saya lihat"]},
+  {facet:"reference",value:"social_seen",weight:0,aliases:["tiktok","instagram","youtube","TikTokで見た","インスタで見た","YouTubeで見た","抖音上看到","小红书看到","틱톡에서 본","vi en tiktok","vu sur tiktok","auf tiktok gesehen","visto su tiktok","видел в tiktok","رأيته على تيك توك","टिकटॉक पर देखा","เห็นใน tiktok","thấy trên tiktok","tiktok'ta gördüm","op tiktok gezien","widziałem na tiktoku","lihat di tiktok"]}
+];
+function ambiguousPreferenceHints(query=""){
+  const normalized=normalizedSearchPhrase(query),out=[];
+  for(const rule of MULTILINGUAL_AMBIGUOUS_PREFERENCE_RULES){
+    if(rule.aliases.some(a=>strictEntityAliasMatch(normalized,a))&&!out.some(x=>x.facet===rule.facet&&x.value===rule.value))out.push({facet:rule.facet,value:rule.value,weight:rule.weight});
+  }
+  return out;
+}
+function intentContextRequirements(preferences=[]){
+  const req=[];
+  if(preferences.some(x=>x.facet==="reference"&&x.value==="prior_seen"))req.push("prior_visual_or_conversation_reference_not_supplied");
+  if(preferences.some(x=>x.facet==="reference"&&x.value==="social_seen"))req.push("social_post_image_or_url_not_supplied");
+  return req;
+}
+function preferenceText(p){return normalizedSearchPhrase([discoveryTitle(p),p?.franchise,p?.series,p?.brand,p?.manufacturer,p?.product_type,p?.product_status,JSON.stringify(p?.metadata||{})].filter(Boolean).join(" "));}
+function candidatePreferenceFit(p,preferences=[]){
+  const text=preferenceText(p),type=String(discoveryEffectiveType(p)||""),matched=[],unknown=[];let score=0;
+  const releaseRaw=p?.original_release_date||p?.metadata?.latest_official_schedule_date||p?.metadata?.calendar?.date||"";const t=Date.parse(releaseRaw);const days=Number.isFinite(t)?Math.abs(Date.now()-t)/86400000:null;
+  for(const pref of preferences||[]){let ok=false;
+    if(pref.facet==="color")ok=phraseIncludes(text,pref.value)||({red:/赤|red|rouge|rojo|rosso|rot|vermelho|красн|أحمر|लाल|แดง|đỏ|kırmızı|rood|czerw|merah/,black:/黒|black|noir|negro|schwarz|nero|preto|черн|أسود|काला|ดำ|đen|siyah|zwart|czarn|hitam/,white:/白|white|blanc|blanco|weiss|weiß|bianco|branco|бел|أبيض|सफेद|ขาว|trắng|beyaz|wit|biały|putih/}[pref.value]||/$a/).test(text);
+    else if(pref.facet==="size"&&pref.value==="large"){
+      const raw=String(discoveryTitle(p)||"").normalize("NFKC");
+      const cms=[...raw.matchAll(/(\d+(?:\.\d+)?)\s*cm/ig)].map(m=>Number(m[1])).filter(Number.isFinite);
+      const maxCm=cms.length?Math.max(...cms):0;
+      ok=/(?:^|[^a-z0-9])(?:large|big|huge|oversized|xl|xxl)(?:$|[^a-z0-9])|\u5927\u578b|\u5927\u304d\u3044|\u30d3\u30c3\u30b0|\u7279\u5927|\u8d85\u7279\u5927|\u5927\u5c3a\u5bf8|\ud070|\ub300\ud615|grande|grand|gro\u00df|\u0431\u043e\u043b\u044c\u0448|\u0643\u0628\u064a\u0631|\u0e43\u0e2b\u0e0d\u0e48|l\u1edbn|b\u00fcy\u00fck|groot|du\u017cy|besar/i.test(raw)||/1\s*\/\s*1/.test(raw)||maxCm>=30;
+    }
+    else if(pref.facet==="size"&&pref.value==="small"){
+      const raw=String(discoveryTitle(p)||"").normalize("NFKC");
+      const cms=[...raw.matchAll(/(\d+(?:\.\d+)?)\s*cm/ig)].map(m=>Number(m[1])).filter(Number.isFinite);
+      const maxCm=cms.length?Math.max(...cms):0;
+      ok=/(?:^|[^a-z0-9])(?:small|mini|tiny|compact|xs|s)(?:$|[^a-z0-9])|\u5c0f\u3055\u3044|\u30df\u30cb|\u30b3\u30f3\u30d1\u30af\u30c8|\u5c0f\u578b|\u8ff7\u4f60|\uc791\uc740|\ubbf8\ub2c8|peque\u00f1o|petit|klein|piccolo|\u043c\u0430\u043b\u0435\u043d\u044c\u043a|\u0635\u063a\u064a\u0631|\u0e40\u0e25\u0e47\u0e01|nh\u1ecf|k\u00fc\u00e7\u00fck|ma\u0142y|kecil/i.test(raw)||(maxCm>0&&maxCm<=15);
+    }
+    else if(pref.facet==="style"&&pref.value==="cute")ok=["nendoroid","plush"].includes(type)||/kawaii|cute|かわいい|可愛い|chibi|デフォルメ|可爱|귀여|mignon|süß|carino|fofo/i.test(text);
+    else if(pref.facet==="style"&&pref.value==="cool")ok=/cool|badass|stylish|かっこいい|クール|帅|멋진|havalı|stoer|keren/i.test(text);
+    else if(pref.facet==="style"&&pref.value==="premium"){
+      const msrp=Number(p?.msrp_jpy||0),title=String(discoveryTitle(p)||"");
+      const scalePremium=/(?:1\s*\/\s*(?:4|6)|1\/4|1\/6)/i.test(title);
+      const explicitPremium=/premium|deluxe|masterline|high[- ]?end|luxury|高級|豪華|prime 1|hot toys|アルター|スケールフィギュア/i.test(text);
+      ok=explicitPremium||scalePremium||msrp>=20000;
+    }
+    else if(pref.facet==="use_case"&&pref.value==="gift"){
+      const typeOk=["figure","nendoroid","figma","plush","acrylic_goods","keychain","badge"].includes(type);
+      const image=!!p?.official_image_url,stable=!!(cleanJan(p?.jan_code)||p?.official_url),iq=Number(marketIdentityQuality(p)||0);
+      const adult=/18\+|adult only|成人向け|アダルト/i.test(text);
+      const obviouslyNoisy=/ジャンク|部品取り|訳あり|破損|欠品|箱なし/i.test(text);
+      ok=typeOk&&!adult&&!obviouslyNoisy&&(image?1:0)+(stable?1:0)+(iq>=55?1:0)>=2;
+    }
+    else if(pref.facet==="use_case"&&pref.value==="display")ok=["figure","nendoroid","figma","model_kit","acrylic_goods","plush"].includes(type);
+    else if(pref.facet==="use_case"&&pref.value==="child")ok=["plush","keychain","figure"].includes(type)&&!/18\+|adult only|成人向け|アダルト/i.test(text);
+    else if(pref.facet==="condition"&&pref.value==="new")ok=/新品|未使用|brand new|\bnew\b|全新|새상품|nuevo|neuf|neu|nuovo|novo|новый|جديد|ใหม่|mới|yeni|nieuw|nowy|baru/i.test(text);
+    else if(pref.facet==="condition"&&pref.value==="sealed")ok=/未開封|sealed|unopened|factory sealed|未拆封|미개봉|sellado|scellé|versiegelt|sigillato|lacrado|запечатан|مختوم|सीलबंद/i.test(text);
+    else if(pref.facet==="condition"&&pref.value==="used")ok=/中古|used|pre[- ]?owned|second hand|二手|중고|usado|occasion|gebraucht|usato|б\/у|مستعمل|มือสอง|ikinci el|tweedehands|używany|bekas/i.test(text);
+    else if(pref.facet==="availability"&&pref.value==="preorder")ok=String(p?.product_status||"").toLowerCase()==="preorder"||/予約|pre[- ]?order|预售|預購|예약|précommande|vorbestellung|preordine|предзаказ/i.test(text);
+    else if(pref.facet==="availability"&&pref.value==="in_stock")ok=/在庫あり|即納|in stock|available now|現貨|现货|재고|en stock|auf lager|em estoque|в наличии|พร้อมส่ง|có sẵn|stokta|op voorraad/i.test(text);
+    else if(pref.facet==="exclusivity"&&pref.value==="limited")ok=/限定|limited|exclusive|限量|한정|édition limitée|limitiert|edizione limitata|лимитирован|حصري|सीमित|ลิมิเต็ด|giới hạn|sınırlı|limitowany|terbatas/i.test(text);
+    else if(pref.facet==="exclusivity"&&pref.value==="japan_exclusive")ok=/日本限定|国内限定|日本国内限定|japan exclusive|japan only|ONE PIECE BASE SHOP\s*Limited Edition|BASE SHOP\s*Limited Edition|麦わらストア(?:限定)?|ジャンプショップ(?:限定)?|JUMP SHOP(?:限定)?|東京ワンピースタワー(?:限定)?|USJ(?:限定)?|일본 한정|exclusivo de japón|exclusif japon|japan exklusiv|esclusiva giappone|только япония/i.test(text);
+    else if(pref.facet==="time"&&pref.value==="recent")ok=days!=null&&days<=365;
+    else if(pref.facet==="time"&&pref.value==="older"){
+      const currentYear=new Date().getUTCFullYear();
+      const years=[...String(discoveryTitle(p)||"").matchAll(/(?:^|[^0-9])((?:19|20)\d{2})(?:[^0-9]|$)/g)].map(m=>Number(m[1])).filter(Number.isFinite);
+      ok=(days!=null&&days>=730)||years.some(y=>y<=currentYear-2);
+    }
+    else if(pref.facet==="shipping"&&pref.value==="easy_overseas")ok=!!(p?.metadata?.ebay||p?.metadata?.market_sources?.ebay||p?.metadata?.international_shipping);
+    if(ok){score+=Number(pref.weight||0);matched.push(`${pref.facet}:${pref.value}`);}else if(pref.facet!=="reference")unknown.push(`${pref.facet}:${pref.value}`);
+  }
+  return {score,matched,unknown};
+}
+function listingNoiseScore(p){
+  const t=String(p?.canonical_name_ja||p?.canonical_name_en||"").normalize("NFKC");
+  let n=0;
+  const rules=[
+    [/送料無料|送料込み|返品種別|お取り寄せ|即納|在庫品|予約|発売予定|新品|中古|未開封|倉庫|佐賀|同梱不可|ポイント\d+倍/i,1],
+    [/\[[^\]]*(?:新品|中古|予約|送料無料|在庫)[^\]]*\]|【[^】]*(?:新品|中古|予約|送料無料|在庫)[^】]*】/i,1],
+    [/(?:Yahoo|楽天|Amazon|ショップ|ストア|店)$/i,1]
+  ];
+  for(const [re,w] of rules)if(re.test(t))n+=w;
+  return n;
+}
+function canonicalDisplayName(p){
+  let t=String(p?.canonical_name_ja||"").normalize("NFKC").trim();
+  t=t.replace(/^(?:送料無料\s*)+/i,"")
+     .replace(/^(?:【[^】]*(?:新品|中古|予約|送料無料|在庫|限定販売)[^】]*】\s*)+/i,"")
+     .replace(/^(?:\[[^\]]*(?:新品|中古|予約|送料無料|在庫)[^\]]*\]\s*)+/i,"")
+     .replace(/\s*(?:返品種別[A-Z]|同梱不可|《[^》]*(?:予約|発売済|在庫)[^》]*》)\s*$/i,"")
+     .replace(/\s+/g," ").trim();
+  return t||cleanNullableTitle(p?.canonical_name_ja);
+}
+function candidateKnownPriceJpy(p){
+  const nums=[];
+  const add=v=>{const n=Number(v);if(Number.isFinite(n)&&n>0)nums.push(n);};
+  add(p?.msrp_jpy);
+  const m=p?.metadata||{};
+  for(const k of ["price_jpy","current_price_jpy","lowest_price_jpy","best_price_jpy","market_price_jpy","median_price_jpy"])add(m[k]);
+  for(const o of registeredRakutenAffiliateOffers(p)||[])add(o?.price_jpy);
+  return nums.length?Math.min(...nums):null;
+}
+function budgetConstraintStatus(p,intent){
+  const budget=Number(intent?.budget?.jpy_equivalent||0);
+  if(!budget||!intent?.budget?.limit)return {required:false,known:false,ok:true,price_jpy:null,budget_jpy:budget||null};
+  const price=candidateKnownPriceJpy(p);
+  if(!Number.isFinite(price))return {required:true,known:false,ok:false,price_jpy:null,budget_jpy:budget};
+  return {required:true,known:true,ok:price<=budget,price_jpy:price,budget_jpy:budget};
+}
+function timingNeedsExactIdentity(path,intent,query){
+  if(path!=="/v1/buy-wait")return false;
+  const jan=cleanJan(query),hasModel=/[A-Z]{1,5}[-_ ]?\d{2,}/i.test(String(query||""));
+  return !jan&&!hasModel;
+}
+function intentUnderstandingConfidence(intent){
+  let v=.48,reasons=[];if(intent?.characters?.length){v+=.18;reasons.push("character_recognized");}if(intent?.franchises?.length){v+=.14;reasons.push("franchise_recognized");}if(intent?.product_types?.length){v+=.12;reasons.push("product_type_recognized");}if(intent?.merch_subtypes?.length){v+=.06;reasons.push("merch_subtype_recognized");}if(intent?.budget){v+=.05;reasons.push("budget_recognized");}if(intent?.preferences?.length){v+=Math.min(.08,intent.preferences.length*.02);reasons.push("soft_preferences_recognized");}if(intent?.context_requirements?.length){v-=.20;reasons.push("external_context_missing");}v=Math.max(.25,Math.min(.98,v));return {score:Math.round(v*100)/100,label:v>=.84?"high":v>=.65?"medium":"low",reasons};
+}
+function recommendationConfidenceFromRanked(ranked=[],intent=null){
+  const top=ranked?.[0],second=ranked?.[1];if(!top)return {score:0,label:"low",reasons:["no_candidate"]};let v=.48,reasons=[];if(top?.breakdown?.intent_compatibility?.ok){v+=.18;reasons.push("explicit_constraints_match");}const gap=second?Number(top.score||0)-Number(second.score||0):12;if(gap>=15){v+=.12;reasons.push("clear_score_margin");}else if(gap>=7){v+=.07;reasons.push("moderate_score_margin");}const iq=Number(top?.product?.identification_confidence||0);if(iq>=.9){v+=.08;reasons.push("high_identity_confidence");}const u=intentUnderstandingConfidence(intent);v+=Math.max(-.12,(u.score-.6)*.25);if(intent?.context_requirements?.length){v-=.18;reasons.push("missing_external_context");}v=Math.max(.2,Math.min(.97,v));return {score:Math.round(v*100)/100,label:v>=.82?"high":v>=.62?"medium":"low",score_gap:Math.round(gap*10)/10,reasons};
+}
+
+function multilingualQueryHints(query=""){
+  const raw=repairUtf8Mojibake(String(query||"").trim()),normalized=normalizedSearchPhrase(raw),productTypes=[],franchiseGroups=[],characterGroups=[],asciiFallback=asciiSafeUnicodeIntentFallback(raw);
+  for(const [type,aliases] of Object.entries(MULTILINGUAL_PRODUCT_TYPE_ALIASES))if(aliases.some(a=>phraseIncludes(raw,a)))productTypes.push(type);
+  for(const type of directMultilingualProductTypeHints(raw))if(!productTypes.includes(type))productTypes.push(type);
+  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES))if(aliases.some(a=>strictEntityAliasMatch(raw,a)))franchiseGroups.push({canonical,aliases});
+  for(const canonical of directMultilingualFranchiseHints(raw))if(!franchiseGroups.some(g=>g.canonical===canonical))franchiseGroups.push({canonical,aliases:MULTILINGUAL_FRANCHISE_ALIASES[canonical]||[canonical]});
+  for(const group of MULTILINGUAL_CHARACTER_ALIASES){
+    if(group.aliases.some(a=>strictEntityAliasMatch(normalized,a))){
+      characterGroups.push(group);
+      if(group.franchise&&!franchiseGroups.some(g=>g.canonical===group.franchise))franchiseGroups.push({canonical:group.franchise,aliases:MULTILINGUAL_FRANCHISE_ALIASES[group.franchise]||[group.franchise]});
+    }
+  }
+  for(const c of asciiFallback.characters){const g=MULTILINGUAL_CHARACTER_ALIASES.find(x=>x.character===c);if(g&&!characterGroups.some(x=>x.character===c))characterGroups.push(g);}
+  for(const f of asciiFallback.franchises)if(!franchiseGroups.some(g=>g.canonical===f))franchiseGroups.push({canonical:f,aliases:MULTILINGUAL_FRANCHISE_ALIASES[f]||[f]});
+  const merchSubtypes=[...new Set([...merchSubtypeHints(raw),...asciiFallback.subtypes])];
+  // Merch subtype recognition is more robust than language-specific apparel words.
+  // Always promote a recognized apparel subtype to product_type=apparel so that
+  // Vietnamese/Turkish/Polish/Indic/etc. cannot lose the category after deployment.
+  if(merchSubtypes.some(x=>["tshirt","hoodie","jacket","sweatshirt","swimsuit"].includes(x))&&!productTypes.includes("apparel"))productTypes.push("apparel");
+  let onePieceContext=onePieceQueryContext(raw,productTypes,merchSubtypes,characterGroups);
+  const asciiSafeOnePiece=asciiFallback.franchises.includes("ONE PIECE");
+  // If the ASCII-safe multilingual fallback has already established ONE PIECE from
+  // a strong non-Latin franchise signal, do not let the secondary ambiguity pass
+  // erase it. Japanese garment-only ワンピース never sets asciiSafeOnePiece.
+  if(asciiSafeOnePiece&&!onePieceContext.franchise)onePieceContext={mentioned:true,franchise:true,reason:"ascii_safe_franchise_signal"};
+  if(!onePieceContext.franchise){for(let i=franchiseGroups.length-1;i>=0;i--)if(franchiseGroups[i].canonical==="ONE PIECE")franchiseGroups.splice(i,1);}
+  let residual=` ${normalized} `;
+  const removable=[...MULTILINGUAL_GENERIC_TERMS,...Object.values(MULTILINGUAL_PRODUCT_TYPE_ALIASES).flat()];
+  for(const term of removable){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
+  for(const g of franchiseGroups)for(const term of g.aliases){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
+  for(const g of characterGroups)for(const term of g.aliases){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
+  const residualTerms=[...new Set(residual.replace(/\s+/g," ").trim().split(" ").filter(x=>x.length>=2))].slice(0,4);
+  const generic_intent=GLOBAL_VAGUE_INTENT_TERMS.some(t=>phraseIncludes(normalized,t))||MULTILINGUAL_GENERIC_TERMS.some(t=>normalizedSearchPhrase(t)===normalized);
+  return {language:detectSearchLanguage(raw),product_types:[...new Set(productTypes)],franchises:franchiseGroups.map(g=>g.canonical),franchise_aliases:[...new Set(franchiseGroups.flatMap(g=>g.aliases))].slice(0,12),characters:characterGroups.map(g=>g.character),character_aliases:[...new Set(characterGroups.flatMap(g=>g.aliases))].slice(0,12),merch_subtypes:merchSubtypes,one_piece_context:onePieceContext,residual_terms:residualTerms,ambiguous_category_search:productTypes.length>0&&franchiseGroups.length===0&&characterGroups.length===0&&residualTerms.length===0,generic_intent};
+}
+function safeSearchTerm(v){return String(v||"").replace(/[,%()]/g," ").replace(/\s+/g," ").trim().slice(0,80);}
+function mergeUniqueProducts(groups=[],limit=10){const out=[],seen=new Set();for(const rows of groups){for(const p of (Array.isArray(rows)?rows:[])){if(!p?.id||seen.has(p.id))continue;seen.add(p.id);out.push(p);if(out.length>=limit)return out;}}return out;}
+
+function cleanNullishValue(v){const s=String(v??"").trim();return !s||s.toLowerCase()==="null"||s.toLowerCase()==="undefined"?null:v;}
+function cleanNullableTitle(v){const x=cleanNullishValue(v);return x===null?null:cleanOfficialTitle(x);}
+function discoveryTitle(p){return `${cleanNullishValue(p?.canonical_name_ja)||""} ${cleanNullishValue(p?.canonical_name_en)||""}`.trim();}
+function discoveryClassifier(p){return classifyProduct(discoveryTitle(p));}
+const DISCOVERY_FRANCHISE_HINTS=[
+  ["JoJo's Bizarre Adventure",["\u30b8\u30e7\u30b8\u30e7\u306e\u5947\u5999\u306a\u5192\u967a","jojo","steel ball run","\u30b9\u30c6\u30a3\u30fc\u30eb\u30fb\u30dc\u30fc\u30eb\u30fb\u30e9\u30f3"]],
+  ["Rurouni Kenshin",["\u308b\u308d\u3046\u306b\u5263\u5fc3","rurouni kenshin"]],
+  ["Monster Hunter",["monster hunter","\u30e2\u30f3\u30b9\u30bf\u30fc\u30cf\u30f3\u30bf\u30fc","\u602a\u7269\u730e\u4eba","\u602a\u7269\u7375\u4eba"]],
+  ["Sword Art Online",["sword art online","\u30bd\u30fc\u30c9\u30a2\u30fc\u30c8\u30fb\u30aa\u30f3\u30e9\u30a4\u30f3","sao"]],
+  ["Chainsaw Man",["chainsaw man","\u30c1\u30a7\u30f3\u30bd\u30fc\u30de\u30f3","\u94fe\u952f\u4eba","\u93c8\u92f8\u4eba"]],
+  ["Blue Lock",["blue lock","\u30d6\u30eb\u30fc\u30ed\u30c3\u30af"]],
+  ["Spy x Family",["spy x family","spy\u00d7family","\u30b9\u30d1\u30a4\u30d5\u30a1\u30df\u30ea\u30fc"]],
+  ["Oshi no Ko",["oshi no ko","\u3010\u63a8\u3057\u306e\u5b50\u3011","\u63a8\u3057\u306e\u5b50"]],
+  ["Re:ZERO",["re:zero","re zero","\u30ea\u30bc\u30ed"]],
+  ["Puella Magi Madoka Magica",["madoka magica","\u9b54\u6cd5\u5c11\u5973\u307e\u3069\u304b\u2606\u30de\u30ae\u30ab","\u307e\u3069\u30de\u30ae"]],
+  ["Pretty Cure",["pretty cure","precure","\u30d7\u30ea\u30ad\u30e5\u30a2"]]
+];
+function titleLooksLikeGarmentOnePiece(rawTitle=""){
+  const raw=String(rawTitle||"").normalize("NFKC");
+  // "one-piece / ワンピース" is also an ordinary clothing term. Fashion cues must win
+  // over a stored ONE PIECE franchise label unless a real character/IP cue is present.
+  return /(?:\u79c1\u670d|\u8863\u88c5|\u6d0b\u670d|\u30c9\u30ec\u30b9|\u6c34\u7740|\u30dc\u30c7\u30a3\u30b9\u30fc\u30c4|\u30b5\u30a4\u30af\u30eb|\u30bb\u30d1\u30ec\u30fc\u30c8|\u30ec\u30c7\u30a3\u30fc\u30b9|\u30a6\u30a3\u30e1\u30f3|\u30d5\u30a1\u30c3\u30b7\u30e7\u30f3|\u304a\u6d12\u843d|bodysuit|dress|swimsuit|cycling|fashion|ladies|women(?:'s)?|two[- ]piece|one[- ]piece\s*(?:dress|gown|skirt|style|fashion)|\u30ef\u30f3\u30d4\u30fc\u30b9\s*(?:ver\.?|version|\u30d0\u30fc\u30b8\u30e7\u30f3|\u670d|\u30b9\u30bf\u30a4\u30eb|\u30b3\u30fc\u30c7)|(?:\u30b5\u30de\u30fc|\u30ab\u30b8\u30e5\u30a2\u30eb|\u304a\u3067\u304b\u3051).*\u30ef\u30f3\u30d4\u30fc\u30b9)/i.test(raw);
+}
+function titleInferredDiscoveryFranchise(p){
+  const rawTitle=discoveryTitle(p),title=normalizedSearchPhrase(rawTitle);
+  // Prefer explicit franchise names such as SPY x FAMILY before broad aliases that can also be ordinary Japanese words.
+  for(const [canonical,aliases] of DISCOVERY_FRANCHISE_HINTS)if(aliases.some(a=>phraseIncludes(title,a)))return canonical;
+  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES)){
+    if(canonical==="ONE PIECE"&&titleLooksLikeGarmentOnePiece(rawTitle)){
+      const explicit=/one\s*piece|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\u30eb\u30d5\u30a3|\u9ea6\u308f\u3089/i.test(rawTitle);
+      if(!explicit)continue;
+    }
+    if(aliases.some(a=>phraseIncludes(title,a)))return canonical;
+  }
+  return null;
+}
+function storedDiscoveryFranchiseIsFalsePositive(p,stored){
+  const f=String(stored||"").trim(),title=String(cleanNullishValue(p?.canonical_name_ja)||"");
+  if(f.toUpperCase()==="ONE PIECE"){
+    const strongIp=/(?:\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\u30eb\u30d5\u30a3|\u30be\u30ed|\u30b5\u30f3\u30b8|\u30ca\u30df|\u30c1\u30e7\u30c3\u30d1\u30fc|\u30ed\u30d3\u30f3|\u30a8\u30fc\u30b9|\u30b7\u30e3\u30f3\u30af\u30b9|\u9ea6\u308f\u3089|monkey\s*d\.?\s*luffy|roronoa\s*zoro)/i.test(title);
+    const garment=titleLooksLikeGarmentOnePiece(title);
+    if(garment&&!strongIp)return true;
+  }
+  return false;
+}
+function inferredDiscoveryFranchise(p){
+  const stored=cleanNullishValue(p?.franchise);
+  if(stored&&!storedDiscoveryFranchiseIsFalsePositive(p,stored))return stored;
+  return titleInferredDiscoveryFranchise(p);
+}
+function broadDiscoveryEligible(p){
+  if(!p?.id)return false;
+  const quality=Number(marketIdentityQuality(p)||0),stored=String(p.product_type||""),cls=discoveryClassifier(p),franchise=discoverySafeFranchise(p),title=normalizedSearchPhrase(discoveryTitle(p));
+  if(quality<30)return false;
+  if(/(?:\bcd\b|dvd|blu[ -]?ray|soundtrack|\u30b5\u30f3\u30c8\u30e9|\u521d\u56de\u751f\u7523\u9650\u5b9a\u76e4)/i.test(title)&&!franchise)return false;
+  // Apparel and sneakers are noisy marketplace categories. Broad discovery only keeps them when a recognizable character/IP is present.
+  if((stored==="apparel"||stored==="sneaker")&&!franchise)return false;
+  if((stored==="apparel"||stored==="sneaker")&&/(?:cosplay|\u30b3\u30b9\u30d7\u30ec|\u4eee\u88c5|\u8863\u88c5\s*(?:\u30a6\u30a3\u30c3\u30b0|\u9774)|halloween)/i.test(title))return false;
+  if((stored==="apparel"||stored==="sneaker")&&cls.type==="other"&&!franchise)return false;
+  if(cls.confidence>=.94&&cls.type!=="other"&&stored&&cls.type!==stored&&!["figure","nendoroid","figma"].includes(stored))return false;
+  return true;
+}
+function broadDiscoveryScore(p){
+  let score=Number(marketIdentityQuality(p)||0);const cls=discoveryClassifier(p),stored=String(p?.product_type||"");
+  if(cleanNullishValue(p?.franchise))score+=12;
+  if(cleanNullishValue(p?.canonical_name_en))score+=8;
+  if(p?.official_url)score+=6;
+  if(p?.official_image_url)score+=6;
+  if(p?.jan_code)score+=4;
+  if(p?.original_release_date)score+=3;
+  if(p?.msrp_jpy)score+=2;
+  if(cls.type===stored&&cls.confidence>=.94)score+=10;
+  if(cls.confidence>=.94&&cls.type!=="other"&&stored&&cls.type!==stored)score-=25;
+  return score;
+}
+function discoveryEffectiveType(p){const cls=discoveryClassifier(p),stored=String(p?.product_type||"other");return cls.confidence>=.94&&cls.type!=="other"?cls.type:stored;}
+function discoverySafeFranchise(p){
+  const f=cleanNullishValue(p?.franchise);
+  if(f&&!storedDiscoveryFranchiseIsFalsePositive(p,f))return f;
+  return titleInferredDiscoveryFranchise(p);
+}
+function diversifyBroadDiscoveryProducts(rows=[],limit=10){
+  const ranked=[...(Array.isArray(rows)?rows:[])].filter(broadDiscoveryEligible).sort((a,b)=>broadDiscoveryScore(b)-broadDiscoveryScore(a));
+  const out=[],seenIds=new Set(),seenTypes=new Set(),seenFranchises=new Set(),franchiseCounts=new Map();
+  const add=p=>{if(!p?.id||seenIds.has(p.id))return false;const t=discoveryEffectiveType(p),f=discoverySafeFranchise(p),fk=normalizedSearchPhrase(f||"");seenIds.add(p.id);seenTypes.add(t);if(fk){seenFranchises.add(fk);franchiseCounts.set(fk,(franchiseCounts.get(fk)||0)+1);}out.push(p);return true;};
+  // Pass 1: maximize both category and IP diversity. Do not spend several category slots on one franchise.
+  for(const p of ranked){const t=discoveryEffectiveType(p),f=discoverySafeFranchise(p),fk=normalizedSearchPhrase(f||"");if(seenTypes.has(t))continue;if(fk&&seenFranchises.has(fk))continue;add(p);if(out.length>=limit)return out;}
+  // Pass 2: add unseen franchises even when the product category repeats.
+  for(const p of ranked){if(seenIds.has(p.id))continue;const fk=normalizedSearchPhrase(discoverySafeFranchise(p)||"");if(!fk||seenFranchises.has(fk))continue;add(p);if(out.length>=limit)return out;}
+  // Pass 3: fill missing product categories, but cap any one franchise at two results.
+  for(const p of ranked){if(seenIds.has(p.id))continue;const t=discoveryEffectiveType(p),fk=normalizedSearchPhrase(discoverySafeFranchise(p)||"");if(seenTypes.has(t))continue;if(fk&&(franchiseCounts.get(fk)||0)>=2)continue;add(p);if(out.length>=limit)return out;}
+  // Pass 4: quality fill with a hard two-result cap per franchise to prevent JoJo/Pokemon/etc. domination.
+  for(const p of ranked){if(seenIds.has(p.id))continue;const fk=normalizedSearchPhrase(discoverySafeFranchise(p)||"");if(fk&&(franchiseCounts.get(fk)||0)>=2)continue;add(p);if(out.length>=limit)return out;}
+  // Last resort only if the catalog slice is unusually narrow.
+  for(const p of ranked){if(seenIds.has(p.id))continue;add(p);if(out.length>=limit)return out;}
+  return out;
+}
+async function broadCatalogDiscovery(env,limit=10){
+  const clusters=[
+    "figure,nendoroid,figma,model_kit",
+    "plush,trading_card",
+    "acrylic_goods,keychain,badge,lottery_prize",
+    "sneaker,apparel"
+  ];
+  const groups=[];
+  for(const cluster of clusters){
+    const rows=await sbOptional(env,`/products?select=*&product_type=in.(${cluster})&official_image_url=not.is.null&limit=160`);
+    groups.push(Array.isArray(rows)?rows:[]);
+  }
+  return diversifyBroadDiscoveryProducts(groups.flat(),limit);
+}
+
+/* =========================================================
+   PRODUCT SEARCH
+========================================================= */
+
+
+function canonicalizeDiscoveryFranchise(v){
+  const n=normalizedSearchPhrase(v);
+  if(!n)return null;
+  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES)){
+    if(normalizedSearchPhrase(canonical)===n||aliases.some(a=>normalizedSearchPhrase(a)===n))return canonical;
+  }
+  return String(v||"").trim()||null;
+}
+function discoveryTypeMatchesHint(actual,hint){
+  const a=String(actual||"").toLowerCase(),h=String(hint||"").toLowerCase();
+  if(!a||!h)return false;
+  if(a===h)return true;
+  const equivalents=new Set((PRODUCT_TYPE_SEARCH_EQUIVALENTS[h]||[h]).map(x=>String(x).toLowerCase()));
+  return equivalents.has(a);
+}
+function discoveryProductFitScore(p,hints,query=""){
+  let score=broadDiscoveryScore(p);
+  const actualType=discoveryEffectiveType(p),actualFranchise=canonicalizeDiscoveryFranchise(discoverySafeFranchise(p));
+  const wantedTypes=hints?.product_types||[],wantedFranchises=(hints?.franchises||[]).map(canonicalizeDiscoveryFranchise),wantedCharacters=hints?.characters||[];
+  if(wantedTypes.length)score+=wantedTypes.some(t=>discoveryTypeMatchesHint(actualType,t))?140:-220;
