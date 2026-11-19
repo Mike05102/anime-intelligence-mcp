@@ -1,0 +1,49 @@
+--- a/GPD32_FINAL_SINGLE_DEPLOY.js
++++ b/GPD32_FINAL_SINGLE_DEPLOY.js
+@@ -5,7 +5,7 @@
+ const VERSION="32.0.0";
+ const PLATFORM_NAME="GLOBAL PURCHASE DECISION";
+ const PLATFORM_PRODUCT="UNIVERSAL PURCHASE DECISION ENGINE";
+-const BUILD_ID="20261116-3200-agent-onboarding-verified-a1";
++const BUILD_ID="20261119-3201-jan-owner-reconciliation-a1";
+@@ -6309,15 +6309,37 @@
+             const matches=await sb(env,`/products?select=id,source_product_key,canonical_name_ja,canonical_name_en,manufacturer,metadata&source_product_key=eq.${encodeURIComponent(key)}&limit=2`);
+             if(!Array.isArray(matches))throw new Error("canonical_lookup_not_array");
+             if(matches.length>1){canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:["duplicate_source_key_in_database"]});continue;}
+-            const prior=matches[0]||null;
++            let prior=matches[0]||null;
++            // A GTIN/JAN can already belong to a product imported under a different source key.
++            // Resolve that unique owner BEFORE INSERT, otherwise PostgreSQL raises 23505/409.
++            // Never overwrite an existing product's source key or merge conflicting identities.
++            let matchedByJan=false;
++            if(row.jan_code){
++              const janMatches=await sb(env,`/products?select=id,source_product_key,jan_code,canonical_name_ja,canonical_name_en,manufacturer,metadata&jan_code=eq.${encodeURIComponent(row.jan_code)}&limit=2`);
++              if(!Array.isArray(janMatches))throw new Error("canonical_jan_lookup_not_array");
++              if(janMatches.length>1){canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:["duplicate_jan_in_database"]});continue;}
++              const janOwner=janMatches[0]||null;
++              if(janOwner){
++                if(prior&&String(prior.id)!==String(janOwner.id)){
++                  canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:["jan_and_source_key_resolve_to_different_products"]});continue;
++                }
++                if(!prior){prior=janOwner;matchedByJan=true;}
++              }
++            }
+             if(prior){
+               const assessment=canonicalConflictAssessment(prior,row);
+               if(assessment.conflict){canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:assessment.reasons});continue;}
+             }
+             const endpoint=prior?`/products?id=eq.${encodeURIComponent(prior.id)}`:"/products";
+-            const result=await sb(env,endpoint,{method:prior?"PATCH":"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(prior?{...row,metadata:{...(prior.metadata||{}),...(row.metadata||{})}}:row)});
++            const payload=prior?{...row,metadata:{...(prior.metadata||{}),...(row.metadata||{})}}:row;
++            if(matchedByJan){
++              // Existing canonical identity owns this JAN; preserve its stable key.
++              payload.source_product_key=prior.source_product_key;
++              promotionDiagnostics.jan_existing_reused=(promotionDiagnostics.jan_existing_reused||0)+1;
++            }
++            const result=await sb(env,endpoint,{method:prior?"PATCH":"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(payload)});
+             const saved=Array.isArray(result)?result:[];
+-            if(saved.length!==1||String(saved[0]?.source_product_key||"")!==key)throw new Error("canonical_write_not_confirmed");
++            if(saved.length!==1||String(saved[0]?.source_product_key||"")!==String(payload.source_product_key||""))throw new Error("canonical_write_not_confirmed");
+             confirmed.push(saved[0]);
+             if(!prior)insertedCount++;
+           }catch(e){
