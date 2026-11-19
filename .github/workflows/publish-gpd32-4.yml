@@ -1,0 +1,34 @@
+name: Publish GPD v32.4 provisional replay Worker
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-gpd32-4.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and validate complete Worker
+        run: |
+          python3 scripts/build_gpd32_4.py
+          node --check releases/GPD32_4_COMPLETE_WORKER.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('releases/GPD32_4_COMPLETE_WORKER.js').read_text()
+          assert 'const VERSION="32.4.0"' in s
+          assert 'provisional_replay:replayDiagnostics' in s
+          assert 'if(enrichmentDiagnostics.attempted>=5)break;' in s
+          assert 'const identityQueue=rotated.filter(o=>o._provisional_replay).slice(0,2)' in s
+          assert 'if(o._provisional_replay&&dg)o.evidence_score' in s
+          print('PASS: version, replay, bounded calls, evidence gates')
+          PY
+      - name: Publish complete Worker
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add releases/GPD32_4_COMPLETE_WORKER.js
+          git commit -m 'Publish complete GPD v32.4 provisional replay Worker'
+          git push
