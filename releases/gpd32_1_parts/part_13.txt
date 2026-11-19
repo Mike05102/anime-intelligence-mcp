@@ -1,0 +1,67 @@
+            preflight,
+            worker_metadata_live:{
+              openapi:`${origin}/openapi.json`,
+              mcp:`${origin}/mcp`,
+              x402:`${origin}/.well-known/x402`,
+              x402_bazaar:`${origin}/.well-known/x402-bazaar`,
+              mcp_well_known:`${origin}/.well-known/mcp.json`,
+              ai_plugin:`${origin}/.well-known/ai-plugin.json`,
+              llms:`${origin}/llms.txt`
+            },
+            index402,
+            agent402,
+            note:`v${VERSION} agent-selection metadata is live immediately. This action re-registers 402 Index and submits Agent402 origin registration. Coinbase Bazaar can recrawl the x402 resource metadata; external directories that store manually submitted copy may still require their own listing edit. Official MCP Registry requires publishing the matching GitHub server.json version.`
+          });
+        }
+        if(url.pathname==="/admin/402index/register"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,directory:"402 Index",results:await register402Index(origin)});
+        if(url.pathname==="/admin/official-mass-patrol"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,official_mass_patrol:await patrolOfficialMassFeeds(env,PIPELINE.officialMassFeedCron,{timeMs:Date.now()})});
+        if(url.pathname==="/admin/catalog-enrich"&&request.method==="POST")return json({service:"ANIME INTELLIGENCE",version:VERSION,catalog_enrichment:await enrichExistingCatalogBatch(env,PIPELINE.enrichmentCron)});
+        if(url.pathname==="/admin/archive"&&request.method==="POST"){const category=Number(url.searchParams.get("category")||6),page=Number(url.searchParams.get("page")||1);return json({service:"ANIME INTELLIGENCE",version:VERSION,archive:await archiveDiscoverGoodSmile(env,category,page,PIPELINE.archiveSeedsStandalone)});}
+        if(url.pathname==="/admin/catalog-test"&&request.method==="POST"){const category=url.searchParams.get("category")||"plush",page=Number(url.searchParams.get("page")||1);return json({service:"ANIME INTELLIGENCE",catalog_test:await runCatalogCategoryTest(env,category,page)});}
+        if(url.pathname==="/admin/catalog-seed"&&request.method==="POST"){const queryIndex=Number(url.searchParams.get("queryIndex")||0),page=Number(url.searchParams.get("page")||1);return json({service:"ANIME INTELLIGENCE",version:VERSION,catalog:await seedCollectibleCatalogYahoo(env,queryIndex,page)});}
+        if(url.pathname==="/admin/catalog-run"&&request.method==="POST"){return json({service:"ANIME INTELLIGENCE",catalog_run:await runCatalogBatch(env,Number(url.searchParams.get("batches")||10))});}
+        if(url.pathname==="/admin/catalog-progress"&&request.method==="GET"){return json({service:"ANIME INTELLIGENCE",version:VERSION,catalog_progress:await catalogProgress(env)});}
+        if(url.pathname==="/admin/catalog-auto-status"&&request.method==="GET"){return json({service:"ANIME INTELLIGENCE",...(await catalogAutoStatus(env))});}
+        if(url.pathname==="/admin/expand"&&request.method==="POST"){const requested=normalizeStage(url.searchParams.get("stage")||""),now=Date.now(),stage=requested||autonomousStage(now);return json(await runRotationStage(env,stage,"manual",{timeMs:now}));}
+        const routes={"/admin/discover-goodsmile":"mass","/admin/refresh-official":"official","/admin/backfill-official":"backfill","/admin/refresh-yahoo":"yahoo","/admin/refresh-ebay":"ebay","/admin/stage/mass":"mass","/admin/stage/official":"official","/admin/stage/backfill":"backfill","/admin/stage/yahoo":"yahoo","/admin/stage/ebay":"ebay"};
+        if(routes[url.pathname]&&request.method==="POST")return json(await runRotationStage(env,routes[url.pathname],"manual"));
+      }
+      const travelResponse=null; // v5: travel intentionally not exposed by GLOBAL PURCHASE DECISION
+      if(travelResponse)return travelResponse;
+      const paid=await paidApi(request,env,url,ctx);if(paid)return paid;return json({error:"not_found"},404);
+    }catch(e){return json({error:"internal_error",version:VERSION,detail:safeError(e)},500);}
+  },
+
+  async scheduled(event,env,ctx){
+    const scheduledTime=Number(event?.scheduledTime||Date.now());
+    const dt=new Date(scheduledTime);
+    const task=scheduledTaskForTime(scheduledTime);
+    ctx.waitUntil((async()=>{
+      const report={version:VERSION,scheduled_time:dt.toISOString(),task,result:null,errors:[]};
+      try{
+        report.heartbeat_persisted=await logEvent(env,"gpd_cron_heartbeat",{endpoint:"scheduled",metadata:{task,scheduled_time:dt.toISOString(),build_id:BUILD_ID}});
+        if(task==="parts_collector_v3"){
+          const needed=await embeddedPartsCollectorNeedsRun(env,scheduledTime);
+          report.result=needed?await runEmbeddedPartsCollectorFailover(event,env):{ok:true,status:"collector_recent"};
+        }else if(task==="rotation"){
+          const slot=rotationSlotFromTime(scheduledTime),stage=ROTATION[slot];
+          report.result=await runRotationStage(env,stage,"cron",{timeMs:scheduledTime});
+        }else if(task==="catalog_enrichment"){
+          report.result=await enrichExistingCatalogBatch(env,1);
+        }else{
+          report.result=await checkpointedUniversalDemandRefresh(env,1,task);
+        }
+      }catch(e){report.errors.push({task,error:safeError(e)});}
+      // Run discovery at every scheduled slot if the primary slot did not do so.
+      // This is an independent waitUntil job so failure of Parts/rotation/enrichment cannot suppress it.
+      try{await logEvent(env,"scheduled_growth_run",{endpoint:"scheduled",metadata:{task,ok:report.errors.length===0,errors:report.errors,heartbeat_persisted:report.heartbeat_persisted}});}catch{}
+      console.log("GPD scheduled",JSON.stringify(report));
+    })());
+    if(!["universal_discovery","discovery_recovery"].includes(task)){
+      ctx.waitUntil((async()=>{
+        try{await checkpointedUniversalDemandRefresh(env,1,`parallel_${task}`);}
+        catch(e){console.warn("GPD parallel discovery failed",safeError(e));}
+      })());
+    }
+  }
+};
