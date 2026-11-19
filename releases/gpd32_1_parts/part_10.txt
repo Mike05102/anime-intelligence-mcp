@@ -1,0 +1,1000 @@
+}
+
+async function index402Post(path,body){const r=await fetch(`${INDEX402_API}${path}`,{method:"POST",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify(body)});const raw=await r.text();let data;try{data=raw?JSON.parse(raw):null;}catch{data={raw};}return {ok:r.ok,status:r.status,body:data};}
+async function x402DiscoveryPreflight(origin,env){
+  const results=[];
+  let support=null;
+  try{support=await facilitatorSupport(env);}catch(e){return {ok:false,results:[],error:`facilitator_support: ${safeError(e)}`};}
+  for(const svc of INDEX402_SERVICES){
+    try{
+      const amount=routePrice(svc.path)?.[0];
+      const req=new Request(`${origin}${svc.path}`);
+      const cfg=await paymentRequirement(req,env,amount,svc.description,support);
+      const encoded=b64(JSON.stringify(cfg.required));
+      const accepted=cfg?.accepted;
+      const feePayer=accepted?.extra?.feePayer||null;
+      const ok=!!accepted&&accepted.scheme==="exact"&&accepted.network===SOLANA_MAINNET&&!!feePayer&&!!encoded&&encoded.length<12000;
+      results.push({path:svc.path,ok,status:402,payment_required_header:true,encoded_header_bytes:encoded.length,amount:accepted?.amount||null,network:accepted?.network||null,fee_payer_present:!!feePayer,bazaar:!!cfg?.required?.extensions?.bazaar});
+    }catch(e){results.push({path:svc.path,ok:false,status:null,payment_required_header:false,error:safeError(e)});}
+  }
+  return {ok:results.every(x=>x.ok),results};
+}
+
+function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+
+async function register402Index(origin){
+  // v3.7.29:
+  // 402 Index verifies each submitted URL immediately. Seven back-to-back
+  // registrations can create a short burst of external probes, while each bare
+  // x402 probe also obtains fresh Coinbase facilitator support/feePayer data.
+  // Prioritize the highest-value full-intelligence route, pace the requests,
+  // and retry only transient verifier transport failures. This changes the
+  // admin registration workflow only; paid endpoint/payment semantics are untouched.
+  const priority=[
+    ...INDEX402_SERVICES.filter(s=>s.path==="/v1/full-intelligence"),
+    ...INDEX402_SERVICES.filter(s=>s.path!=="/v1/full-intelligence")
+  ];
+  const byPath=new Map();
+
+  for(let i=0;i<priority.length;i++){
+    const s=priority[i];
+    const payload={
+      url:`${origin}${s.path}`,
+      name:s.name,
+      protocol:"x402",
+      http_method:"GET",
+      description:s.description,
+      price_usd:s.price_usd,
+      payment_asset:"USDC",
+      payment_network:"Solana",
+      category:"commerce/collectibles/anime",
+      provider:"ANIME INTELLIGENCE",
+      tags:[...(DISCOVERY_CONFIG[s.path]?.tags||[]),...(DISCOVERY_CONFIG[s.path]?.selection_triggers||[]),...COMMERCIAL_DISCOVERY_KEYWORDS.slice(0,24)],
+      intent:DISCOVERY_CONFIG[s.path]?.intent||null,
+      openapi_url:`${origin}/openapi.json`,
+      mcp_url:`${origin}/mcp`,
+      example_query:discoveryTaskQueries(s.path)?.[0]||DISCOVERY_CONFIG[s.path]?.examples?.[0]||"Nendoroid Hatsune Miku"
+    };
+
+    let r=null;
+    const attempts=[];
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        r=await index402Post("/register",payload);
+      }catch(e){
+        r={ok:false,status:0,body:{error:"402 Index request failed",detail:safeError(e)}};
+      }
+      attempts.push({attempt,ok:!!r.ok,status:r.status,detail:r?.body?.detail||r?.body?.error||null});
+
+      const transientFetchFailure=
+        !r.ok &&
+        (r.status===0 ||
+         r.status===408 ||
+         r.status===429 ||
+         r.status>=500 ||
+         (r.status===422 && /fetch failed|timeout|timed out|temporar|transport/i.test(String(r?.body?.detail||r?.body?.error||""))));
+
+      if(r.ok||!transientFetchFailure||attempt===3)break;
+      await sleep(attempt===1?1400:2800);
+    }
+
+    byPath.set(s.path,{service:s.name,path:s.path,...r,registration_attempts:attempts});
+    if(i<priority.length-1)await sleep(900);
+  }
+
+  // Return the familiar canonical endpoint order in the admin result.
+  return INDEX402_SERVICES.map(s=>byPath.get(s.path));
+}
+
+
+/* =========================================================
+   X402 BROWSER SVM RPC BRIDGE - v3.7.15
+   Narrow same-origin bridge for the official x402 SVM browser client.
+   It prevents browser-side Solana public-RPC transport/CORS failures.
+   Only the two read methods needed to construct an Exact SVM payment
+   are accepted. No sendTransaction, signatures, secrets, or writes.
+========================================================= */
+async function x402RpcCall(endpoint,body){
+  const t0=Date.now();
+  try{
+    const r=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/json","accept":"application/json"},body:JSON.stringify(body)});
+    const text=await r.text();
+    let data=null;try{data=text?JSON.parse(text):null}catch{}
+    const rpcErr=data?.error||null;
+    return {endpoint,http_status:r.status,ok:r.ok&&!rpcErr,rpc_error:rpcErr,body:data,raw:data?null:text.slice(0,300),ms:Date.now()-t0};
+  }catch(e){return {endpoint,http_status:0,ok:false,transport_error:safeError(e),ms:Date.now()-t0};}
+}
+
+async function x402SolanaRpcBridge(request){
+  const cors={"access-control-allow-origin":"*","access-control-allow-methods":"POST,OPTIONS","access-control-allow-headers":"content-type","cache-control":"no-store"};
+  if(request.method==="OPTIONS")return new Response(null,{status:204,headers:cors});
+  if(request.method!=="POST")return json({error:"method_not_allowed"},405,cors);
+  let body;try{body=await request.json();}catch{return json({error:"invalid_json"},400,cors);}
+  if(!body||body.jsonrpc!=="2.0"||!["getAccountInfo","getLatestBlockhash","getMultipleAccounts","simulateTransaction"].includes(body.method)){
+    return json({jsonrpc:"2.0",id:body?.id??null,error:{code:-32601,message:"RPC method not allowed"}},400,cors);
+  }
+  // v3.7.16: fail over between no-key mainnet RPCs. PublicNode has been
+  // observed working from Cloudflare Workers; NodeFlare is the secondary.
+  // The Solana Foundation endpoint remains last-resort only because public
+  // production traffic may be blocked with HTTP 403.
+  const providers=[
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.nodeflare.app/solana/public",
+    "https://api.mainnet.solana.com"
+  ];
+  const attempts=[];
+  for(const endpoint of providers){
+    const r=await x402RpcCall(endpoint,{jsonrpc:"2.0",id:body.id??1,method:body.method,params:Array.isArray(body.params)?body.params:[]});
+    attempts.push({endpoint,http_status:r.http_status,ok:r.ok,rpc_error:r.rpc_error||null,transport_error:r.transport_error||null,ms:r.ms});
+    if(r.ok)return new Response(JSON.stringify(r.body),{status:200,headers:{"content-type":"application/json; charset=utf-8","x-ai-rpc-provider":endpoint,...cors}});
+  }
+  return json({jsonrpc:"2.0",id:body?.id??null,error:{code:-32002,message:"All Solana RPC providers failed",data:{method:body.method,attempts}}},502,cors);
+}
+async function x402RpcDiagnostic(){
+  const providers=[
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.nodeflare.app/solana/public",
+    "https://api.mainnet.solana.com"
+  ];
+  const results=[];
+  for(const endpoint of providers){
+    const block=await x402RpcCall(endpoint,{jsonrpc:"2.0",id:1,method:"getLatestBlockhash",params:[{commitment:"processed"}]});
+    const acct=await x402RpcCall(endpoint,{jsonrpc:"2.0",id:2,method:"getAccountInfo",params:[SOLANA_USDC,{encoding:"base64",commitment:"confirmed"}]});
+    results.push({
+      endpoint,
+      getLatestBlockhash:{ok:!!block.ok,http_status:Number(block.http_status||0),rpc_error:block.rpc_error||null,transport_error:block.transport_error||null,ms:Number(block.ms||0)},
+      getAccountInfo:{ok:!!acct.ok,http_status:Number(acct.http_status||0),rpc_error:acct.rpc_error||null,transport_error:acct.transport_error||null,ms:Number(acct.ms||0)},
+      all_ok:!!(block.ok&&acct.ok)
+    });
+  }
+  return {
+    service:"ANIME INTELLIGENCE",
+    version:VERSION,
+    checked_at:new Date().toISOString(),
+    test:"x402_solana_rpc_preflight",
+    methods:["getLatestBlockhash","getAccountInfo"],
+    usdc_mint:SOLANA_USDC,
+    pass:results.some(x=>x.all_ok),
+    results
+  };
+}
+
+/* =========================================================
+   FINAL CHECK
+========================================================= */
+
+async function readonlyYahooProbe(env){if(!env.YAHOO_CLIENT_ID)return {ok:false,reason:"not_configured"};try{const r=await yahooRequest(env,{query:"\u521d\u97f3\u30df\u30af"},1);return {ok:true,returned:r.hits.length,total_available:r.total};}catch(e){return {ok:false,error:safeError(e)};}}
+async function readonlyEbayProbe(env){if(!env.EBAY_CLIENT_ID||!env.EBAY_CLIENT_SECRET)return {ok:false,reason:"not_configured"};try{await ebayAccessToken(env);return {ok:true};}catch(e){return {ok:false,error:safeError(e)};}}
+async function registerRakutenAffiliateForProduct(env,payload={}){
+  const productId=String(payload.product_id||payload.id||"").trim(),affiliateUrl=String(payload.affiliate_url||payload.url||"").trim();
+  if(!productId)return {ok:false,status:400,error:"product_id_required"};
+  if(!isOfficialRakutenAffiliateUrl(affiliateUrl))return {ok:false,status:400,error:"invalid_rakuten_affiliate_url",detail:"Use the official pre-generated https://hb.afl.rakuten.co.jp/... affiliate URL without rewriting it."};
+  const rows=await sbOptional(env,`/products?select=*&id=eq.${encodeURIComponent(productId)}&limit=1`),product=Array.isArray(rows)?rows[0]:null;
+  if(!product)return {ok:false,status:404,error:"product_not_found"};
+  const linkType=["price_navi","product_page","shop_page"].includes(String(payload.link_type||""))?String(payload.link_type):"product_page";const current=registeredRakutenAffiliateOffers(product),offer={affiliate_url:affiliateUrl,seller:String(payload.seller||payload.shop_name||"Rakuten Ichiba").trim()||"Rakuten Ichiba",title:String(payload.title||product.canonical_name_ja||product.canonical_name_en||"").trim()||null,item_code:String(payload.item_code||"").trim()||null,price_jpy:Number(payload.price_jpy)>0?Number(payload.price_jpy):null,total_price_jpy:Number(payload.total_price_jpy)>0?Number(payload.total_price_jpy):(Number(payload.price_jpy)>0?Number(payload.price_jpy):null),shipping_jpy:Number.isFinite(Number(payload.shipping_jpy))?Number(payload.shipping_jpy):null,image_url:String(payload.image_url||"").trim()||null,match_score:100,registered_at:new Date().toISOString(),link_type:linkType,durable_link:linkType==="price_navi",link_source:"official_pre_generated_affiliate_link"};
+  const merged=[offer,...current.filter(x=>x.affiliate_url!==affiliateUrl)].slice(0,20),metadata={...(product.metadata||{}),rakuten_affiliate_links:merged,rakuten_affiliate_updated_at:new Date().toISOString()};
+  await sb(env,`/products?id=eq.${encodeURIComponent(productId)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({metadata})});
+  await logEvent(env,"affiliate_link_registered",{endpoint:"/admin/rakuten-affiliate/register",product_id:productId,metadata:{source:"rakuten",seller:offer.seller,offer_count:merged.length,link_type:offer.link_type,durable_link:offer.durable_link}});
+  return {ok:true,status:200,product:paidCandidateView(product),affiliate:{source:"rakuten",registered:true,offer_count:merged.length,url_host:"hb.afl.rakuten.co.jp"},note:"Stored on the canonical product metadata. Paid responses can now route eligible buyers through this official pre-generated Rakuten affiliate URL."};
+}
+
+
+
+const RAKUTEN_AFFILIATE_PRIORITY_IPS=["Pokemon","ONE PIECE","Dragon Ball","Gundam","Sanrio","Chiikawa","Demon Slayer","Jujutsu Kaisen","Hatsune Miku","NARUTO","My Hero Academia","Evangelion","Hololive","Blue Archive","Genshin Impact","Frieren","Spy x Family","Chainsaw Man","Sailor Moon","Disney"];
+const RAKUTEN_AFFILIATE_PRIORITY_TYPES=["figure","nendoroid","figma","plush","model_kit","trading_card","sneaker","apparel","acrylic_goods","keychain","badge","lottery_prize"];
+function rakutenAvailabilitySignal(product){const now=Date.now(),name=String(product?.canonical_name_ja||product?.canonical_name_en||""),raw=product?.release_date?Date.parse(product.release_date):NaN;let score=0,label="catalog";if(Number.isFinite(raw)){const days=(raw-now)/86400000;if(days>=-30&&days<=240){score+=55;label=days>=0?"reservation_or_upcoming":"recent_release";}else if(days>-365&&days< -30){score+=25;label="recent_catalog";}else if(days>240&&days<=730){score+=15;label="future_release";}else if(days<-1095){score-=25;label="older_release";}}if(/(?:\u518d\u8ca9|\u518d\u8ca9\u4e88\u5b9a|reissue|rerelease|restock)/i.test(name)){score+=45;label="reissue";}if(/(?:\u4e88\u7d04|pre-?order)/i.test(name)){score+=35;label="reservation";}if(/(?:\u5728\u5eab\u5207|\u58f2\u308a\u5207|sold\s*out|discontinued)/i.test(name)){score-=70;label="stale_or_sold_out_text";}return {score,label,release_date:cleanNullishValue(product?.release_date)};}
+function rakutenAffiliatePriority(product){const type=discoveryEffectiveType(product),fr=String(discoverySafeFranchise(product)||""),name=`${product?.canonical_name_ja||""} ${product?.canonical_name_en||""}`;let score=0;const ti=RAKUTEN_AFFILIATE_PRIORITY_TYPES.indexOf(type);if(ti>=0)score+=Math.max(5,36-ti*2);const ii=RAKUTEN_AFFILIATE_PRIORITY_IPS.findIndex(x=>fr.toLowerCase().includes(x.toLowerCase())||name.toLowerCase().includes(x.toLowerCase()));if(ii>=0)score+=Math.max(10,50-ii*2);if(product?.jan_code)score+=22;if(product?.official_image_url)score+=8;if(product?.canonical_name_en)score+=4;if(product?.manufacturer)score+=3;score+=rakutenAvailabilitySignal(product).score;return score;}
+function inferRakutenSeries(product){
+  const explicit=cleanNullishValue(product?.series),brand=cleanNullishValue(product?.brand),manufacturer=cleanNullishValue(product?.manufacturer),name=String(product?.canonical_name_ja||product?.canonical_name_en||"").trim();
+  const sameAsMaker=v=>v&&manufacturer&&normalize(v)===normalize(manufacturer);
+  if(explicit&&!sameAsMaker(explicit))return explicit;
+  const patterns=[
+    [/G\.?E\.?M\.?\s*(?:\u30b7\u30ea\u30fc\u30ba|Series)?/i,"G.E.M.\u30b7\u30ea\u30fc\u30ba"],
+    [/Precious\s+G\.?E\.?M\.?/i,"Precious G.E.M.\u30b7\u30ea\u30fc\u30ba"],
+    [/NARUTO\s*\u30ae\u30e3\u30eb\u30ba/i,"NARUTO\u30ae\u30e3\u30eb\u30ba"],
+    [/\u308b\u304b\u3063\u3077/i,"\u308b\u304b\u3063\u3077"],
+    [/\u3066\u306e\u3072\u3089/i,"G.E.M. \u3066\u306e\u3072\u3089\u30b7\u30ea\u30fc\u30ba"],
+    [/\u306d\u3093\u3069\u308d\u3044\u3069/i,"\u306d\u3093\u3069\u308d\u3044\u3069"],
+    [/POP\s*UP\s*PARADE/i,"POP UP PARADE"],
+    [/S\.?H\.?Figuarts/i,"S.H.Figuarts"],
+    [/FiguartsZERO/i,"FiguartsZERO"],
+    [/\u30d5\u30a3\u30ae\u30e5\u30a2\u30fc\u30c4ZERO/i,"\u30d5\u30a3\u30ae\u30e5\u30a2\u30fc\u30c4ZERO"],
+    [/figma/i,"figma"],
+    [/Q\s*posket/i,"Q posket"],
+    [/\u4e00\u756a\u304f\u3058/i,"\u4e00\u756a\u304f\u3058"],
+    [/Grandista/i,"Grandista"],
+    [/MAXIMATIC/i,"MAXIMATIC"],
+    [/\u30ef\u30fc\u30eb\u30c9\u30b3\u30ec\u30af\u30bf\u30d6\u30eb|WCF/i,"\u30ef\u30fc\u30eb\u30c9\u30b3\u30ec\u30af\u30bf\u30d6\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2"]
+  ];
+  for(const [re,label] of patterns)if(re.test(name))return label;
+  if(brand&&!sameAsMaker(brand))return brand;
+  return null;
+}
+function rakutenCandidateView(product){const offers=registeredRakutenAffiliateOffers(product),series=inferRakutenSeries(product),availability=rakutenAvailabilitySignal(product);return {product_id:product.id,name_ja:cleanNullableTitle(product.canonical_name_ja),name_en:cleanNullableTitle(product.canonical_name_en),jan_code:cleanNullishValue(product.jan_code),product_type:discoveryEffectiveType(product),franchise:discoverySafeFranchise(product),series,manufacturer:cleanNullishValue(product.manufacturer),image_url:cleanNullishValue(product.official_image_url),release_date:availability.release_date,purchase_likelihood:availability.label,affiliate_registered:offers.length>0,affiliate_offer_count:offers.length,affiliate_offers:offers.map(x=>({seller:x.seller||null,title:x.title||null,price_jpy:x.price_jpy||null,registered_at:x.registered_at||null,link_type:x.link_type||"product_page",url_host:isOfficialRakutenAffiliateUrl(x.affiliate_url)?"hb.afl.rakuten.co.jp":null})),priority_score:rakutenAffiliatePriority(product),rakuten_search_query:rakutenSearchQuery(product),rakuten_search_url:rakutenPublicSearchUrl(product)};}
+async function rakutenBatchSnapshot(env,page){
+  const endpoint=`rakuten_v378_batch_${page}`;
+  const rows=await sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.rakuten_affiliate_batch_snapshot&endpoint=eq.${encodeURIComponent(endpoint)}&order=occurred_at.desc&limit=1`);
+  const m=Array.isArray(rows)&&rows[0]?.metadata?rows[0].metadata:null;
+  return m&&Array.isArray(m.product_ids)&&m.product_ids.length?m:null;
+}
+async function createRakutenBatchSnapshot(env,page,limit=100){
+  const scanSize=500,offset=(page-1)*scanSize;
+  const rows=await sb(env,`/products?select=*&order=id.asc&offset=${offset}&limit=${scanSize}`);
+  const ranked=(Array.isArray(rows)?rows:[]).map(rakutenCandidateView).sort((a,b)=>b.priority_score-a.priority_score||String(a.name_ja||a.name_en||"").localeCompare(String(b.name_ja||b.name_en||""),"ja")||String(a.product_id).localeCompare(String(b.product_id))).slice(0,limit);
+  const snapshot={version:"rakuten-durable-link-batch-v3.7.8",page,scan_offset:offset,scan_size:scanSize,product_ids:ranked.map(x=>x.product_id),created_at:new Date().toISOString()};
+  await logEvent(env,"rakuten_affiliate_batch_snapshot",{endpoint:`rakuten_v378_batch_${page}`,metadata:snapshot});
+  return snapshot;
+}
+async function rakutenProductsForSnapshot(env,snapshot){
+  const ids=(snapshot?.product_ids||[]).filter(Boolean).slice(0,100);if(!ids.length)return [];
+  const rows=await sb(env,`/products?select=*&id=in.(${ids.map(x=>`"${String(x).replace(/"/g,"")}"`).join(",")})&limit=100`);
+  const byId=new Map((Array.isArray(rows)?rows:[]).map(x=>[String(x.id),x]));
+  return ids.map(id=>byId.get(String(id))).filter(Boolean);
+}
+async function rakutenAffiliateCandidates(env,{page=1,limit=100}={}){
+  page=Math.max(1,Math.min(1000,Number(page)||1));limit=Math.max(1,Math.min(100,Number(limit)||100));
+  let snapshot=await rakutenBatchSnapshot(env,page);if(!snapshot)snapshot=await createRakutenBatchSnapshot(env,page,limit);
+  const products=await rakutenProductsForSnapshot(env,snapshot),candidates=products.map((p,i)=>({...rakutenCandidateView(p),fixed_number:(page-1)*100+i+1,batch_page:page,batch_position:i+1}));
+  return {service:"ANIME INTELLIGENCE",version:VERSION,mode:"fixed_persistent_100_item_batches",batch_version:snapshot.version,page,limit,scan_offset:snapshot.scan_offset,scanned:snapshot.scan_size,returned:candidates.length,registered_in_batch:candidates.filter(x=>x.affiliate_registered).length,candidates,next_page:candidates.length?page+1:null,previous_page:page>1?page-1:null,snapshot_created_at:snapshot.created_at,note:"This 100-item batch is persisted. Registering an affiliate link changes only that item's registered status; item numbers and the other 99 products do not move or re-rank."};
+}
+
+async function rakutenAffiliateSearchAdmin(env,{query="",limit=100}={}){
+  const q=String(query||"").trim();
+  limit=Math.max(1,Math.min(100,Number(limit)||100));
+  if(!q)return {service:"ANIME INTELLIGENCE",version:VERSION,ok:false,error:"query_required",query:q,returned:0,candidates:[]};
+  const rows=await findProducts(env,q,limit);
+  const candidates=(Array.isArray(rows)?rows:[]).slice(0,limit).map((p,i)=>({...rakutenCandidateView(p),search_position:i+1}));
+  const product_type_counts={};
+  for(const x of candidates){const t=String(x.product_type||"unknown");product_type_counts[t]=(product_type_counts[t]||0)+1;}
+  return {service:"ANIME INTELLIGENCE",version:VERSION,ok:true,mode:"same_catalog_search_as_public_shop",query:q,returned:candidates.length,product_type_counts,candidates,note:"Searches the ANIME INTELLIGENCE canonical product database using the same findProducts() path as /shop. It does not scrape or query Rakuten search results. Use each candidate's Rakuten search link to generate an official affiliate URL, then register it back to the canonical product automatically."};
+}
+
+function rakutenSeriesTerms(product){return {franchise:cleanNullishValue(discoverySafeFranchise(product)),series:inferRakutenSeries(product),manufacturer:cleanNullishValue(product?.manufacturer)};}
+function rakutenSeriesMatchScore(base,p){const a=rakutenSeriesTerms(base),b=rakutenSeriesTerms(p);let score=0;if(a.franchise&&b.franchise&&normalize(a.franchise)===normalize(b.franchise))score+=60;if(a.series&&b.series&&normalize(a.series)===normalize(b.series))score+=80;if(a.manufacturer&&b.manufacturer&&normalize(a.manufacturer)===normalize(b.manufacturer))score+=20;if(discoveryEffectiveType(base)===discoveryEffectiveType(p))score+=8;return score;}
+async function rakutenAffiliateSeries(env,productId,limit=100){
+  productId=String(productId||"").trim();
+  limit=Math.max(1,Math.min(100,Number(limit)||100));
+  if(!productId)return {ok:false,status:400,error:"product_id_required"};
+  const baseRows=await sb(env,`/products?select=*&id=eq.${encodeURIComponent(productId)}&limit=1`),base=Array.isArray(baseRows)?baseRows[0]:null;
+  if(!base)return {ok:false,status:404,error:"product_not_found"};
+  const terms=rakutenSeriesTerms(base);
+  const queries=[];
+  if(terms.franchise)queries.push(`/products?select=*&franchise=eq.${encodeURIComponent(terms.franchise)}&limit=500`);
+  if(terms.series)queries.push(`/products?select=*&series=eq.${encodeURIComponent(terms.series)}&limit=300`);
+  if(terms.manufacturer)queries.push(`/products?select=*&manufacturer=eq.${encodeURIComponent(terms.manufacturer)}&limit=300`);
+  const merged=new Map([[String(base.id),base]]);
+  for(const q of queries){
+    const part=await sbOptional(env,q);
+    for(const row of Array.isArray(part)?part:[])if(row?.id)merged.set(String(row.id),row);
+  }
+  let pool=[...merged.values()];
+  if(pool.length<=1&&terms.franchise){
+    const fallback=await findProducts(env,terms.franchise,100);
+    for(const row of Array.isArray(fallback)?fallback:[])if(row?.id)merged.set(String(row.id),row);
+    pool=[...merged.values()];
+  }
+  const exactSeries=terms.series?normalize(terms.series):"";
+  const ranked=pool.map(p=>{
+    let score=rakutenSeriesMatchScore(base,p);
+    const inferred=normalize(inferRakutenSeries(p)||"");
+    if(exactSeries&&inferred===exactSeries)score+=100;
+    return {p,score};
+  }).filter(x=>x.score>=60).sort((a,b)=>b.score-a.score||rakutenAffiliatePriority(b.p)-rakutenAffiliatePriority(a.p)).slice(0,limit).map((x,i)=>({...rakutenCandidateView(x.p),series_match_score:x.score,series_position:i+1}));
+  return {ok:true,status:200,base:rakutenCandidateView(base),series:terms,returned:ranked.length,candidates:ranked,note:"Series expansion uses simple indexed Supabase filters and local ranking. Complex PostgREST OR expressions are intentionally avoided for Safari/admin stability."};
+}
+async function rakutenAffiliateRegistry(env,{limit=200}={}){
+  limit=Math.max(1,Math.min(1000,Number(limit)||200));const events=await sbOptional(env,`/api_events?select=occurred_at,product_id,metadata&event_type=eq.affiliate_link_registered&order=occurred_at.desc&limit=${limit*3}`),latest=new Map();
+  for(const e of Array.isArray(events)?events:[]){const id=String(e.product_id||"");if(id&&!latest.has(id))latest.set(id,e);if(latest.size>=limit)break;}
+  const ids=[...latest.keys()];if(!ids.length)return {service:"ANIME INTELLIGENCE",version:VERSION,registered_products:0,items:[]};
+  const rows=await sb(env,`/products?select=*&id=in.(${ids.map(x=>`"${String(x).replace(/"/g,"")}"`).join(",")})&limit=${ids.length}`),byId=new Map((Array.isArray(rows)?rows:[]).map(x=>[String(x.id),x]));
+  const items=ids.map((id,i)=>{const p=byId.get(id),e=latest.get(id);if(!p)return null;const v=rakutenCandidateView(p);return {...v,registry_number:i+1,last_registered_at:e?.occurred_at||p?.metadata?.rakuten_affiliate_updated_at||null};}).filter(Boolean);
+  return {service:"ANIME INTELLIGENCE",version:VERSION,registered_products:items.length,items,note:"Persistent view of products with recorded Rakuten affiliate registration events. Use this to verify earlier registrations even after candidate batches change."};
+}
+async function readonlyRakutenProbe(env){const configured=rakutenConfigured(env);return {ok:configured,configured,mode:"affiliate_link_only",web_service_api:false,affiliate_id_present:configured,application_id_used:false,access_key_used:false};}
+
+async function finalCheck(env,origin){
+  const checks={service:"ANIME INTELLIGENCE",version:VERSION,mode:"dry_run",writes:false,secrets_exposed:false,configuration:{supabase_url:!!env.SUPABASE_URL,supabase_secret:!!env.SUPABASE_SECRET_KEY,refresh_key:!!env.REFRESH_KEY,yahoo:!!env.YAHOO_CLIENT_ID,ebay:!!(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET),rakuten_affiliate:rakutenConfigured(env),rakuten_affiliate_id:!!env.RAKUTEN_AFFILIATE_ID,rakuten_mode:rakutenWebServiceConfigured(env)?"live_web_service_plus_affiliate":"affiliate_link_only",rakuten_web_service_api:false,x402_wallet:!!env.X402_WALLET_ADDRESS,cdp_api_key_id:!!env.CDP_API_KEY_ID,cdp_api_key_secret:!!env.CDP_API_KEY_SECRET},database:{reachable:false,has_product:false,api_events_reachable:false},sources:{yahoo_source:false,ebay_source:false},marketplace:{yahoo_probe:null,ebay_probe:null,rakuten_probe:null},x402:{facilitator:facilitatorUrl(env),supported:false,solana_mainnet_exact_v2:false,bazaar_discovery_extension:false,coinbase_bazaar_direct:facilitatorUrl(env).includes("api.cdp.coinbase.com"),requirements:[]},quality_engine:{classification_version:VERSION,dynamic_identity_quality:true,specialist_intelligence:specialistIntelligenceSelfTest(),catalog_queries:COLLECTIBLE_CATALOG_QUERIES.length,catalog_query_generation:"dynamic_cross_product_plus_learned_db_seeds",catalog_ips:CATALOG_IP_UNIVERSE.length,self_expanding_query_universe:true,dynamic_query_pool_limit:10000,official_mass_feeds:OFFICIAL_MASS_FEEDS.map(x=>x.slug),self_discovery_no_jan:PIPELINE.selfDiscoveryNoJanEnabled,example_replacement_part:classifyProduct("Harmonia bloom option care parts root (Feet)").type,example_figure:classifyProduct("G.E.M.\u30b7\u30ea\u30fc\u30ba NARUTO \u75be\u98a8\u4f1d \u3066\u306e\u3072\u3089\u30df\u30ca\u30c8").type,example_shfiguarts:classifyProduct("S.H.Figuarts \u5343\u624b\u67f1\u9593 -\u7a62\u571f\u8ee2\u751f-").type,example_nendoroid_badge:classifyProduct("\u9032\u6483\u306e\u5de8\u4eba \u306d\u3093\u3069\u308d\u3044\u3069\u3077\u3089\u3059 \u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u7f36\u30d0\u30c3\u30b8").type,example_nendoroid_clothes:classifyProduct("\u306d\u3093\u3069\u308d\u3044\u3069\u3069\u30fc\u308b \u304a\u3088\u3046\u3075\u304f\u30bb\u30c3\u30c8 \u93e1\u97f3\u30ea\u30f3").type,example_moderoid_decal:classifyProduct("MODEROID \u30b4\u30eb\u30c9\u30ea\u30fc\u30aa\u7528\u6c34\u8ee2\u5199\u30de\u30fc\u30ad\u30f3\u30b0\u30c7\u30ab\u30fc\u30eb").type},discovery:{mcp:`${origin}/mcp`,openapi:`${origin}/openapi.json`,x402:`${origin}/.well-known/x402`,index402_registration_endpoint:`${origin}/admin/402index/register`},ready:false,errors:[]};
+  try{const rows=await sb(env,"/products?select=id&limit=1");checks.database.reachable=true;checks.database.has_product=Array.isArray(rows)&&rows.length>0;}catch(e){checks.errors.push({stage:"database",error:safeError(e)});}try{await sb(env,"/api_events?select=id&limit=1");checks.database.api_events_reachable=true;}catch(e){checks.errors.push({stage:"api_events",error:safeError(e)});}try{const sources=await loadSources(env);checks.sources.yahoo_source=!!sourceIdBySlugOrName(sources,"yahoo-shopping",["Yahoo! Shopping","Yahoo"]);checks.sources.ebay_source=!!sourceIdBySlugOrName(sources,"ebay",["eBay"]);}catch(e){checks.errors.push({stage:"sources",error:safeError(e)});}checks.marketplace.yahoo_probe=await readonlyYahooProbe(env);checks.marketplace.ebay_probe=await readonlyEbayProbe(env);checks.marketplace.rakuten_probe=await readonlyRakutenProbe(env);
+  try{const support=await facilitatorSupport(env);checks.x402.supported=true;const kind=findSolanaMainnetKind(support);checks.x402.solana_mainnet_exact_v2=!!kind;if(kind&&env.X402_WALLET_ADDRESS){for(const service of INDEX402_SERVICES){try{const fakeRequest=new Request(`${origin}${service.path}?query=\u521d\u97f3\u30df\u30af`),amount=routePrice(service.path)?.[0],requirement=await paymentRequirement(fakeRequest,env,amount,service.description,support);const bazaarOk=!!requirement?.required?.extensions?.bazaar?.info?.input?.discoverable&&!!requirement?.required?.extensions?.bazaar?.schema;checks.x402.bazaar_discovery_extension=checks.x402.bazaar_discovery_extension||bazaarOk;checks.x402.requirements.push({path:service.path,ok:!!requirement?.accepted&&bazaarOk,amount:requirement?.accepted?.amount||null,network:requirement?.accepted?.network||null,bazaar: bazaarOk});}catch(e){checks.x402.requirements.push({path:service.path,ok:false,error:safeError(e)});}}}}catch(e){checks.errors.push({stage:"x402",error:safeError(e)});}const all402=checks.x402.requirements.length===INDEX402_SERVICES.length&&checks.x402.requirements.every(x=>x.ok);checks.ready=checks.database.has_product&&checks.database.api_events_reachable&&checks.configuration.yahoo&&checks.configuration.ebay&&checks.sources.yahoo_source&&checks.sources.ebay_source&&checks.marketplace.yahoo_probe?.ok&&checks.marketplace.ebay_probe?.ok&&checks.x402.solana_mainnet_exact_v2&&checks.configuration.x402_wallet&&(!isCdpFacilitator(env)||(checks.configuration.cdp_api_key_id&&checks.configuration.cdp_api_key_secret))&&all402;return checks;
+}
+
+/* =========================================================
+   ADMIN
+========================================================= */
+
+function authorized(request,env){return !!env.REFRESH_KEY&&request.headers.get("x-refresh-key")===env.REFRESH_KEY;}
+
+
+const WORLD_DISCOVERY_LANGUAGE_CASES=[
+  {"label":"en","query":"Pokemon plush","expected_language":"en","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"ja","query":"\u30dd\u30b1\u30e2\u30f3 \u306c\u3044\u3050\u308b\u307f","expected_language":"ja","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"fr","query":"peluche Pok\u00e9mon \u00e0 collectionner","expected_language":"fr","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"es","query":"mu\u00f1eco de peluche Pok\u00e9mon","expected_language":"es","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"de","query":"Pok\u00e9mon Pl\u00fcschtier","expected_language":"de","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"it","query":"peluche Pok\u00e9mon morbido","expected_language":"it","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"pt","query":"pel\u00facia Pok\u00e9mon","expected_language":"pt","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"zh","query":"\u5b9d\u53ef\u68a6\u6bdb\u7ed2\u73a9\u5177","expected_language":"zh","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"zh-TW","query":"\u5bf6\u53ef\u5922\u7d68\u6bdb\u73a9\u5177","expected_language":"zh","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"ko","query":"\ud3ec\ucf13\ubaac \ubd09\uc81c\uc778\ud615","expected_language":"ko","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"ru","query":"\u043c\u044f\u0433\u043a\u0430\u044f \u0438\u0433\u0440\u0443\u0448\u043a\u0430 Pokemon","expected_language":"ru","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"id","query":"boneka Pokemon","expected_language":"id","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"th","query":"\u0e15\u0e38\u0e4a\u0e01\u0e15\u0e32\u0e42\u0e1b\u0e40\u0e01\u0e21\u0e2d\u0e19","expected_language":"th","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"vi","query":"th\u00fa b\u00f4ng Pokemon","expected_language":"vi","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"tr","query":"Pokemon pelu\u015f","expected_language":"tr","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"nl","query":"Pokemon knuffel","expected_language":"nl","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"pl","query":"pluszak Pokemon","expected_language":"pl","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"ar","query":"\u062f\u0645\u064a\u0629 \u0628\u0648\u0643\u064a\u0645\u0648\u0646 \u0645\u062d\u0634\u0648\u0629","expected_language":"ar","expected_type":"plush","expected_franchise":"Pokemon"},
+  {"label":"hi","query":"\u092a\u094b\u0915\u0947\u092e\u094b\u0928 \u092a\u094d\u0932\u0936 \u0916\u093f\u0932\u094c\u0928\u093e","expected_language":"hi","expected_type":"plush","expected_franchise":"Pokemon"}
+];
+const WORLD_DISCOVERY_GENERIC_CASES=[
+  {"label":"anime_merch","query":"anime merch","mode":"broad","min_count":10,"min_franchises":5,"min_types":4},
+  {"label":"anime_figure","query":"anime figure","expected_type":"figure","min_count":1},
+  {"label":"one_piece_figure","query":"One Piece figure","expected_type":"figure","expected_franchise":"ONE PIECE","min_count":1}
+];
+const WORLD_DISCOVERY_AGENT402_QUERIES=["anime collectible purchase decision","identify Japanese anime figure exact edition","anime figure current market value","is this anime figure rare","anime figure bootleg risk","should I buy this Nendoroid now","best place to buy Japanese anime figure","ONE PIECE figure buy or wait","Pokemon plush exact Japanese release","JAN anime collectible price","anime","anime merch","Pokemon plush","One Piece figure","where can I buy anime figures","figurine manga","peluche Pokemon","\u52a8\u6f2b\u5468\u8fb9","\uc560\ub2c8 \uad7f\uc988"];
+
+function worldAuditIncludesIgnoreCase(list,value){const v=String(value||"").toLowerCase();return (Array.isArray(list)?list:[]).some(x=>String(x||"").toLowerCase()===v);}
+function worldAuditOwnAgent402Result(row){const s=JSON.stringify(row||{}).toLowerCase();return s.includes("anime intelligence")||s.includes("anime-intelligence.goodmy0312.workers.dev")||s.includes("anime-intelligence-mcp");}
+function worldAuditResultLabel(row){if(!row||typeof row!=="object")return null;return row.name||row.title||row.tool_name||row.toolName||row.service||row.endpoint||row.url||row.href||null;}
+function worldAuditRows(data){if(Array.isArray(data))return data;if(Array.isArray(data?.results))return data.results;if(Array.isArray(data?.tools))return data.tools;if(Array.isArray(data?.items))return data.items;if(Array.isArray(data?.data))return data.data;if(Array.isArray(data?.data?.results))return data.data.results;return [];}
+function worldAuditProductMatches(p,tc){
+  const actualType=discoveryEffectiveType(p),actualFranchise=canonicalizeDiscoveryFranchise(discoverySafeFranchise(p));
+  const typeOk=!tc.expected_type||discoveryTypeMatchesHint(actualType,tc.expected_type);
+  const franchiseOk=!tc.expected_franchise||String(actualFranchise||"").toLowerCase()===String(canonicalizeDiscoveryFranchise(tc.expected_franchise)||"").toLowerCase();
+  return {typeOk,franchiseOk};
+}
+async function worldDiscoveryInternalAudit(env){
+  const interpretation=[];
+  const live=[];
+  for(const tc of WORLD_DISCOVERY_LANGUAGE_CASES){
+    const hints=multilingualQueryHints(tc.query),language=detectSearchLanguage(tc.query,"","");
+    const type_ok=worldAuditIncludesIgnoreCase(hints.product_types,tc.expected_type);
+    const franchise_ok=worldAuditIncludesIgnoreCase(hints.franchises,tc.expected_franchise);
+    const language_ok=language===tc.expected_language;
+    interpretation.push({label:tc.label,query:tc.query,language,expected_language:tc.expected_language,product_types:hints.product_types,franchises:hints.franchises,language_ok,type_ok,franchise_ok,pass:language_ok&&type_ok&&franchise_ok});
+    try{
+      const rows=await findProducts(env,tc.query,10),matches=rows.map(p=>worldAuditProductMatches(p,tc));
+      const type_hits=matches.filter(x=>x.typeOk).length,franchise_hits=matches.filter(x=>x.franchiseOk).length,both_hits=matches.filter(x=>x.typeOk&&x.franchiseOk).length;
+      live.push({
+        label:tc.label,query:tc.query,language,count:rows.length,targeted:true,
+        type_hits,franchise_hits,both_hits,
+        pokemon_rate:rows.length?Number((franchise_hits/rows.length).toFixed(3)):0,
+        plush_rate:rows.length?Number((type_hits/rows.length).toFixed(3)):0,
+        top10_target_rate:rows.length?Number((both_hits/rows.length).toFixed(3)):0,
+        pass:type_ok&&franchise_ok&&rows.length>0&&both_hits===rows.length
+      });
+    }catch(e){live.push({label:tc.label,query:tc.query,pass:false,error:safeError(e)});}
+  }
+
+  const generic=[];
+  for(const tc of WORLD_DISCOVERY_GENERIC_CASES){
+    try{
+      const rows=await findProducts(env,tc.query,10),franchises=[...new Set(rows.map(x=>canonicalizeDiscoveryFranchise(discoverySafeFranchise(x))).filter(Boolean))],types=[...new Set(rows.map(discoveryEffectiveType).filter(Boolean))];
+      const matches=rows.map(p=>worldAuditProductMatches(p,tc)),targetHits=matches.filter(x=>x.typeOk&&x.franchiseOk).length;
+      const pass=tc.mode==="broad"
+        ? rows.length>=tc.min_count&&franchises.length>=tc.min_franchises&&types.length>=tc.min_types
+        : rows.length>=tc.min_count&&targetHits===rows.length;
+      generic.push({label:tc.label,query:tc.query,count:rows.length,unique_franchises:franchises.length,unique_types:types.length,target_hits:targetHits,pass});
+    }catch(e){generic.push({label:tc.label,query:tc.query,pass:false,error:safeError(e)});}
+  }
+
+  const summary={
+    interpretation_pass:interpretation.filter(x=>x.pass).length,
+    interpretation_total:interpretation.length,
+    live_pass:live.filter(x=>x.pass).length,
+    live_total:live.length,
+    generic_pass:generic.filter(x=>x.pass).length,
+    generic_total:generic.length
+  };
+  return {
+    summary,
+    pass:summary.interpretation_pass===summary.interpretation_total&&summary.live_pass===summary.live_total&&summary.generic_pass===summary.generic_total,
+    interpretation,live,generic
+  };
+}
+async function worldDiscoveryAgent402Register(origin){
+  try{
+    const r=await fetch("https://agent402.tools/api/index/register",{method:"POST",headers:{"content-type":"application/json",accept:"application/json","user-agent":`ANIME-INTELLIGENCE-Discovery-Register/${VERSION}`},body:JSON.stringify({origin})});
+    const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,1000)};}
+    return {attempted:true,endpoint:"https://agent402.tools/api/index/register",origin,http_status:r.status,ok:r.ok,response:data};
+  }catch(e){return {attempted:true,endpoint:"https://agent402.tools/api/index/register",origin,ok:false,error:safeError(e)};}
+}
+async function worldDiscoveryAgent402Audit(origin){
+  const registration=await worldDiscoveryAgent402Register(origin);
+  const results=[];
+  for(const q of WORLD_DISCOVERY_AGENT402_QUERIES){
+    try{
+      const r=await fetch(`https://agent402.tools/api/find?q=${encodeURIComponent(q)}&k=10`,{headers:{accept:"application/json","user-agent":`ANIME-INTELLIGENCE-Discovery-Audit/${VERSION}`}});
+      const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,500)};}
+      const rows=worldAuditRows(data),idx=rows.findIndex(worldAuditOwnAgent402Result);
+      results.push({query:q,http_status:r.status,ok:r.ok,count:rows.length,found:idx>=0,rank:idx>=0?idx+1:null,matched:idx>=0?worldAuditResultLabel(rows[idx]):null,top3:rows.slice(0,3).map(worldAuditResultLabel)});
+    }catch(e){results.push({query:q,ok:false,found:false,rank:null,error:safeError(e)});}
+  }
+  const found=results.filter(x=>x.found).length;
+  return {endpoint:"https://agent402.tools/api/find",registration,query_count:results.length,found_count:found,registered_ok:!!registration.ok,pass:found>0,note:found>0?"ANIME INTELLIGENCE is live in Agent402 search.":(registration.ok?"Agent402 registration was accepted/probed; search index may update on the crawler cycle. No additional seller-side code change is required for indexing itself.":"Agent402 registration failed; inspect registration.response/error."),results};
+}
+async function worldDiscoveryAudit(env,mode="all",origin="https://anime-intelligence.goodmy0312.workers.dev"){
+  const m=["internal","agent402","all"].includes(mode)?mode:"all",out={service:"ANIME INTELLIGENCE",version:VERSION,audit:"WORLD_DISCOVERY_AUDIT",mode:m,generated_at:new Date().toISOString()};
+  if(m==="internal"||m==="all")out.internal=await worldDiscoveryInternalAudit(env);
+  if(m==="agent402"||m==="all")out.agent402=await worldDiscoveryAgent402Audit(origin);
+  out.pass=(out.internal?out.internal.pass:true)&&(out.agent402?out.agent402.pass:true);
+  return out;
+}
+
+
+function compactPurchaseRouteAuditView(route){
+  if(!route)return null;
+  const pr=route.purchase_route||{};
+  return {
+    source:route.source||null,
+    seller:route.seller||null,
+    title:route.title||null,
+    total_price_jpy:route.total_price_jpy==null?null:(Number.isFinite(Number(route.total_price_jpy))?Number(route.total_price_jpy):null),
+    asking_price_jpy:route.asking_price_jpy==null?null:(Number.isFinite(Number(route.asking_price_jpy))?Number(route.asking_price_jpy):null),
+    shipping_jpy:route.shipping_jpy==null?null:Number(route.shipping_jpy),
+    shipping_known:route.shipping_known===true,
+    live_price:route.live_price===true,
+    price_freshness:route.price_freshness||null,
+    price_confidence:route.price_confidence||null,
+    price_evidence:route.price_evidence||null,
+    shipping_original:route.shipping_original==null?null:Number(route.shipping_original),
+    shipping_currency:route.shipping_currency||null,
+    reference_price_jpy:route.reference_price_jpy==null?null:Number(route.reference_price_jpy),
+    price_basis:route.price_basis||null,
+    url:route.url||null,
+    country_fit:pr.country_fit||null,
+    country_fit_score:pr.country_fit_score??null,
+    purchase_ease_score:pr.purchase_ease_score??null,
+    overall_score:pr.overall_score??null,
+    direct_shipping:pr.direct_shipping||null,
+    directness:pr.directness||null,
+    proxy_required:!!pr.proxy_required,
+    language_support:pr.language_support||null,
+    payment_compatibility:pr.payment_compatibility||null,
+    account_difficulty:pr.account_difficulty||null,
+    verification_blockers:pr.verification_blockers||[],
+    recommended_action:pr.recommended_action||null,
+    tradeoff:pr.tradeoff||null
+  };
+}
+
+function repairLikelyUtf8Mojibake(value=""){
+  const input=String(value||"");
+  if(!input)return input;
+  if(!/[\u0080-\u00ff]|(?:Ã|Â|ã|å|é|||||)/u.test(input))return input;
+  try{
+    const bytes=[];
+    for(const ch of input){const cp=ch.codePointAt(0);if(cp>255)return input;bytes.push(cp);}
+    const decoded=new TextDecoder("utf-8",{fatal:true}).decode(Uint8Array.from(bytes));
+    return decoded&&decoded!==input?decoded:input;
+  }catch{return input;}
+}
+
+async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
+  const raw=String(query||"").trim();
+  const q=repairLikelyUtf8Mojibake(raw)||"Hatsune Miku figure";
+  const u=new URL("https://audit.local/v1/best-place");
+  u.searchParams.set("query",q);
+  u.searchParams.set("buyer_country","JP");
+  const preflight=await preflightPaidProduct(env,u);
+  if(!preflight?.ok){
+    return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,query:q,all_pass:false,error:"product_resolution_failed",preflight:preflight?.body||null};
+  }
+  const product=preflight.product;
+  let obs=[];try{obs=await getObservations(env,product.id);}catch{}
+  let market_refresh_log=[];
+  try{market_refresh_log=await refreshLiveMarketForProduct(env,product,obs);}catch(e){market_refresh_log=[{source:"market_refresh",ok:false,error:safeError(e)}];}
+  try{obs=await getObservations(env,product.id);}catch{}
+  let rakuten;try{rakuten=await rakutenSearch(env,product);}catch(e){rakuten={configured:rakutenConfigured(env),mode:rakutenWebServiceConfigured(env)?"live_web_service_error":"affiliate_link_only",web_service_api:rakutenWebServiceConfigured(env),offers:[],best:null,live_returned:0,live_matches:0,live_attempts:[],error:safeError(e)};}
+  const fxInfo=await resolveUsdJpy(env),officialOffers=officialPurchaseOffersForProduct(product,fxInfo);
+  const countries=["JP","US","NL"];
+  const results=[];
+  for(const country of countries){
+    const routing=countryAwarePurchaseRouting(obs,rakuten,country,officialOffers,product);
+    const landed=landedCostView(routing.best_purchase_route,country,"");
+    const hasDirectAlternative=(routing.alternatives||[]).some(x=>!x?.purchase_route?.proxy_required&&(x?.purchase_route?.country_fit_score||0)>=60&&x?.purchase_route?.destination_confirmation_required===false);
+    const bestRouteType=routing.best_purchase_route?.purchase_route?.route_type||null;
+    const bestPracticalDirect=!!(routing.best_purchase_route&&!routing.best_purchase_route?.purchase_route?.proxy_required&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=70&&routing.best_purchase_route?.purchase_route?.destination_confirmation_required===false);
+    const bestVerifiedProxy=!!(routing.best_purchase_route&&bestRouteType==="verified_proxy_international"&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=80);
+    const bestExactIdentity=!!(!routing.best_purchase_route||String(routing.best_purchase_route?.source||"").toLowerCase()!=="ebay"||ebayStrongIdentityAnalysis(product,{title:routing.best_purchase_route?.title||""}).accepted);
+    const bestIsPractical=!routing.best_purchase_route||!hasDirectAlternative||bestPracticalDirect;
+    const noInventedCrossBorderTotal=country==="JP"||landed.estimated_landed_total_jpy==null;
+    const noInventedLandedTotal=landed.estimated_landed_total_jpy==null||landed.known_total_jpy!=null;
+    const hasCandidate=Number(routing.candidate_count||0)>0;
+    const overseasPractical=country==="JP"||bestPracticalDirect||bestVerifiedProxy;
+    results.push({
+      buyer_country:country,
+      candidate_count:routing.candidate_count,
+      practical_direct_candidate_count:routing.practical_direct_candidate_count||0,
+      verified_proxy_candidate_count:routing.verified_proxy_candidate_count||0,
+      practical_route_candidate_count:routing.practical_route_candidate_count||0,
+      selection_policy:routing.selection_policy,
+      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,overseas_best_route_is_practical:overseasPractical,best_route_is_verified_proxy:bestVerifiedProxy,exact_product_identity:bestExactIdentity,no_invented_cross_border_landed_total:noInventedCrossBorderTotal,no_invented_landed_total:noInventedLandedTotal},
+      cheapest_offer:compactPurchaseRouteAuditView(routing.cheapest_offer),
+      best_purchase_route:compactPurchaseRouteAuditView(routing.best_purchase_route),
+      easiest_purchase_route:compactPurchaseRouteAuditView(routing.easiest_purchase_route),
+      lowest_known_practical_route:compactPurchaseRouteAuditView(routing.lowest_known_practical_route),
+      landed_cost:landed,
+      alternatives:(routing.alternatives||[]).slice(0,5).map(compactPurchaseRouteAuditView)
+    });
+  }
+  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.overseas_best_route_is_practical&&r.checks.exact_product_identity&&r.checks.no_invented_cross_border_landed_total&&r.checks.no_invented_landed_total);
+  return {
+    service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,real_payment_test_required:false,query:q,query_repaired_from_mojibake:q!==raw&&!!raw,
+    product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),franchise:product.franchise||null,characters:product.character_names||[],product_type:product.product_type||null},
+    observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,rakuten_market:{mode:rakuten?.mode||null,live_price_api_configured:!!rakuten?.live_price_api_configured,affiliate_only:!!rakuten?.affiliate_only,web_service_api:!!rakuten?.web_service_api,application_id_present:!!rakuten?.application_id_present,access_key_present:!!rakuten?.access_key_present,affiliate_id_present:!!rakuten?.affiliate_id_present,live_returned:rakuten?.live_returned||0,live_matches:rakuten?.live_matches||0,registered_offer_count:rakuten?.registered_offer_count||0,live_attempts:rakuten?.live_attempts||[],live_error:rakuten?.live_error||rakuten?.error||null,pricing_source:rakuten?.pricing_source||null,note:rakuten?.note||null},official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
+    interpretation:"This audit refreshes Yahoo/eBay live market offers; Rakuten remains affiliate-only unless separately configured. It rejects sibling/variant mismatches and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. cheapest_offer is the lowest observed exact-match listing price, while best_purchase_route additionally considers purchase feasibility, price evidence and shipping confidence. For Japan buyers, Yahoo/Rakuten compete without source preference. For overseas buyers, raw Japanese-only checkout is not considered sufficient. Unknown shipping, proxy fees, taxes and duties are never invented, and a landed total is not claimed when shipping remains unknown."
+  };
+}
+
+
+async function universalMerchantDueBacklog(env,limit=121){
+  const now=new Date().toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&source_slug=like.offer-*&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(now)}&limit=${Math.max(1,Math.min(500,Number(limit)||121))}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+
+function summarizeDiscoveryRows(rows=[],versionFilter=null){
+  const fps=new Set(),brands=new Set(),namespaces=new Set(),families=new Map(),domains=new Map(UNIVERSAL_GENERIC_DOMAINS.map(d=>[d,{domain:d,runs:0,candidates:0,unique:new Set(),gtins:0,canonical_new:0,canonical_upserted:0,canonical_quarantined:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0,provider_calls:0,elapsed_ms:0}])),providers=new Map(),providerRoles=new Map();
+  let candidates=0,gtins=0,canonicalNew=0,canonicalUpserted=0,canonicalQuarantined=0,newUnique=0,merchantEvidence=0,merchantTrust=0,purchaseReady=0,decisionReady=0,canonicalDecisionReady=0,crossProviderCorroborated=0,providerCalls=0,elapsedMs=0,batches=0;
+  for(const d of (Array.isArray(rows)?rows:[])){
+    const m=d?.metadata||{};if(versionFilter&&String(m.version||"")!==String(versionFilter))continue;batches++;
+    const domain=String(m.domain||"general_commerce"),family=String(m.query_family||universalQueryFamily(domain,m.query_text||"")),cs=Array.isArray(m.candidates)?m.candidates:[];
+    const hasRouteField=cs.some(c=>c&&"merchant_route_evidence_signal" in c),hasTrustField=cs.some(c=>c&&"merchant_trust_signal" in c),hasReadyField=cs.some(c=>c&&("offer_ready_signal" in c||"purchase_ready_signal" in c)),hasDecisionField=cs.some(c=>c&&"decision_ready_signal" in c),hasCanonicalDecisionField=cs.some(c=>c&&"canonical_decision_ready_signal" in c),hasCrossField=cs.some(c=>c&&"cross_provider_corroborated" in c);
+    const batchMerchantEvidence=hasRouteField?cs.filter(c=>c?.merchant_route_evidence_signal===true).length:Number(m.merchant_evidence_candidates||0)||0;
+    const batchMerchantTrust=hasTrustField?cs.filter(c=>c?.merchant_trust_signal===true).length:Number(m.merchant_trust_candidates||0)||0;
+    const batchPurchaseReady=hasReadyField?cs.filter(c=>c?.offer_ready_signal===true||c?.purchase_ready_signal===true).length:Number(m.purchase_ready_candidates||0)||0;
+    const batchDecisionReady=hasDecisionField?cs.filter(c=>c?.decision_ready_signal===true).length:Number(m.decision_ready_candidates||0)||0;
+    const batchCanonicalDecisionReady=hasCanonicalDecisionField?cs.filter(c=>c?.canonical_decision_ready_signal===true).length:Number(m.canonical_decision_ready_candidates||0)||0;
+    const batchCross=hasCrossField?cs.filter(c=>c?.cross_provider_corroborated===true).length:Number(m.cross_provider_corroborated_candidates||0)||0;
+    const q=families.get(family)||{family,domain,runs:0,candidates:0,unique:new Set(),gtins:0,canonical_new:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0,provider_calls:0,elapsed_ms:0};
+    q.runs++;q.candidates+=cs.length;q.canonical_new+=Number(m.canonical_new??m.canonical_promoted??0)||0;q.merchant_evidence+=batchMerchantEvidence;q.merchant_trust+=batchMerchantTrust;q.purchase_ready+=batchPurchaseReady;q.decision_ready+=batchDecisionReady;q.canonical_decision_ready+=batchCanonicalDecisionReady;q.cross_provider_corroborated+=batchCross;q.provider_calls+=Number(m.provider_calls_estimate||0)||0;q.elapsed_ms+=Number(m.search_elapsed_ms||0)||0;
+    canonicalNew+=Number(m.canonical_new??m.canonical_promoted??0)||0;canonicalUpserted+=Number(m.canonical_upserted||0)||0;canonicalQuarantined+=Number(m.canonical_quarantined||0)||0;newUnique+=Number(m.new_unique_candidates||0)||0;merchantEvidence+=batchMerchantEvidence;merchantTrust+=batchMerchantTrust;purchaseReady+=batchPurchaseReady;decisionReady+=batchDecisionReady;canonicalDecisionReady+=batchCanonicalDecisionReady;crossProviderCorroborated+=batchCross;providerCalls+=Number(m.provider_calls_estimate||0)||0;elapsedMs+=Number(m.search_elapsed_ms||0)||0;for(const ns of (m.identifier_namespaces||[]))namespaces.add(ns);
+    const dc=domains.get(domain)||{domain,runs:0,candidates:0,unique:new Set(),gtins:0,canonical_new:0,canonical_upserted:0,canonical_quarantined:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0,provider_calls:0,elapsed_ms:0};
+    dc.runs++;dc.candidates+=cs.length;dc.canonical_new+=Number(m.canonical_new??m.canonical_promoted??0)||0;dc.canonical_upserted+=Number(m.canonical_upserted||0)||0;dc.canonical_quarantined+=Number(m.canonical_quarantined||0)||0;dc.merchant_evidence+=batchMerchantEvidence;dc.merchant_trust+=batchMerchantTrust;dc.purchase_ready+=batchPurchaseReady;dc.decision_ready+=batchDecisionReady;dc.canonical_decision_ready+=batchCanonicalDecisionReady;dc.cross_provider_corroborated+=batchCross;dc.provider_calls+=Number(m.provider_calls_estimate||0)||0;dc.elapsed_ms+=Number(m.search_elapsed_ms||0)||0;
+    const role=String(m.provider_role||"balanced");providerRoles.set(role,(providerRoles.get(role)||0)+1);
+    for(const c of cs){
+      candidates++;const fp=String(c?.identity_fingerprint||c?.fingerprint||"");if(fp){fps.add(fp);q.unique.add(fp);dc.unique.add(fp);}if(c?.gtin){gtins++;q.gtins++;dc.gtins++;namespaces.add("gtin");}if(c?.brand)brands.add(normalize(c.brand));
+      const pr=String(c?.provider||"unknown"),ps=providers.get(pr)||{provider:pr,candidates:0,unique:new Set(),gtins:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0};ps.candidates++;if(fp)ps.unique.add(fp);if(c?.gtin)ps.gtins++;
+      if(c?.merchant_route_evidence_signal===true||(!hasRouteField&&Number(c?.merchant_evidence_score||0)>=45))ps.merchant_evidence++;if(c?.merchant_trust_signal===true)ps.merchant_trust++;if(c?.offer_ready_signal===true||c?.purchase_ready_signal===true)ps.purchase_ready++;if(c?.decision_ready_signal===true)ps.decision_ready++;if(c?.canonical_decision_ready_signal===true)ps.canonical_decision_ready++;if(c?.cross_provider_corroborated===true)ps.cross_provider_corroborated++;providers.set(pr,ps);
+    }
+    families.set(family,q);domains.set(domain,dc);
+  }
+  const familyStats=[...families.values()].map(q=>({family:q.family,domain:q.domain,runs:q.runs,candidates:q.candidates,unique_candidates:q.unique.size,unique_yield:q.candidates?Math.round(q.unique.size/q.candidates*1000)/1000:null,duplicate_ratio:q.candidates?Math.round((1-q.unique.size/q.candidates)*1000)/1000:null,gtin_yield:q.candidates?Math.round(q.gtins/q.candidates*1000)/1000:null,canonical_new:q.canonical_new,canonical_yield:q.candidates?Math.round(q.canonical_new/q.candidates*1000)/1000:null,merchant_evidence_yield:q.candidates?Math.round(q.merchant_evidence/q.candidates*1000)/1000:null,merchant_trust_yield:q.candidates?Math.round(q.merchant_trust/q.candidates*1000)/1000:null,purchase_ready_yield:q.candidates?Math.round(q.purchase_ready/q.candidates*1000)/1000:null,decision_ready_yield:q.candidates?Math.round(q.decision_ready/q.candidates*1000)/1000:null,canonical_decision_ready_yield:q.candidates?Math.round(q.canonical_decision_ready/q.candidates*1000)/1000:null,cross_provider_corroborated:q.cross_provider_corroborated||0,canonical_per_provider_call:q.provider_calls?Math.round(q.canonical_new/q.provider_calls*1000)/1000:null,avg_search_elapsed_ms:q.runs?Math.round(q.elapsed_ms/q.runs):null})).sort((a,b)=>(b.decision_ready_yield||0)-(a.decision_ready_yield||0)||(b.canonical_yield||0)-(a.canonical_yield||0)||(b.unique_yield||0)-(a.unique_yield||0));
+  const domainStats=[...domains.values()].map(d=>({domain:d.domain,runs:d.runs,candidates:d.candidates,unique_candidates:d.unique.size,unique_yield:d.candidates?Math.round(d.unique.size/d.candidates*1000)/1000:null,gtin_yield:d.candidates?Math.round(d.gtins/d.candidates*1000)/1000:null,canonical_new:d.canonical_new,canonical_yield:d.candidates?Math.round(d.canonical_new/d.candidates*1000)/1000:null,merchant_evidence_yield:d.candidates?Math.round(d.merchant_evidence/d.candidates*1000)/1000:null,merchant_trust_yield:d.candidates?Math.round(d.merchant_trust/d.candidates*1000)/1000:null,purchase_ready_yield:d.candidates?Math.round(d.purchase_ready/d.candidates*1000)/1000:null,decision_ready_yield:d.candidates?Math.round(d.decision_ready/d.candidates*1000)/1000:null,canonical_decision_ready_yield:d.candidates?Math.round(d.canonical_decision_ready/d.candidates*1000)/1000:null,cross_provider_corroborated:d.cross_provider_corroborated||0})).sort((a,b)=>a.runs-b.runs||a.unique_candidates-b.unique_candidates);
+  const providerStats=[...providers.values()].map(p=>({provider:p.provider,candidates:p.candidates,unique_candidates:p.unique.size,unique_yield:p.candidates?Math.round(p.unique.size/p.candidates*1000)/1000:null,gtin_yield:p.candidates?Math.round(p.gtins/p.candidates*1000)/1000:null,merchant_evidence_yield:p.candidates?Math.round(p.merchant_evidence/p.candidates*1000)/1000:null,merchant_trust_yield:p.candidates?Math.round(p.merchant_trust/p.candidates*1000)/1000:null,purchase_ready_yield:p.candidates?Math.round(p.purchase_ready/p.candidates*1000)/1000:null,decision_ready_yield:p.candidates?Math.round(p.decision_ready/p.candidates*1000)/1000:null,canonical_decision_ready_yield:p.candidates?Math.round(p.canonical_decision_ready/p.candidates*1000)/1000:null,cross_provider_corroborated:p.cross_provider_corroborated||0})).sort((a,b)=>b.candidates-a.candidates);
+  return {version:versionFilter||"all",batches,discovery_candidates:candidates,unique_discovery_candidates:fps.size,discovery_unique_yield:candidates?Math.round(fps.size/candidates*1000)/1000:null,duplicate_ratio:candidates?Math.round((1-fps.size/candidates)*1000)/1000:null,new_unique_candidates_reported:newUnique,gtin_candidates:gtins,gtin_yield:candidates?Math.round(gtins/candidates*1000)/1000:null,canonical_new:canonicalNew,canonical_upserted:canonicalUpserted,canonical_quarantined:canonicalQuarantined,canonical_promotion_yield:candidates?Math.round(canonicalNew/candidates*1000)/1000:null,merchant_evidence_candidates:merchantEvidence,merchant_evidence_yield:candidates?Math.round(merchantEvidence/candidates*1000)/1000:null,merchant_trust_candidates:merchantTrust,merchant_trust_yield:candidates?Math.round(merchantTrust/candidates*1000)/1000:null,purchase_ready_candidates:purchaseReady,purchase_ready_yield:candidates?Math.round(purchaseReady/candidates*1000)/1000:null,decision_ready_candidates:decisionReady,decision_ready_yield:candidates?Math.round(decisionReady/candidates*1000)/1000:null,canonical_decision_ready_candidates:canonicalDecisionReady,canonical_decision_ready_yield:candidates?Math.round(canonicalDecisionReady/candidates*1000)/1000:null,cross_provider_corroborated_candidates:crossProviderCorroborated,provider_calls_estimate:providerCalls,canonical_per_provider_call:providerCalls?Math.round(canonicalNew/providerCalls*1000)/1000:null,avg_search_elapsed_ms:batches?Math.round(elapsedMs/batches):null,brands_covered:brands.size,identifier_namespaces:[...namespaces],provider_role_counts:Object.fromEntries(providerRoles),query_family_metrics:familyStats.slice(0,40),lowest_coverage_domains:domainStats.slice(0,24),provider_metrics:providerStats};
+}
+async function universalGrowthStatus(env){
+  const now=Date.now(),since24=new Date(now-24*3600000).toISOString(),since7d=new Date(now-7*86400000).toISOString();
+  const safe=async(path)=>{try{const r=await sb(env,path,{timeout_ms:10000,retry_get:true});return Array.isArray(r)?r:[];}catch{return [];}};
+  const [products,parts,offers,merchants,demands24,demands7,snaps24,discovery24,frontier24,runs24]=await Promise.all([
+    safe("/products?select=id&limit=1000"),safe("/parts_catalog?select=id&limit=1000"),safe("/merchant_offers?select=id,active,stock_status,price,product_url,checkout_url,source_updated_at&limit=1000"),safe("/merchants?select=id,active,verified&limit=500"),
+    safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_product_demand&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_product_demand&occurred_at=gte.${encodeURIComponent(since7d)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_product_snapshot&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_discovery_batch&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_catalog_frontier&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/parts_ingest_runs?select=version,finished_at,pages_processed,candidates_inserted,metadata&finished_at=gte.${encodeURIComponent(since24)}&limit=300`)
+  ]);
+  const embedded=runs24.filter(r=>String(r?.version||"")==="collector-3.0.0"),legacy=runs24.filter(r=>/^collector-2\./.test(String(r?.version||""))),embeddedGrowth=embedded.reduce((a,r)=>a+Number(r?.candidates_inserted||0),0),embeddedOffers=embedded.reduce((a,r)=>a+Number(r?.metadata?.merchant_offers_upserted||0),0);
+  const identityKeys=new Set();for(const x of snaps24){const k=x?.metadata?.identity_key;if(k)identityKeys.add(k);}const allMetrics=summarizeDiscoveryRows(discovery24),currentMetrics=summarizeDiscoveryRows(discovery24,VERSION);const versions=[...new Set(discovery24.map(x=>String(x?.metadata?.version||"")).filter(Boolean))].filter(v=>v!==VERSION);const previous=versions.map(v=>summarizeDiscoveryRows(discovery24,v)).sort((a,b)=>b.batches-a.batches).slice(0,5);
+  const frontierTimes=frontier24.map(x=>Date.parse(x.occurred_at||x?.metadata?.observed_at||"")).filter(Number.isFinite),oldestFrontier=frontierTimes.length?Math.min(...frontierTimes):null,staleFrontierDepthHours=oldestFrontier?Math.round((now-oldestFrontier)/360000)/10:null;
+  const dueMerchantBacklog=await universalMerchantDueBacklog(env,121),activeOffers=offers.filter(x=>x?.active!==false),purchaseReadyOffers=activeOffers.filter(x=>Number.isFinite(Number(x?.price))&&!!(x?.product_url||x?.checkout_url)&&['in_stock','available','low_stock'].includes(String(x?.stock_status||'').toLowerCase()));
+  return {ok:true,service:PLATFORM_NAME,version:VERSION,build_id:BUILD_ID,window_hours:24,database:{products_sample_count:products.length,parts_sample_count:parts.length,merchant_offers_sample_count:offers.length,active_offers_sample:activeOffers.length,purchase_ready_offers_sample:purchaseReadyOffers.length,merchants_sample_count:merchants.length,active_merchants_sample:merchants.filter(x=>x?.active!==false).length,verified_merchants_sample:merchants.filter(x=>x?.verified===true).length},generic_growth:{demand_events_24h:demands24.length,demand_events_7d:demands7.length,market_snapshots_24h:snaps24.length,identity_keys_24h:identityKeys.size,discovery_batches_24h:allMetrics.batches,discovery_candidates_24h:allMetrics.discovery_candidates,unique_discovery_candidates_24h:allMetrics.unique_discovery_candidates,discovery_unique_yield_24h:allMetrics.discovery_unique_yield,duplicate_ratio_24h:allMetrics.duplicate_ratio,new_unique_candidates_reported_24h:allMetrics.new_unique_candidates_reported,gtin_candidates_24h:allMetrics.gtin_candidates,gtin_yield_24h:allMetrics.gtin_yield,canonical_new_24h:allMetrics.canonical_new,canonical_upserted_24h:allMetrics.canonical_upserted,canonical_quarantined_24h:allMetrics.canonical_quarantined,canonical_promotion_yield_24h:allMetrics.canonical_promotion_yield,merchant_evidence_yield_24h:allMetrics.merchant_evidence_yield,merchant_trust_yield_24h:allMetrics.merchant_trust_yield,purchase_ready_yield_24h:allMetrics.purchase_ready_yield,decision_ready_yield_24h:allMetrics.decision_ready_yield,canonical_decision_ready_yield_24h:allMetrics.canonical_decision_ready_yield,cross_provider_corroborated_candidates_24h:allMetrics.cross_provider_corroborated_candidates,canonical_per_provider_call_24h:allMetrics.canonical_per_provider_call,brands_covered_24h:allMetrics.brands_covered,identifier_namespaces_24h:allMetrics.identifier_namespaces,stale_frontier_depth_hours:staleFrontierDepthHours,query_family_metrics:allMetrics.query_family_metrics,lowest_coverage_domains:allMetrics.lowest_coverage_domains,provider_metrics:allMetrics.provider_metrics,current_version_metrics:currentMetrics,previous_version_baselines:previous,comparison_note:"Use current_version_metrics for post-deploy evaluation; all 24h fields may include earlier versions."},parts_growth:{embedded_v3_runs_24h:embedded.length,embedded_candidates_inserted_24h:embeddedGrowth,embedded_merchant_offers_upserted_24h:embeddedOffers,legacy_v2_runs_24h:legacy.length,authoritative_collector:"collector-3.0.0",legacy_detected:legacy.length>0},merchant_health:{due_queue_backlog:dueMerchantBacklog,soft_queue_budget:UNIVERSAL_MERCHANT_DUE_BUDGET,hard_queue_ceiling:UNIVERSAL_MERCHANT_DUE_HARD_CEILING,trickle_seed_max_rows:UNIVERSAL_MERCHANT_TRICKLE_SEED_MAX_ROWS,mode:dueMerchantBacklog==null?"unknown":(dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_HARD_CEILING?"hard_pause":(dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_BUDGET?"drain_priority_trickle_seed":"normal")),paused_by_due_backlog:dueMerchantBacklog!=null&&dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_HARD_CEILING,trickle_seed_active:dueMerchantBacklog!=null&&dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_BUDGET&&dueMerchantBacklog<UNIVERSAL_MERCHANT_DUE_HARD_CEILING,future_cooldown_rows_do_not_block_seeding:true,monotaro_group_hub_discovery:true},monetization:{paid_endpoint:"/v1/purchase-decision",price_usdc:0.1,external_only_admin:true},note:"v20 preserves prior safety gates and canonical-offer joining, executes one-query checkpointed discovery directly at :40 and :50 without a lease, and adds authenticated discovery diagnostics: canonical promotion automatically triggers exact GTIN/MPN offer resolution, eBay GTIN uses the gtin filter, item detail re-verifies identity, verified offers persist to market_observations, and decision readiness is recomputed on the canonical-linked offer. Unknown evidence remains fail-closed.",generated_at:new Date().toISOString()};
+}
+
+async function universalProductionReadiness(env){
+  const [growth,revenue]=await Promise.all([universalGrowthStatus(env),revenueMetrics(env)]);const g=growth||{},r=revenue||{},blockers=[],warnings=[];
+  const v3runs=Number(g?.parts_growth?.embedded_v3_runs_24h||0),due=Number(g?.merchant_health?.due_queue_backlog||0),cv=g?.generic_growth?.current_version_metrics||{},useCurrent=Number(cv.discovery_candidates||0)>=50,uy=useCurrent?cv.discovery_unique_yield:g?.generic_growth?.discovery_unique_yield_24h,cy=useCurrent?cv.canonical_promotion_yield:g?.generic_growth?.canonical_promotion_yield_24h,my=useCurrent?cv.merchant_evidence_yield:g?.generic_growth?.merchant_evidence_yield_24h,mty=useCurrent?cv.merchant_trust_yield:g?.generic_growth?.merchant_trust_yield_24h,py=useCurrent?cv.purchase_ready_yield:g?.generic_growth?.purchase_ready_yield_24h,dy=useCurrent?cv.decision_ready_yield:g?.generic_growth?.decision_ready_yield_24h,cdy=useCurrent?cv.canonical_decision_ready_yield:g?.generic_growth?.canonical_decision_ready_yield_24h;
+  if(v3runs<1)blockers.push("embedded_collector_v3_no_recent_run");if(due>=UNIVERSAL_MERCHANT_DUE_HARD_CEILING)warnings.push("merchant_due_queue_hard_ceiling_seeding_paused");else if(due>=UNIVERSAL_MERCHANT_DUE_BUDGET)warnings.push("merchant_due_queue_soft_saturation_trickle_seed_active");if(g?.parts_growth?.legacy_detected)warnings.push("legacy_collector_2x_seen_in_rolling_window_verify_no_new_runs");if(Number(g?.generic_growth?.market_snapshots_24h||0)<1)warnings.push("generic_market_snapshot_growth_not_yet_observed");if(uy!=null&&Number(uy)<0.45)warnings.push("discovery_unique_yield_below_45pct");if(cy!=null&&Number(cy)<0.03&&Number(useCurrent?cv.discovery_candidates:g?.generic_growth?.discovery_candidates_24h||0)>=100)warnings.push("canonical_promotion_yield_below_3pct");if(my!=null&&Number(my)<0.20)warnings.push("merchant_route_evidence_yield_below_20pct");if(mty!=null&&Number(mty)<0.15)warnings.push("merchant_trust_yield_below_15pct");if(py!=null&&Number(py)<0.05)warnings.push("offer_ready_yield_below_5pct");if(dy!=null&&Number(dy)<0.10)warnings.push("decision_ready_yield_below_10pct");if(cdy!=null&&Number(cdy)<0.03&&Number(useCurrent?cv.discovery_candidates:g?.generic_growth?.discovery_candidates_24h||0)>=100)warnings.push("canonical_decision_ready_yield_below_3pct");if(Number(g?.database?.purchase_ready_offers_sample||0)<2)warnings.push("purchase_ready_merchant_offer_coverage_thin");if(Number(g?.database?.verified_merchants_sample||0)<1)warnings.push("no_verified_merchant_in_sample");if(Number(r?.external_paid_calls||0)<1)warnings.push("no_external_paid_call_yet");const systemReady=blockers.length===0;
+  return {ok:systemReady,service:PLATFORM_NAME,version:VERSION,build_id:BUILD_ID,readiness:systemReady?(warnings.length?"OPERATIONAL_WITH_WARNINGS":"PRODUCTION_READY"):"BLOCKED",blockers,warnings,metric_scope:useCurrent?"current_version":"rolling_24h",signals:{embedded_v3_runs_24h:v3runs,embedded_candidates_inserted_24h:Number(g?.parts_growth?.embedded_candidates_inserted_24h||0),generic_market_snapshots_24h:Number(g?.generic_growth?.market_snapshots_24h||0),discovery_unique_yield:uy??null,gtin_yield:useCurrent?cv.gtin_yield:g?.generic_growth?.gtin_yield_24h??null,canonical_promotion_yield:cy??null,merchant_evidence_yield:my??null,merchant_trust_yield:mty??null,purchase_ready_yield:py??null,decision_ready_yield:dy??null,canonical_decision_ready_yield:cdy??null,cross_provider_corroborated_candidates:useCurrent?cv.cross_provider_corroborated_candidates:g?.generic_growth?.cross_provider_corroborated_candidates_24h??null,canonical_per_provider_call:useCurrent?cv.canonical_per_provider_call:g?.generic_growth?.canonical_per_provider_call_24h??null,canonical_quarantined:useCurrent?cv.canonical_quarantined:g?.generic_growth?.canonical_quarantined_24h??null,brands_covered:useCurrent?cv.brands_covered:Number(g?.generic_growth?.brands_covered_24h||0),merchant_due_queue_backlog:due,purchase_ready_offers_sample:Number(g?.database?.purchase_ready_offers_sample||0),verified_merchants_sample:Number(g?.database?.verified_merchants_sample||0),external_paid_calls:Number(r?.external_paid_calls||0),external_revenue_usdc:Number(r?.external_revenue_usdc||0)},external_dependencies_note:"External merchant anti-bot controls, Cloudflare/Supabase availability and buyer demand cannot be guaranteed by Worker code.",generated_at:new Date().toISOString()};
+}
+
+function adminPage(env){return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>GLOBAL PURCHASE DECISION ADMIN ${VERSION}</title><style>
+:root{color-scheme:dark;--bg:#071019;--panel:#0d1722;--panel2:#111d2a;--line:#213244;--text:#f5f7fb;--muted:#94a3b8;--good:#44d17a;--warn:#f2c94c;--bad:#ff6b6b;--accent:#69a7ff}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#071019,#08131e 38%,#050a10);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1180px;margin:auto;padding:22px}.top{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap}.eyebrow{font-size:12px;letter-spacing:.12em;color:#8db5ff;font-weight:800}.title{font-size:29px;font-weight:900;margin:5px 0}.sub{color:var(--muted);line-height:1.5;max-width:780px}.badge{display:inline-flex;gap:7px;align-items:center;border:1px solid #27583d;background:#0e2419;color:#9af4b9;padding:8px 11px;border-radius:999px;font-size:12px;font-weight:800}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}.card{background:rgba(13,23,34,.93);border:1px solid var(--line);border-radius:14px;padding:14px;min-height:98px}.k{color:var(--muted);font-size:12px}.v{font-size:24px;font-weight:900;margin-top:7px;word-break:break-word}.v.small{font-size:16px}.section{margin-top:22px}.section h2{font-size:17px;margin:0 0 10px}.toolbar{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}.panel{background:rgba(13,23,34,.93);border:1px solid var(--line);border-radius:14px;padding:14px}.row{display:flex;gap:8px;flex-wrap:wrap}input,button{border-radius:10px;padding:12px 13px;font-size:14px}input{width:100%;background:#071019;border:1px solid #2a3b4d;color:#fff}button{border:1px solid #33506c;background:#13283c;color:#fff;font-weight:800;cursor:pointer}button.primary{background:#164d80;border-color:#2e7ec0}button.good{background:#124526;border-color:#24733e}button.warn{background:#5a4513;border-color:#96731f}button:hover{filter:brightness(1.08)}.statusline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dot{width:9px;height:9px;border-radius:50%;background:#6b7280}.dot.good{background:var(--good)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{white-space:pre-wrap;word-break:break-word;background:#050a10;border:1px solid #172535;border-radius:12px;padding:13px;max-height:430px;overflow:auto;color:#cfe3ff}.tabs{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}.tab{padding:9px 12px;background:#101c29;border:1px solid #26384a;border-radius:999px;font-size:12px;font-weight:800}.tab.active{background:#173b63;border-color:#3779b9}.metricwide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.hint{font-size:12px;color:var(--muted);line-height:1.55}.footer{margin:26px 0 10px;color:#708096;font-size:12px}@media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metricwide{grid-template-columns:1fr}.toolbar{grid-template-columns:1fr}}@media(max-width:520px){main{padding:14px}.grid{grid-template-columns:1fr 1fr}.title{font-size:23px}.v{font-size:20px}}
+</style></head><body><main>
+<div class="top"><div><div class="eyebrow">UNIVERSAL COMMERCE CONTROL PLANE</div><div class="title">GLOBAL PURCHASE DECISION</div><div class="sub">AIエージェント向け購買判断インフラの本番管理画面。収益、外部AI利用、DB自動成長、Merchant、Collector、Supabase、x402を一つの画面で監視します。Anime・Parts・一般商品は同じUniversal Coreのdomain adapterです。</div></div><div><div class="badge">● v${VERSION} / ${BUILD_ID}</div></div></div>
+<div class="section panel"><div class="toolbar"><input id="k" type="password" placeholder="REFRESH_KEY（管理KPI・運用操作に必要）"><button class="primary" onclick="refreshAll()">ダッシュボード更新</button><button onclick="deepHealth()">Deep Health</button></div><div class="hint">キーはsessionStorageだけに保持します。画面表示のために外部へ送信しません。通常監視は軽量エンドポイントを使用し、Deep Healthは手動実行です。</div></div>
+<div class="grid">
+<div class="card"><div class="k">SYSTEM</div><div class="v small" id="mSystem">確認中</div></div>
+<div class="card"><div class="k">x402 REVENUE</div><div class="v" id="mRevenue">—</div><div class="k">USDC</div></div>
+<div class="card"><div class="k">EXTERNAL PAID CALLS</div><div class="v" id="mPaid">—</div></div>
+<div class="card"><div class="k">UNIQUE PAYERS</div><div class="v" id="mPayers">—</div></div>
+<div class="card"><div class="k">PURCHASE DECISION CALLS</div><div class="v" id="mDecision">—</div></div>
+<div class="card"><div class="k">PRODUCT / CANONICAL DB</div><div class="v" id="mProducts">—</div></div>
+<div class="card"><div class="k">MERCHANT OFFERS</div><div class="v" id="mOffers">—</div></div>
+<div class="card"><div class="k">COLLECTOR / DB GROWTH</div><div class="v small" id="mCollector">—</div></div>
+</div>
+<div class="section"><h2>収益化ファネル</h2><div class="metricwide">
+<div class="panel"><div class="k">外部AIエージェント</div><div class="v" id="mAgentCalls">—</div><div class="hint">confirmed external shopping intent / external calls</div></div>
+<div class="panel"><div class="k">x402 PAYMENT ATTEMPTS</div><div class="v" id="mAttempts">—</div><div class="hint">PAYMENT-SIGNATURE retry</div></div>
+<div class="panel"><div class="k">CONVERSION</div><div class="v" id="mConversion">—</div><div class="hint">外部paid / shopping intent</div></div>
+</div></div>
+<div class="section"><h2>Universal Core</h2><div class="tabs"><span class="tab active">Universal</span><span class="tab">Parts</span><span class="tab">Anime Adapter</span><span class="tab">Generic Commerce</span><span class="tab">Merchant</span><span class="tab">x402</span></div><div class="panel"><div class="statusline"><span id="healthDot" class="dot"></span><b id="healthText">Loading…</b><span class="hint" id="healthSub"></span></div><div class="row" style="margin-top:12px"><button onclick="showPublic('/v1/universal/status')">Universal Status</button><button onclick="showPublic('/v1/system/routes')">Public Routes</button><button onclick="showPublic('/health')">Shallow Health</button><button onclick="showPublic('/openapi.json')">OpenAPI</button><button onclick="showPublic('/.well-known/x402')">x402 Discovery</button></div></div></div>
+<div class="section"><h2>DB自動拡張・更新</h2><div class="metricwide">
+<div class="panel"><div class="k">AUTONOMOUS PIPELINE</div><div class="v small" id="mPipeline">—</div><div class="hint">需要観測 → canonical化 → market refresh → 再利用</div></div>
+<div class="panel"><div class="k">PARTS COLLECTOR</div><div class="v small" id="mParts">—</div><div class="hint">メーカー公式・仕様・後継・Merchant evidence</div></div>
+<div class="panel"><div class="k">GENERIC COMMERCE</div><div class="v small" id="mGeneric">—</div><div class="hint">需要グラフ、market observation、GTIN/JAN昇格</div></div>
+</div><div class="panel" style="margin-top:12px"><div class="row"><button class="good" onclick="authRun('/admin/readiness','GET')">Production Readiness</button><button class="good" onclick="authRun('/admin/growth-status','GET')">Growth Status</button><button onclick="authRun('/admin/parts/ingest-status','GET')">Parts Ingest Status</button><button onclick="authRun('/admin/kpi','GET')">KPI Raw</button><button onclick="authRun('/admin/revenue-status','GET')">Revenue Raw</button><button onclick="authRun('/admin/final-check','GET')">Production Final Check</button></div><div class="hint">実売上は外部payerのみ表示。旧Anime固有操作はAdapters / Legacyへ隔離しています。</div></div></div>
+<div class="section"><h2>Merchant / Supply</h2><div class="metricwide">
+<div class="panel"><div class="k">ACTIVE MERCHANTS</div><div class="v" id="mMerchants">—</div></div>
+<div class="panel"><div class="k">NON-OMRON / CROSS-MERCHANT</div><div class="v small" id="mMerchantCoverage">—</div></div>
+<div class="panel"><div class="k">EVIDENCE POLICY</div><div class="v small">No paid placement</div><div class="hint">価格・在庫・納期・互換性を証拠なしで推定しません。</div></div>
+</div></div>
+<div class="section"><h2>詳細出力</h2><pre id="o">ダッシュボードを読み込みます…</pre></div>
+<div class="section"><details><summary><b>Adapters / Legacy operations</b></summary><div class="panel" style="margin-top:10px"><div class="hint">Universal Coreの後方互換として残している専門adapterです。通常運用では触る必要はありません。</div><div class="row" style="margin-top:10px"><button onclick="authRun('/admin/expand','POST')">Anime Adapter Safe Cycle</button><button onclick="authRun('/admin/quality-repair?auto=1','POST')">Anime Quality Repair</button><button onclick="authRun('/admin/world-discovery-audit?mode=all','GET')">Discovery Audit</button><button onclick="authRun('/admin/bazaar-compliance-audit','GET')">Bazaar Audit</button></div></div></details></div>
+<div class="footer">GLOBAL PURCHASE DECISION ${VERSION} · Universal Purchase Decision Engine · one paid decision layer for AI agents across physical products.</div>
+<script>
+const KEY_SESSION='global_purchase_decision_admin_key_v510';
+function key(){const e=document.getElementById('k');let v=String(e&&e.value||'').trim();if(v){try{sessionStorage.setItem(KEY_SESSION,v)}catch{}return v}try{v=String(sessionStorage.getItem(KEY_SESSION)||'').trim()}catch{}if(v&&e)e.value=v;return v}
+function initKey(){const e=document.getElementById('k');if(!e)return;try{const v=String(sessionStorage.getItem(KEY_SESSION)||'').trim();if(v)e.value=v}catch{}e.addEventListener('input',function(){try{const v=String(e.value||'').trim();if(v)sessionStorage.setItem(KEY_SESSION,v);else sessionStorage.removeItem(KEY_SESSION)}catch{}})}
+function n(v){if(v===null||v===undefined||v==='')return '—';if(typeof v==='number')return Number.isInteger(v)?String(v):String(Math.round(v*1000)/1000);return String(v)}
+function path(o,p){try{return p.split('.').reduce(function(a,k){return a==null?undefined:a[k]},o)}catch{return undefined}}
+function first(o,ps){for(const p of ps){const v=path(o,p);if(v!==undefined&&v!==null)return v}return null}
+function set(id,v){const e=document.getElementById(id);if(e)e.textContent=n(v)}
+async function req(p,auth){const h={'cache-control':'no-cache'};if(auth){const k=key();if(!k)throw new Error('REFRESH_KEY_REQUIRED');h['x-refresh-key']=k;h['x-anime-intelligence-test']='admin_ui'}const r=await fetch(p,{headers:h});const t=await r.text();let j;try{j=JSON.parse(t)}catch{j={raw:t}}if(!r.ok)throw new Error('HTTP '+r.status+' '+JSON.stringify(j).slice(0,500));return j}
+function show(j){document.getElementById('o').textContent=JSON.stringify(j,null,2)}
+function applyPublic(h,u){const ok=!!(h&&h.ok!==false&&h.status!=='offline');const d=document.getElementById('healthDot');d.className='dot '+(ok?'good':'bad');document.getElementById('healthText').textContent=ok?'ONLINE':'CHECK';document.getElementById('healthSub').textContent=(h&&h.service?h.service:'GLOBAL PURCHASE DECISION')+' / '+(h&&h.version?h.version:'${VERSION}');set('mSystem',ok?'ONLINE '+(h.version||'${VERSION}'):'CHECK');set('mPipeline',first(h,['autonomous_pipeline.current_stage','current_stage','architecture'])||'ACTIVE');set('mParts',first(h,['parts_intelligence.status'])||first(u,['database_growth.parts_catalog'])===true?'ACTIVE':'ACTIVE');set('mGeneric',first(u,['database_growth.scheduled_generic_refresh'])===true?'AUTO REFRESH ON':'ACTIVE')}
+function applyKpi(k){k=k&&k.kpi?k.kpi:k;set('mRevenue',first(k,['external_revenue_usdc','recent_history_external_revenue_usdc'])??0);set('mPaid',first(k,['external_paid_calls','recent_history_external_paid_calls'])??0);set('mPayers',first(k,['external_unique_payers','recent_history_external_unique_payers'])??0);set('mDecision',first(k,['purchase_decision_calls','confirmed_external_purchase_decision_calls','calls_by_endpoint./v1/purchase-decision','paid_calls_by_endpoint./v1/purchase-decision'])??0);set('mAgentCalls',first(k,['confirmed_external_shopping_intent_calls','real_shopping_intent_calls','external_shopping_intent_calls'])??0);set('mAttempts',first(k,['external_payment_attempts','payment_attempts','recent_history_payment_attempts'])??0);const a=Number(first(k,['confirmed_external_shopping_intent_calls','real_shopping_intent_calls','external_shopping_intent_calls'])||0),p=Number(first(k,['external_paid_calls','recent_history_external_paid_calls'])||0);set('mConversion',a>0?((p/a)*100).toFixed(1)+'%':'0%')}
+function applyParts(p){set('mProducts',first(p,['parts_sample_count','data_quality.sample_size','parts_total','canonical_parts']));set('mOffers',first(p,['merchant_offer_collection.offers_sample_count','merchant_offers_total','offers_count']));set('mMerchants',first(p,['merchant_offer_collection.active_merchants_seen','active_merchants','merchants_active']));const no=first(p,['merchant_offer_collection.non_omron_active_offers_sample','hardening.production_acceptance.non_omron_active_offer_seen_in_sample']);set('mMerchantCoverage',no===true?'NON-OMRON VERIFIED':no===false?'NEEDS COVERAGE':no);const c=first(p,['cron_health.status']);const v=first(p,['version','collector.version']);set('mCollector',(v?String(v)+' ':'')+(c||'ACTIVE'))}
+async function refreshAll(){const out={};try{const pair=await Promise.all([req('/health',false),req('/v1/universal/status',false)]);out.health=pair[0];out.universal=pair[1];applyPublic(pair[0],pair[1])}catch(e){out.public_error=String(e);document.getElementById('healthDot').className='dot bad';document.getElementById('healthText').textContent='CHECK'}if(key()){try{const r=await req('/admin/revenue-status',true);out.revenue=r;applyKpi(r)}catch(e){out.revenue_error=String(e)}try{const k=await req('/admin/kpi',true);out.kpi=k;applyKpi(k)}catch(e){out.kpi_error=String(e)}try{const p=await req('/admin/parts/ingest-status',true);out.parts=p;applyParts(p)}catch(e){out.parts_error=String(e)}}else{out.note='REFRESH_KEYを入力するとRevenue/KPI/Parts詳細まで表示します。'}show(out)}
+async function deepHealth(){try{const j=await req('/health/deep',false);show(j)}catch(e){show({error:String(e)})}}
+async function showPublic(p){try{show(await req(p,false))}catch(e){show({error:String(e),endpoint:p})}}
+async function authRun(p,m){const k=key();if(!k){show({error:'REFRESH_KEY_REQUIRED'});return}const h={'x-refresh-key':k,'cache-control':'no-cache','x-anime-intelligence-test':'admin_ui'};try{const r=await fetch(p,{method:m||'GET',headers:h}),t=await r.text();let j;try{j=JSON.parse(t)}catch{j={raw:t}}show(j)}catch(e){show({error:String(e),endpoint:p})}}
+window.addEventListener('pageshow',function(){initKey();refreshAll()});
+</script></main></body></html>`;}
+
+
+/* =========================================================
+   EMBEDDED PARTS COLLECTOR v3.0.0
+   Failover-only inside Global Purchase Decision.
+   It does not run when a recent external collector heartbeat exists.
+========================================================= */
+const EMBEDDED_PARTS_COLLECTOR=(()=>{
+// @ts-nocheck
+const VERSION="3.0.0";
+const BUILD_ID="20261026-300-consolidated-production-final-a1";
+const SERVICE="PARTS INTELLIGENCE COLLECTOR";
+
+
+const APPLICATION_TAXONOMY={
+  automotive:["ev","adas","powertrain","chassis","body","thermal","infotainment"],
+  humanoid:["joint_actuation","dexterous_hand","perception","proprioception","power","compute","thermal","connectivity","structure"],
+  physical_ai:["industrial_robot","cobot","amr","agv","drone","inspection_robot","construction_robot","agri_robot","evtOL_subsystem"],
+  component_domains:["motion","reducer","bearing","linear_motion","sensor","encoder","force_torque","vision","lidar","radar","imu","power_semiconductor","motor_driver","mcu_soc","connectivity","connector","battery_bms","thermal","emi_emc"]
+};
+
+const MANUFACTURER_UNIVERSE=[
+  {name:"OMRON",region:"JP",domains:["sensor","control","safety","relay"],applications:["industrial_robot","automotive","humanoid","amr"],official_root:"https://www.fa.omron.co.jp"},
+  {name:"Mitsubishi Electric",region:"JP",domains:["servo","plc","inverter","motor"],applications:["industrial_robot","amr","factory_automation"],official_root:"https://www.mitsubishielectric.co.jp/fa/"},
+  {name:"SMC",region:"JP",domains:["pneumatics","actuator","sensor"],applications:["industrial_robot","cobot","factory_automation"],official_root:"https://www.smcworld.com"},
+  {name:"Panasonic Industry",region:"JP",domains:["sensor","relay","motor","passive"],applications:["automotive","industrial_robot","humanoid"],official_root:"https://industry.panasonic.com"},
+  {name:"Yaskawa",region:"JP",domains:["servo","motor","drive","robotics"],applications:["industrial_robot","humanoid","amr"],official_root:"https://www.e-mechatronics.com"},
+  {name:"THK",region:"JP",domains:["linear_motion","ball_screw","cross_roller_bearing","actuator"],applications:["humanoid","industrial_robot","amr"],official_root:"https://www.thk.com"},
+  {name:"NSK",region:"JP",domains:["bearing","ball_screw","actuator"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.nsk.com"},
+  {name:"NTN",region:"JP",domains:["bearing","hub","motor_related"],applications:["automotive","industrial_robot","humanoid"],official_root:"https://www.ntn.co.jp"},
+  {name:"Nabtesco",region:"JP",domains:["cycloidal_reducer","precision_reducer"],applications:["humanoid","industrial_robot","cobot"],official_root:"https://precision.nabtesco.com"},
+  {name:"Harmonic Drive Systems",region:"JP",domains:["strain_wave_reducer","planetary_reducer","actuator"],applications:["humanoid","industrial_robot","space_robotics"],official_root:"https://www.hds.co.jp"},
+  {name:"Nidec",region:"JP",domains:["motor","drive","fan"],applications:["automotive","humanoid","drone","amr"],official_root:"https://www.nidec.com"},
+  {name:"MinebeaMitsumi",region:"JP",domains:["motor","bearing","sensor","connector","semiconductor"],applications:["automotive","humanoid","drone","industrial_robot"],official_root:"https://product.minebeamitsumi.com"},
+  {name:"Oriental Motor",region:"JP",domains:["motor","driver","actuator","fan"],applications:["industrial_robot","amr","factory_automation"],official_root:"https://www.orientalmotor.co.jp"},
+  {name:"KEYENCE",region:"JP",domains:["sensor","vision","laser","safety"],applications:["industrial_robot","amr","inspection_robot"],official_root:"https://www.keyence.co.jp"},
+  {name:"Azbil",region:"JP",domains:["sensor","control","measurement"],applications:["industrial_robot","process_automation"],official_root:"https://aa-industrial.azbil.com"},
+  {name:"Renesas",region:"JP",domains:["mcu_soc","motor_control","power","connectivity"],applications:["automotive","humanoid","amr","drone"],official_root:"https://www.renesas.com"},
+  {name:"ROHM",region:"JP",domains:["sic","mosfet","motor_driver","power_ic","sensor"],applications:["automotive","humanoid","drone","industrial_robot"],official_root:"https://www.rohm.com"},
+  {name:"TDK",region:"JP",domains:["imu","sensor","passive","power","battery"],applications:["automotive","humanoid","drone","amr"],official_root:"https://product.tdk.com"},
+  {name:"Murata",region:"JP",domains:["imu","sensor","passive","connectivity","power"],applications:["automotive","humanoid","drone","amr"],official_root:"https://www.murata.com"},
+  {name:"Hirose",region:"JP",domains:["connector"],applications:["automotive","humanoid","drone","industrial_robot"],official_root:"https://www.hirose.com"},
+  {name:"JST",region:"JP",domains:["connector"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.jst-mfg.com"},
+  {name:"JAE",region:"JP",domains:["connector"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.jae.com"},
+  {name:"Yazaki",region:"JP",domains:["automotive_connector","harness"],applications:["automotive"],official_root:"https://www.yazaki-group.com"},
+  {name:"Sumitomo Wiring Systems",region:"JP",domains:["automotive_connector","harness"],applications:["automotive"],official_root:"https://www.sws.co.jp"},
+  {name:"Infineon",region:"EU",domains:["sic","mosfet","igbt","mcu_soc","sensor","motor_driver"],applications:["automotive","humanoid","drone","industrial_robot"],official_root:"https://www.infineon.com"},
+  {name:"STMicroelectronics",region:"EU",domains:["mcu_soc","motor_driver","sensor","power_semiconductor"],applications:["automotive","humanoid","drone","amr"],official_root:"https://www.st.com"},
+  {name:"Texas Instruments",region:"US",domains:["motor_driver","power_ic","sensor","mcu_soc","connectivity"],applications:["automotive","humanoid","industrial_robot","drone"],official_root:"https://www.ti.com"},
+  {name:"NXP",region:"EU",domains:["automotive_mcu","radar","connectivity","power"],applications:["automotive","amr","humanoid"],official_root:"https://www.nxp.com"},
+  {name:"Analog Devices",region:"US",domains:["sensor","signal_chain","power","connectivity"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.analog.com"},
+  {name:"onsemi",region:"US",domains:["sic","mosfet","image_sensor","power"],applications:["automotive","humanoid","drone"],official_root:"https://www.onsemi.com"},
+  {name:"Microchip",region:"US",domains:["mcu_soc","fpga","connectivity","motor_control"],applications:["automotive","industrial_robot","amr"],official_root:"https://www.microchip.com"},
+  {name:"TE Connectivity",region:"US",domains:["connector","sensor","relay"],applications:["automotive","humanoid","drone","industrial_robot"],official_root:"https://www.te.com"},
+  {name:"Molex",region:"US",domains:["connector","cable","antenna"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.molex.com"},
+  {name:"Amphenol",region:"US",domains:["connector","sensor","cable"],applications:["automotive","humanoid","drone","industrial_robot"],official_root:"https://www.amphenol.com"},
+  {name:"Bosch Sensortec",region:"EU",domains:["imu","sensor"],applications:["humanoid","drone","amr","wearable_robotics"],official_root:"https://www.bosch-sensortec.com"},
+  {name:"Allegro MicroSystems",region:"US",domains:["hall_sensor","current_sensor","motor_driver"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.allegromicro.com"},
+  {name:"Melexis",region:"EU",domains:["magnetic_sensor","current_sensor","temperature_sensor"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.melexis.com"},
+  {name:"Sensata",region:"US",domains:["pressure_sensor","position_sensor","thermal","contactor"],applications:["automotive","industrial_robot","humanoid"],official_root:"https://www.sensata.com"},
+  {name:"maxon",region:"EU",domains:["motor","gearhead","encoder","controller"],applications:["humanoid","robotics","medical_robotics","drone"],official_root:"https://www.maxongroup.com"},
+  {name:"FAULHABER",region:"EU",domains:["motor","gearhead","encoder","motion_controller"],applications:["humanoid","robotics","medical_robotics","drone"],official_root:"https://www.faulhaber.com"},
+  {name:"SKF",region:"EU",domains:["bearing","seal","lubrication"],applications:["automotive","industrial_robot","humanoid"],official_root:"https://www.skf.com"},
+  {name:"Schaeffler",region:"EU",domains:["bearing","linear_motion","actuator"],applications:["automotive","industrial_robot","humanoid"],official_root:"https://www.schaeffler.com"},
+  {name:"DENSO",region:"JP",domains:["automotive_sensor","power_electronics","thermal","motor"],applications:["automotive","amr"],official_root:"https://www.denso.com"},
+  {name:"AISIN",region:"JP",domains:["actuator","motor","powertrain","brake"],applications:["automotive","humanoid"],official_root:"https://www.aisin.com"},
+  {name:"Alps Alpine",region:"JP",domains:["sensor","hmi","switch","connectivity"],applications:["automotive","humanoid","amr"],official_root:"https://www.alpsalpine.com"},
+  {name:"Mabuchi Motor",region:"JP",domains:["motor"],applications:["automotive","humanoid","robotics"],official_root:"https://www.mabuchi-motor.com"},
+  {name:"Nichicon",region:"JP",domains:["capacitor","power_module"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.nichicon.co.jp"},
+  {name:"Rubycon",region:"JP",domains:["capacitor"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.rubycon.co.jp"},
+  {name:"Wolfspeed",region:"US",domains:["sic","power_semiconductor"],applications:["automotive","humanoid","industrial_robot"],official_root:"https://www.wolfspeed.com"},
+  {name:"Vicor",region:"US",domains:["dc_dc","power_module"],applications:["automotive","humanoid","drone","robotics"],official_root:"https://www.vicorpower.com"},
+  {name:"NVIDIA",region:"US",domains:["edge_ai","soc","compute"],applications:["automotive","humanoid","amr","drone"],official_root:"https://www.nvidia.com"},
+  {name:"Qualcomm",region:"US",domains:["soc","edge_ai","connectivity"],applications:["automotive","humanoid","amr","drone"],official_root:"https://www.qualcomm.com"},
+  {name:"AMD Xilinx",region:"US",domains:["fpga","soc","edge_compute"],applications:["automotive","industrial_robot","amr"],official_root:"https://www.amd.com"},
+  {name:"SICK",region:"EU",domains:["lidar","sensor","vision","safety"],applications:["amr","industrial_robot","humanoid"],official_root:"https://www.sick.com"},
+  {name:"ifm",region:"EU",domains:["sensor","vision","io_link"],applications:["amr","industrial_robot","factory_automation"],official_root:"https://www.ifm.com"},
+  {name:"Balluff",region:"EU",domains:["sensor","rfid","io_link"],applications:["industrial_robot","amr","factory_automation"],official_root:"https://www.balluff.com"},
+  {name:"Festo",region:"EU",domains:["pneumatics","electric_actuator","servo","sensor"],applications:["industrial_robot","cobot","humanoid"],official_root:"https://www.festo.com"},
+  {name:"Beckhoff",region:"EU",domains:["ipc","ethercat","motion_control","io"],applications:["industrial_robot","amr","factory_automation"],official_root:"https://www.beckhoff.com"},
+  {name:"Kollmorgen",region:"US",domains:["servo_motor","drive","motion_control"],applications:["industrial_robot","amr","humanoid"],official_root:"https://www.kollmorgen.com"},
+  {name:"Moog",region:"US",domains:["servo","actuator","motion_control"],applications:["humanoid","industrial_robot","aerospace_robotics"],official_root:"https://www.moog.com"},
+  {name:"Parker Hannifin",region:"US",domains:["actuator","motor","hydraulics","pneumatics"],applications:["industrial_robot","mobile_robot","humanoid"],official_root:"https://www.parker.com"},
+  {name:"CUI Devices",region:"US",domains:["encoder","sensor","connector","motor"],applications:["humanoid","industrial_robot","amr"],official_root:"https://www.cuidevices.com"},
+  {name:"Honeywell",region:"US",domains:["sensor","imu","pressure","position"],applications:["automotive","humanoid","drone"],official_root:"https://automation.honeywell.com"},
+  {name:"ams OSRAM",region:"EU",domains:["optical_sensor","tof","lidar_component","led"],applications:["automotive","humanoid","robotics"],official_root:"https://ams-osram.com"},
+  {name:"Sony Semiconductor Solutions",region:"JP",domains:["image_sensor","depth_sensor"],applications:["automotive","humanoid","drone","robotics"],official_root:"https://www.sony-semicon.com"},
+  {name:"Valeo",region:"EU",domains:["adas","lidar","thermal","motor"],applications:["automotive"],official_root:"https://www.valeo.com"},
+  {name:"Continental",region:"EU",domains:["adas","radar","brake","automotive_compute"],applications:["automotive"],official_root:"https://www.continental.com"},
+  {name:"Aptiv",region:"US",domains:["automotive_connector","harness","compute"],applications:["automotive"],official_root:"https://www.aptiv.com"},
+  {name:"ZF",region:"EU",domains:["actuator","steer_by_wire","brake_by_wire","powertrain"],applications:["automotive","mobile_robot"],official_root:"https://www.zf.com"}
+];
+
+function universeProfile(manufacturer){return MANUFACTURER_UNIVERSE.find(x=>x.name===manufacturer)||null;}
+
+const OFFICIAL_WATCH_SOURCES_BASE=[
+  {kind:"manufacturer_watch",slug:"watch-thk-products",manufacturer:"THK",root:"https://www.thk.com",seeds:["https://www.thk.com/jp/ja/products/","https://www.thk.com/jp/ja/products/services/catalog/"],allowPrefixes:["https://www.thk.com/jp/ja/products/"],priority:100,source_tier:"A_B",applications:["humanoid","industrial_robot","amr"],domains:["linear_motion","ball_screw","cross_roller_bearing","actuator"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-hds-products",manufacturer:"Harmonic Drive Systems",root:"https://www.hds.co.jp",seeds:["https://www.hds.co.jp/products/list/"],allowPrefixes:["https://www.hds.co.jp/products/"],priority:100,source_tier:"A",applications:["humanoid","industrial_robot"],domains:["strain_wave_reducer","planetary_reducer","actuator"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-nabtesco-precision",manufacturer:"Nabtesco",root:"https://precision.nabtesco.com",seeds:["https://precision.nabtesco.com/"],allowPrefixes:["https://precision.nabtesco.com/"],priority:100,source_tier:"A",applications:["humanoid","industrial_robot","cobot"],domains:["cycloidal_reducer","precision_reducer"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-nsk-products",manufacturer:"NSK",root:"https://www.nsk.com",seeds:["https://www.nsk.com/products/"],allowPrefixes:["https://www.nsk.com/products/"],priority:98,source_tier:"A",applications:["automotive","humanoid","industrial_robot"],domains:["bearing","ball_screw","actuator"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-ntn-products",manufacturer:"NTN",root:"https://www.ntn.co.jp",seeds:["https://www.ntn.co.jp/japan/products/"],allowPrefixes:["https://www.ntn.co.jp/japan/products/"],priority:97,source_tier:"A",applications:["automotive","humanoid","industrial_robot"],domains:["bearing","hub"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-nidec-products",manufacturer:"Nidec",root:"https://www.nidec.com",seeds:["https://www.nidec.com/en/product/"],allowPrefixes:["https://www.nidec.com/en/product/"],priority:96,source_tier:"A",applications:["automotive","humanoid","drone","amr"],domains:["motor","drive","fan"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-minebea-products",manufacturer:"MinebeaMitsumi",root:"https://product.minebeamitsumi.com",seeds:["https://product.minebeamitsumi.com/en/"],allowPrefixes:["https://product.minebeamitsumi.com/en/"],priority:96,source_tier:"A",applications:["automotive","humanoid","drone","industrial_robot"],domains:["motor","bearing","sensor","connector","semiconductor"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-renesas-products",manufacturer:"Renesas",root:"https://www.renesas.com",seeds:["https://www.renesas.com/en/products"],allowPrefixes:["https://www.renesas.com/en/products"],priority:100,source_tier:"A",applications:["automotive","humanoid","amr","drone"],domains:["mcu_soc","motor_control","power","connectivity"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-rohm-products",manufacturer:"ROHM",root:"https://www.rohm.com",seeds:["https://www.rohm.com/products"],allowPrefixes:["https://www.rohm.com/products"],priority:99,source_tier:"A",applications:["automotive","humanoid","drone","industrial_robot"],domains:["sic","mosfet","motor_driver","power_ic","sensor"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-tdk-products",manufacturer:"TDK",root:"https://product.tdk.com",seeds:["https://product.tdk.com/en/"],allowPrefixes:["https://product.tdk.com/en/"],priority:98,source_tier:"A",applications:["automotive","humanoid","drone","amr"],domains:["imu","sensor","passive","power","battery"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-murata-products",manufacturer:"Murata",root:"https://www.murata.com",seeds:["https://www.murata.com/en-global/products"],allowPrefixes:["https://www.murata.com/en-global/products"],priority:98,source_tier:"A",applications:["automotive","humanoid","drone","amr"],domains:["imu","sensor","passive","connectivity","power"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-infineon-products",manufacturer:"Infineon",root:"https://www.infineon.com",seeds:["https://www.infineon.com/products"],allowPrefixes:["https://www.infineon.com/products"],priority:100,source_tier:"A",applications:["automotive","humanoid","drone","industrial_robot"],domains:["sic","mosfet","igbt","mcu_soc","sensor","motor_driver"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-st-products",manufacturer:"STMicroelectronics",root:"https://www.st.com",seeds:["https://www.st.com/content/st_com/en/products.html"],allowPrefixes:["https://www.st.com/content/st_com/en/products"],priority:99,source_tier:"A",applications:["automotive","humanoid","drone","amr"],domains:["mcu_soc","motor_driver","sensor","power_semiconductor"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-ti-products",manufacturer:"Texas Instruments",root:"https://www.ti.com",seeds:["https://www.ti.com/product-categories/overview.html"],allowPrefixes:["https://www.ti.com/product-categories/"],priority:99,source_tier:"A",applications:["automotive","humanoid","industrial_robot","drone"],domains:["motor_driver","power_ic","sensor","mcu_soc","connectivity"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-nxp-products",manufacturer:"NXP",root:"https://www.nxp.com",seeds:["https://www.nxp.com/products:PRODUCTS"],allowPrefixes:["https://www.nxp.com/products"],priority:99,source_tier:"A",applications:["automotive","amr","humanoid"],domains:["automotive_mcu","radar","connectivity","power"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-onsemi-products",manufacturer:"onsemi",root:"https://www.onsemi.com",seeds:["https://www.onsemi.com/products"],allowPrefixes:["https://www.onsemi.com/products"],priority:98,source_tier:"A",applications:["automotive","humanoid","drone"],domains:["sic","mosfet","image_sensor","power"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-adi-products",manufacturer:"Analog Devices",root:"https://www.analog.com",seeds:["https://www.analog.com/en/product-category.html"],allowPrefixes:["https://www.analog.com/en/"],priority:98,source_tier:"A",applications:["automotive","humanoid","industrial_robot"],domains:["sensor","signal_chain","power","connectivity"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-microchip-products",manufacturer:"Microchip",root:"https://www.microchip.com",seeds:["https://www.microchip.com/en-us/products"],allowPrefixes:["https://www.microchip.com/en-us/products"],priority:96,source_tier:"A",applications:["automotive","industrial_robot","amr"],domains:["mcu_soc","fpga","connectivity","motor_control"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-te-products",manufacturer:"TE Connectivity",root:"https://www.te.com",seeds:["https://www.te.com/en/products.html"],allowPrefixes:["https://www.te.com/en/products"],priority:97,source_tier:"A",applications:["automotive","humanoid","drone","industrial_robot"],domains:["connector","sensor","relay"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-molex-products",manufacturer:"Molex",root:"https://www.molex.com",seeds:["https://www.molex.com/en-us/products"],allowPrefixes:["https://www.molex.com/en-us/products"],priority:96,source_tier:"A",applications:["automotive","humanoid","industrial_robot"],domains:["connector","cable","antenna"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-amphenol-products",manufacturer:"Amphenol",root:"https://www.amphenol.com",seeds:["https://www.amphenol.com/products"],allowPrefixes:["https://www.amphenol.com/products"],priority:96,source_tier:"A",applications:["automotive","humanoid","drone","industrial_robot"],domains:["connector","sensor","cable"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-hirose-products",manufacturer:"Hirose",root:"https://www.hirose.com",seeds:["https://www.hirose.com/product/en/products/"],allowPrefixes:["https://www.hirose.com/product/"],priority:96,source_tier:"A",applications:["automotive","humanoid","drone","industrial_robot"],domains:["connector"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-jae-products",manufacturer:"JAE",root:"https://www.jae.com",seeds:["https://www.jae.com/en/connectors/"],allowPrefixes:["https://www.jae.com/en/connectors/"],priority:95,source_tier:"A",applications:["automotive","humanoid","industrial_robot"],domains:["connector"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-bosch-sensortec",manufacturer:"Bosch Sensortec",root:"https://www.bosch-sensortec.com",seeds:["https://www.bosch-sensortec.com/products/"],allowPrefixes:["https://www.bosch-sensortec.com/products/"],priority:97,source_tier:"A",applications:["humanoid","drone","amr"],domains:["imu","sensor"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-allegro-products",manufacturer:"Allegro MicroSystems",root:"https://www.allegromicro.com",seeds:["https://www.allegromicro.com/en/products"],allowPrefixes:["https://www.allegromicro.com/en/products"],priority:96,source_tier:"A",applications:["automotive","humanoid","industrial_robot"],domains:["hall_sensor","current_sensor","motor_driver"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-melexis-products",manufacturer:"Melexis",root:"https://www.melexis.com",seeds:["https://www.melexis.com/en/products"],allowPrefixes:["https://www.melexis.com/en/products"],priority:95,source_tier:"A",applications:["automotive","humanoid","industrial_robot"],domains:["magnetic_sensor","current_sensor","temperature_sensor"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-sensata-products",manufacturer:"Sensata",root:"https://www.sensata.com",seeds:["https://www.sensata.com/products"],allowPrefixes:["https://www.sensata.com/products"],priority:94,source_tier:"A",applications:["automotive","industrial_robot","humanoid"],domains:["pressure_sensor","position_sensor","thermal","contactor"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-maxon-products",manufacturer:"maxon",root:"https://www.maxongroup.com",seeds:["https://www.maxongroup.com/en-us/products"],allowPrefixes:["https://www.maxongroup.com/en-us/products"],priority:98,source_tier:"A",applications:["humanoid","robotics","drone"],domains:["motor","gearhead","encoder","controller"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-faulhaber-products",manufacturer:"FAULHABER",root:"https://www.faulhaber.com",seeds:["https://www.faulhaber.com/en/products/"],allowPrefixes:["https://www.faulhaber.com/en/products/"],priority:98,source_tier:"A",applications:["humanoid","robotics","drone"],domains:["motor","gearhead","encoder","motion_controller"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-skf-products",manufacturer:"SKF",root:"https://www.skf.com",seeds:["https://www.skf.com/group/products"],allowPrefixes:["https://www.skf.com/group/products"],priority:94,source_tier:"A",applications:["automotive","industrial_robot","humanoid"],domains:["bearing","seal","lubrication"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-schaeffler-products",manufacturer:"Schaeffler",root:"https://www.schaeffler.com",seeds:["https://www.schaeffler.com/en/products-and-solutions/"],allowPrefixes:["https://www.schaeffler.com/en/products-and-solutions/"],priority:94,source_tier:"A",applications:["automotive","industrial_robot","humanoid"],domains:["bearing","linear_motion","actuator"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-omron-products",manufacturer:"OMRON",root:"https://www.fa.omron.co.jp",seeds:["https://www.fa.omron.co.jp/products/"],allowPrefixes:["https://www.fa.omron.co.jp/products/","https://www.fa.omron.co.jp/product/"],priority:100,source_tier:"A",applications:["industrial_robot","automotive","humanoid","amr"],domains:["sensor","control","safety","relay"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-mitsubishi-products",manufacturer:"Mitsubishi Electric",root:"https://www.mitsubishielectric.co.jp",seeds:["https://www.mitsubishielectric.co.jp/fa/products/index.html"],allowPrefixes:["https://www.mitsubishielectric.co.jp/fa/products/","https://fa-site.mitsubishielectric.co.jp/fa/products/"],priority:100,source_tier:"A",applications:["industrial_robot","amr","factory_automation"],domains:["servo","plc","inverter","motor","robotics"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-smc-products",manufacturer:"SMC",root:"https://www.smcworld.com",seeds:["https://www.smcworld.com/webcatalog/ja-jp/"],allowPrefixes:["https://www.smcworld.com/webcatalog/ja-jp/"],priority:99,source_tier:"A",applications:["industrial_robot","cobot","factory_automation"],domains:["pneumatics","electric_actuator","sensor","gripper"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-yaskawa-products",manufacturer:"Yaskawa",root:"https://www.e-mechatronics.com",seeds:["https://www.e-mechatronics.com/product/"],allowPrefixes:["https://www.e-mechatronics.com/product/"],priority:100,source_tier:"A",applications:["industrial_robot","humanoid","amr"],domains:["servo","motor","drive","robotics"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-oriental-products",manufacturer:"Oriental Motor",root:"https://www.orientalmotor.co.jp",seeds:["https://www.orientalmotor.co.jp/ja/products"],allowPrefixes:["https://www.orientalmotor.co.jp/ja/products"],priority:98,source_tier:"A",applications:["industrial_robot","amr","factory_automation"],domains:["motor","driver","actuator","fan","encoder"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-azbil-products",manufacturer:"Azbil",root:"https://aa-industrial.azbil.com",seeds:["https://aa-industrial.azbil.com/ja/products"],allowPrefixes:["https://aa-industrial.azbil.com/ja/products"],priority:96,source_tier:"A",applications:["industrial_robot","process_automation"],domains:["sensor","control","measurement","actuator"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-keyence-products",manufacturer:"KEYENCE",root:"https://www.keyence.co.jp",seeds:["https://www.keyence.co.jp/products/"],allowPrefixes:["https://www.keyence.co.jp/products/"],priority:100,source_tier:"A",applications:["industrial_robot","amr","inspection_robot"],domains:["sensor","vision","laser","safety"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-festo-products",manufacturer:"Festo",root:"https://www.festo.com",seeds:["https://www.festo.com/us/en/c/products-id_pim17/"],allowPrefixes:["https://www.festo.com/"],priority:95,source_tier:"A",applications:["industrial_robot","cobot","humanoid"],domains:["pneumatics","electric_actuator","servo","sensor"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-sick-products",manufacturer:"SICK",root:"https://www.sick.com",seeds:["https://www.sick.com/us/en/catalog/products/c/g575751"],allowPrefixes:["https://www.sick.com/"],priority:96,source_tier:"A",applications:["amr","industrial_robot","humanoid"],domains:["lidar","sensor","vision","safety"],collection_enabled:true,max_depth:0,refresh_days:7},
+  {kind:"manufacturer_watch",slug:"watch-nvidia-robotics",manufacturer:"NVIDIA",root:"https://www.nvidia.com",seeds:["https://www.nvidia.com/en-us/industries/robotics/"],allowPrefixes:["https://www.nvidia.com/en-us/industries/robotics/"],priority:98,source_tier:"D",applications:["humanoid","amr","drone","industrial_robot"],domains:["edge_ai","soc","compute"],collection_enabled:true,max_depth:0,refresh_days:7}
+];
+
+const SOURCES=[
+  {slug:"omron-closed",manufacturer:"OMRON",root:"https://www.fa.omron.co.jp",seeds:["https://www.fa.omron.co.jp/product/closed/newitem","https://www.fa.omron.co.jp/product/closed/allitem","https://www.fa.omron.co.jp/product/closed/input/"],bootstrapSeeds:["https://www.fa.omron.co.jp/data_pdf/closed/2026075c.pdf","https://www.fa.omron.co.jp/data_pdf/closed/2026061c.pdf","https://www.fa.omron.co.jp/data_pdf/closed/2026062c.pdf","https://www.fa.omron.co.jp/data_pdf/closed/2026501c_on.pdf"],allowPrefixes:["https://www.fa.omron.co.jp/product/closed/","https://www.fa.omron.co.jp/data_pdf/closed/"],lifecycle:"discontinued",priority:100},
+  {slug:"mitsubishi-fa-renewal",manufacturer:"Mitsubishi Electric",root:"https://www.mitsubishielectric.co.jp",seeds:["https://www.mitsubishielectric.co.jp/fa/products/renewal.html","https://www.mitsubishielectric.co.jp/fa/products/replace.html","https://www.mitsubishielectric.co.jp/fa/products/update/renewal.html"],allowPrefixes:["https://www.mitsubishielectric.co.jp/fa/products/","https://fa-site.mitsubishielectric.co.jp/fa/products/"],lifecycle:"unknown",priority:95},
+  {slug:"smc-discontinued",manufacturer:"SMC",root:"https://www.smcworld.com",seeds:["https://www.smcworld.com/webcatalog/discontinued/ja-jp/"],allowPrefixes:["https://www.smcworld.com/webcatalog/discontinued/"],lifecycle:"discontinued",priority:90},
+  {slug:"panasonic-industry-discontinued",manufacturer:"Panasonic Industry",root:"https://industry.panasonic.com",seeds:["https://industry.panasonic.com/jp/ja/products/discontinued","https://industry.panasonic.com/global/en/products/discontinued"],allowPrefixes:["https://industry.panasonic.com/jp/ja/products/discontinued","https://industry.panasonic.com/global/en/products/discontinued","https://industry.panasonic.com/ap/en/products/discontinued"],lifecycle:"discontinued",priority:90},
+  {slug:"yaskawa-afterservice",manufacturer:"Yaskawa",root:"https://www.e-mechatronics.com",seeds:["https://www.e-mechatronics.com/support/afterservice/disc_pdct.html","https://www.e-mechatronics.com/product/servo/disc_pdct_motor.html","https://www.e-mechatronics.com/support/afterservice/servo/disc_pdct.html?disc_pdct=old","https://www.e-mechatronics.com/support/afterservice/update_servo.html","https://www.e-mechatronics.com/support/afterservice/motor/disc_pdct.html"],allowPrefixes:["https://www.e-mechatronics.com/support/afterservice/","https://www.e-mechatronics.com/product/servo/"],lifecycle:"discontinued",priority:90},
+  {slug:"thk-discontinued",manufacturer:"THK",root:"https://www.thk.com",seeds:["https://www.thk.com/jp/ja/products/information/discontinued/"],allowPrefixes:["https://www.thk.com/jp/ja/products/information/discontinued/","https://www.thk.com/jp/ja/products/"],lifecycle:"discontinued",priority:90},
+  {slug:"idec-closed",manufacturer:"IDEC",root:"https://www.idec.com",seeds:["https://www.idec.com/ja-jp/support/closed"],allowPrefixes:["https://www.idec.com/ja-jp/support/closed","https://www.idec.com/ja-jp/products/","https://www.idec.com/ja-jp/support/"],lifecycle:"unknown",priority:75},
+  {slug:"oriental-motor-discontinued",manufacturer:"Oriental Motor",root:"https://www.orientalmotor.co.jp",seeds:["https://www.orientalmotor.co.jp/ja/products/pdt-info","https://www.orientalmotor.co.jp/ja/news/service/20260401"],allowPrefixes:["https://www.orientalmotor.co.jp/ja/products/","https://www.orientalmotor.co.jp/ja/news/service/"],lifecycle:"unknown",priority:85},
+  {slug:"azbil-discontinued",manufacturer:"Azbil",root:"https://aa-industrial.azbil.com",seeds:["https://aa-industrial.azbil.com/ja/products/discontinued03","https://aa-industrial.azbil.com/ja/products/discontinued/before_202212"],allowPrefixes:["https://aa-industrial.azbil.com/ja/products/discontinued","https://aa-industrial.azbil.com/jp/ja/products/discontinued"],lifecycle:"discontinued",priority:80}
+]
+
+const OFFER_SOURCES_BASE=[
+  {
+    kind:"merchant_offer",
+    slug:"offer-omron-fa-store",
+    merchant_slug:"omron-fa-store",
+    merchant_name:"OMRON FA Store",
+    manufacturer:"OMRON",
+    root:"https://store.fa.omron.co.jp",
+    website_url:"https://store.fa.omron.co.jp/",
+    country_code:"JP",
+    verified_merchant:true,
+    source_type:"official_manufacturer_store",
+    priority:100,
+    seeds:[
+      "https://store.fa.omron.co.jp/",
+      "https://store.fa.omron.co.jp/st/search?b5id=10200",
+      "https://store.fa.omron.co.jp/st/search?b5id=10420",
+      "https://store.fa.omron.co.jp/st/search?b5id=10336",
+      "https://store.fa.omron.co.jp/st/search?b5id=10673",
+      "https://store.fa.omron.co.jp/st/search?b5id=2650"
+    ],
+    allowPrefixes:["https://store.fa.omron.co.jp/st/search"],
+    authenticity_evidence_url:"https://store.fa.omron.co.jp/",
+    collection_enabled:false,
+    disabled_reason:"Cloudflare-origin HTTP 403 and Jina HTTP 429 observed repeatedly in production; retained as an evidence/source definition but removed from scheduled offer slots."
+  },
+  {
+    kind:"merchant_offer",
+    slug:"offer-rs-omron",
+    merchant_slug:"rs-japan",
+    merchant_name:"RS Japan",
+    manufacturer:"OMRON",
+    root:"https://jp.rs-online.com",
+    website_url:"https://jp.rs-online.com/",
+    country_code:"JP",
+    verified_merchant:false,
+    source_type:"industrial_distributor_public_catalog",
+    priority:95,
+    seeds:[
+      "https://jp.rs-online.com/web/b/omron/?pn=1",
+      "https://jp.rs-online.com/web/b/omron/?pn=2",
+      "https://jp.rs-online.com/web/b/omron/?pn=3",
+      "https://jp.rs-online.com/web/b/omron/?pn=4",
+      "https://jp.rs-online.com/web/b/omron/?pn=5",
+      "https://jp.rs-online.com/web/b/omron/?pn=6",
+      "https://jp.rs-online.com/web/b/omron/?pn=7",
+      "https://jp.rs-online.com/web/b/omron/?pn=8",
+      "https://jp.rs-online.com/web/b/omron/?pn=9",
+      "https://jp.rs-online.com/web/b/omron/?pn=10",
+      "https://jp.rs-online.com/web/b/omron/?pn=11",
+      "https://jp.rs-online.com/web/b/omron/?pn=12",
+      "https://jp.rs-online.com/web/b/omron/?pn=13",
+      "https://jp.rs-online.com/web/b/omron/?pn=14",
+      "https://jp.rs-online.com/web/b/omron/?pn=15",
+      "https://jp.rs-online.com/web/b/omron/?pn=16",
+      "https://jp.rs-online.com/web/b/omron/?pn=17",
+      "https://jp.rs-online.com/web/b/omron/?pn=18",
+      "https://jp.rs-online.com/web/b/omron/?pn=19",
+      "https://jp.rs-online.com/web/b/omron/?pn=20",
+      "https://jp.rs-online.com/web/b/omron/?pn=21",
+      "https://jp.rs-online.com/web/b/omron/?pn=22",
+      "https://jp.rs-online.com/web/b/omron/?pn=23",
+      "https://jp.rs-online.com/web/b/omron/?pn=24",
+      "https://jp.rs-online.com/web/b/omron/?pn=25",
+      "https://jp.rs-online.com/web/b/omron/?pn=26",
+      "https://jp.rs-online.com/web/b/omron/?pn=27",
+      "https://jp.rs-online.com/web/b/omron/?pn=28",
+      "https://jp.rs-online.com/web/b/omron/?pn=29",
+      "https://jp.rs-online.com/web/b/omron/?pn=30",
+      "https://jp.rs-online.com/web/b/omron/?pn=31",
+      "https://jp.rs-online.com/web/b/omron/?pn=32",
+      "https://jp.rs-online.com/web/b/omron/?pn=33",
+      "https://jp.rs-online.com/web/b/omron/?pn=34",
+      "https://jp.rs-online.com/web/b/omron/?pn=35",
+      "https://jp.rs-online.com/web/b/omron/?pn=36",
+      "https://jp.rs-online.com/web/b/omron/?pn=37",
+      "https://jp.rs-online.com/web/b/omron/?pn=38",
+      "https://jp.rs-online.com/web/b/omron/?pn=39",
+      "https://jp.rs-online.com/web/b/omron/?pn=40",
+      "https://jp.rs-online.com/web/b/omron/?pn=41",
+      "https://jp.rs-online.com/web/b/omron/?pn=42",
+      "https://jp.rs-online.com/web/b/omron/?pn=43",
+      "https://jp.rs-online.com/web/b/omron/?pn=44",
+      "https://jp.rs-online.com/web/b/omron/?pn=45",
+      "https://jp.rs-online.com/web/b/omron/?pn=46",
+      "https://jp.rs-online.com/web/b/omron/?pn=47",
+      "https://jp.rs-online.com/web/b/omron/?pn=48",
+      "https://jp.rs-online.com/web/b/omron/?pn=49",
+      "https://jp.rs-online.com/web/b/omron/?pn=50",
+      "https://jp.rs-online.com/web/b/omron/?pn=51",
+      "https://jp.rs-online.com/web/b/omron/?pn=52",
+      "https://jp.rs-online.com/web/b/omron/?pn=53",
+      "https://jp.rs-online.com/web/b/omron/?pn=54",
+      "https://jp.rs-online.com/web/b/omron/?pn=55",
+      "https://jp.rs-online.com/web/b/omron/?pn=56",
+      "https://jp.rs-online.com/web/b/omron/?pn=57",
+      "https://jp.rs-online.com/web/b/omron/?pn=58",
+      "https://jp.rs-online.com/web/b/omron/?pn=59",
+      "https://jp.rs-online.com/web/b/omron/?pn=60"
+    ],
+    allowPrefixes:["https://jp.rs-online.com/web/b/omron/","https://jp.rs-online.com/web/p/"],
+    authenticity_evidence_url:null,
+    tax_included:false,
+    collection_enabled:false,
+    disabled_reason:"Cloudflare-origin HTTP 403 and Jina HTTP 429 reproduced in production on v1.4.1 and v1.4.2; retained as a future evidence adapter but removed from scheduled collection."
+  },
+  {
+    kind:"merchant_offer",
+    slug:"offer-monotaro-omron",
+    merchant_slug:"monotaro-japan",
+    merchant_name:"MonotaRO",
+    manufacturer:"OMRON",
+    root:"https://www.monotaro.com",
+    website_url:"https://www.monotaro.com/",
+    country_code:"JP",
+    verified_merchant:false,
+    source_type:"industrial_retailer_public_catalog",
+    priority:90,
+    seeds:[
+      "https://www.monotaro.com/s/q-%E3%82%AA%E3%83%A0%E3%83%AD%E3%83%B3%20E2E%252DX5ME1/",
+      "https://www.monotaro.com/p/0208/7872/",
+      "https://www.monotaro.com/p/3989/9844/",
+      "https://www.monotaro.com/p/0208/7872/?collector_parser=150",
+      "https://www.monotaro.com/p/3989/9844/?collector_parser=150",
+      "https://www.monotaro.com/p/6369/6353/",
+      "https://www.monotaro.com/p/6369/6353/?collector_parser=150"
+    ],
+    allowPrefixes:["https://www.monotaro.com/s/","https://www.monotaro.com/g/","https://www.monotaro.com/p/"],
+    authenticity_evidence_url:null,
+    tax_included:null,
+    collection_enabled:true
+  }
+  ,
+  {
+    kind:"merchant_offer",
+    slug:"offer-misumi-omron",
+    merchant_slug:"misumi-japan",
+    merchant_name:"MISUMI Japan",
+    manufacturer:"OMRON",
+    root:"https://jp.misumi-ec.com",
+    website_url:"https://jp.misumi-ec.com/",
+    country_code:"JP",
+    verified_merchant:false,
+    source_type:"industrial_distributor_public_catalog",
+    priority:98,
+    seeds:[
+      "https://jp.misumi-ec.com/vona2/detail/221006389865/?HissuCode=E2E-X2MC18+2M",
+      "https://jp.misumi-ec.com/vona2/detail/221006389865/?optPageSCate=seriesList",
+      "https://jp.misumi-ec.com/vona2/detail/221000398713/?optPageSCate=seriesList"
+    ],
+    allowPrefixes:["https://jp.misumi-ec.com/vona2/detail/","https://jp.misumi-ec.com/vona2/result/"],
+    authenticity_evidence_url:null,
+    tax_included:false,
+    currency:"JPY",
+    ships_to:["JP"],
+    collection_enabled:true
+  },
+  {
+    kind:"merchant_offer",
+    slug:"offer-digikey-omron",
+    merchant_slug:"digikey-japan",
+    merchant_name:"DigiKey Japan",
+    manufacturer:"OMRON",
+    root:"https://www.digikey.jp",
+    website_url:"https://www.digikey.jp/",
+    country_code:"JP",
+    verified_merchant:false,
+    source_type:"electronic_distributor_public_catalog",
+    priority:97,
+    seeds:[
+      "https://www.digikey.jp/ja/products/detail/omron-automation-and-safety/E2E-X2MC18-2M/10221642",
+      "https://www.digikey.jp/ja/products/result?keywords=E2E-X2MC18%202M",
+      "https://www.digikey.jp/ja/products/result?keywords=E2E-X5ME1"
+    ],
+    allowPrefixes:["https://www.digikey.jp/ja/products/detail/","https://www.digikey.jp/ja/products/result"],
+    authenticity_evidence_url:null,
+    tax_included:false,
+    currency:"JPY",
+    ships_to:["JP"],
+    collection_enabled:true
+  },
+  {
+    kind:"merchant_offer",
+    slug:"offer-mouser-omron",
+    merchant_slug:"mouser",
+    merchant_name:"Mouser Electronics",
+    manufacturer:"OMRON",
+    root:"https://www.mouser.com",
+    website_url:"https://www.mouser.com/",
+    country_code:"US",
+    verified_merchant:false,
+    source_type:"electronic_distributor_public_catalog",
+    priority:96,
+    seeds:[
+      "https://www.mouser.com/ProductDetail/Omron-Automation-and-Safety/E2E-X2MC18-2M",
+      "https://www.mouser.com/c/?q=E2E-X2MC18%202M",
+      "https://www.mouser.com/c/?q=E2E-X5ME1"
+    ],
+    allowPrefixes:["https://www.mouser.com/ProductDetail/","https://www.mouser.com/c/"],
+    authenticity_evidence_url:null,
+    tax_included:false,
+    currency:"USD",
+    ships_to:null,
+    collection_enabled:true
+  }
+];
+
+function sourceKey(v=""){return String(v).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,64)||"manufacturer";}
