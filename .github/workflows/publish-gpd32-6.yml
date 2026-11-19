@@ -1,0 +1,37 @@
+name: Publish GPD v32.6 batch processing
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-gpd32-6.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and verify Worker
+        run: |
+          python3 scripts/build_gpd32_6.py
+          node --check releases/GPD32_6_COMPLETE_WORKER.js
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('releases/GPD32_6_COMPLETE_WORKER.js').read_text()
+          assert 'const VERSION="32.6.0"' in s
+          assert 'const UNIVERSAL_GENERIC_DOMAIN_TARGET=10000' in s
+          assert 'batchCandidates.slice(i,i+8)' in s
+          assert 'batchInserted.has(row.source_product_key)' in s
+          assert 'janOwnerMap.has(row.jan_code)' in s
+          assert 'batch_insert_fallback' in s
+          assert 'if(matches.length>1)' in s
+          assert 'if(janMatches.length>1)' in s
+          print('PASS syntax and batching/fallback invariants')
+          PY
+      - name: Publish complete Worker
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add releases/GPD32_6_COMPLETE_WORKER.js
+          git commit -m 'Publish complete GPD v32.6 Worker'
+          git push
