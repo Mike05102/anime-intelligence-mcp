@@ -1,0 +1,1000 @@
+  if(route.proxy_required)return `Lower apparent price may require a proxy/forwarder for a ${country} buyer; destination eligibility and final proxy fees must be confirmed before purchase.`;
+  if(extra>0)return `Selected over the apparent cheapest offer because it has a better purchase-fit/ease profile for a ${country} buyer; price premium versus the cheapest known offer is ${Math.round(extra)} JPY before unknown destination taxes/fees.`;
+  return `Selected as the strongest current balance of purchase feasibility, ease and known price for a ${country} buyer.`;
+}
+
+function assessPurchaseRoute(offer,buyerCountry="JP",cheapestKnown=null){
+  if(!offer)return null;
+  const country=normalizeBuyerCountry(buyerCountry),profile=sourcePurchaseProfile(offer.source,country);
+  const totalRaw=offer.total_price_jpy??offer.price_jpy,cheapestRaw=cheapestKnown;
+  const total=totalRaw==null?null:Number(totalRaw),cheapest=cheapestRaw==null?null:Number(cheapestRaw);
+  let priceScore=50;
+  if(Number.isFinite(total)&&total>0&&Number.isFinite(cheapest)&&cheapest>0){
+    const ratio=total/cheapest;
+    priceScore=ratio<=1?100:ratio<=1.05?92:ratio<=1.10?84:ratio<=1.20?72:ratio<=1.35?58:ratio<=1.50?45:30;
+  }
+  const confidenceMap={high:100,medium:72,medium_low:52,low:30},priceEvidenceScore=confidenceMap[String(offer.price_confidence||"medium")]??55;
+  const shippingEvidenceScore=offer.shipping_known===true?100:40;
+  const overall=Math.round(clamp(profile.country_fit_score*.45+profile.purchase_ease_score*.20+profile.trust_score*.10+priceScore*.12+priceEvidenceScore*.10+shippingEvidenceScore*.03));
+  const blockers=[];
+  if(profile.proxy_required)blockers.push(profile.route_type==="verified_proxy_international"?"proxy_service_required":"proxy_or_forwarder_may_be_required");
+  if(profile.destination_confirmation_required)blockers.push("destination_shipping_must_be_confirmed");
+  if(offer.shipping_jpy==null)blockers.push("destination_shipping_cost_not_verified");
+  if(offer.market_metadata?.region_product_availability_confirmation_required)blockers.push("product_region_availability_must_be_confirmed");
+  if(String(offer.price_basis||"").includes("not_verified"))blockers.push("destination_checkout_item_price_not_verified");
+  if(country!=="JP")blockers.push("destination_tax_duty_or_brokerage_not_verified");
+  const directness=profile.route_type==="verified_proxy_international"?"proxy_assisted_international":profile.proxy_required?"proxy_likely":profile.destination_confirmation_required?"direct_if_destination_supported":"direct";
+  let recommendedAction=profile.proxy_required?"Use a proxy/forwarder only after comparing its fees against direct international routes.":profile.destination_confirmation_required?`Confirm this exact listing ships to ${country} and accepts the buyer's payment method before checkout.`:"Direct purchase route; verify stock and checkout total before paying.";
+  if(String(offer.source||"").toLowerCase()==="goodsmile_official"&&country!=="JP")recommendedAction=`Use the Good Smile international checkout for ${country}; sign in to confirm this product is available in-region. Shipping policy is known, but the destination checkout item price and import charges must be confirmed before paying.`;
+  if(String(offer.source||"").toLowerCase()==="zenmarket_proxy"&&country!=="JP")recommendedAction=`Open ZenMarket and submit the source Japanese product URL for a quote. The proxy handles the Japanese purchase, multilingual account/payment flow and international forwarding; verify service fee, international shipping and destination import charges before paying.`;
+  return {...offer,buyer_country:country,purchase_route:{country_fit:profile.country_fit,country_fit_score:profile.country_fit_score,direct_shipping:profile.direct_shipping,directness,language_support:profile.language_support,payment_compatibility:profile.payment_compatibility,account_difficulty:profile.account_difficulty,proxy_required:profile.proxy_required,purchase_ease_score:profile.purchase_ease_score,trust_score:profile.trust_score,route_type:profile.route_type,destination_confirmation_required:profile.destination_confirmation_required,price_score:priceScore,overall_score:overall,verification_blockers:blockers,known_total_price_jpy:Number.isFinite(total)?total:null,landed_total_verified:country==="JP"&&!profile.proxy_required&&Number.isFinite(total),recommended_action:recommendedAction}};
+}
+
+function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP",officialOffers=[],product=null){
+  const country=normalizeBuyerCountry(buyerCountry),cutoff=Date.now()-PIPELINE.marketFreshDays*86400000;
+  const fresh=obs.filter(o=>{const t=Date.parse(o.observed_at||"");return Number.isFinite(t)&&t>=cutoff;}).filter(o=>{
+    if(!product||String(o?.metadata?.market_source||"").toLowerCase()!=="ebay")return true;
+    return ebayStrongIdentityAnalysis(product,{title:o?.listing_title||""}).accepted;
+  });
+  const latest=[...latestObservationMap(fresh).values()].map(observationToPurchaseOffer).filter(Boolean);
+  const rakutenOffers=(rakuten?.offers||[]).map(rakutenToPurchaseOffer).filter(Boolean);
+  const rawBase=uniquePurchaseOffers([...latest,...rakutenOffers,...(officialOffers||[])]).filter(o=>o.availability!=="unavailable");
+  const domesticProxySeeds=country==="JP"?[]:rawBase.filter(o=>["yahoo_shopping","rakuten"].includes(String(o.source||"").toLowerCase())).filter(o=>Number.isFinite(Number(o.total_price_jpy))&&Number(o.total_price_jpy)>0).sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy)).slice(0,3);
+  const proxyOffers=domesticProxySeeds.map(o=>zenMarketProxyOfferForDomesticOffer(o,country)).filter(Boolean);
+  const raw=uniquePurchaseOffers([...rawBase,...proxyOffers]).map(o=>materializeDestinationOffer(o,country));
+  const pricedRaw=raw.filter(o=>Number.isFinite(Number(o.total_price_jpy))&&Number(o.total_price_jpy)>0);
+  const confidenceRank={high:4,medium:3,medium_low:2,low:1};
+  // "cheapest_offer" means the lowest currently observed exact-match listing price, not the lowest verified landed total.
+  // Shipping confidence is handled separately when choosing Best and lowest_known_practical_route.
+  const cheapestRaw=pricedRaw.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
+  const bestPriceReferencePool=pricedRaw.filter(o=>(confidenceRank[String(o.price_confidence||"medium")]||0)>=3);
+  const cheapestValue=(bestPriceReferencePool.length?bestPriceReferencePool:pricedRaw).slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]?.total_price_jpy??null;
+  const numOrInf=v=>Number.isFinite(Number(v))?Number(v):Number.POSITIVE_INFINITY;
+  const assessed=raw.map(o=>assessPurchaseRoute(o,country,cheapestValue)).sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy));
+  const cheapest=cheapestRaw?assessPurchaseRoute(cheapestRaw,country,cheapestValue):null;
+  const verifiedDirectCandidates=assessed.filter(x=>!x.purchase_route?.proxy_required&&x.purchase_route?.country_fit_score>=70&&x.purchase_route?.destination_confirmation_required===false);
+  const verifiedProxyCandidates=assessed.filter(x=>x.purchase_route?.route_type==="verified_proxy_international"&&x.purchase_route?.country_fit_score>=80);
+  const practicalCandidates=[...verifiedDirectCandidates,...verifiedProxyCandidates].sort((a,b)=>(b.purchase_route?.overall_score||0)-(a.purchase_route?.overall_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy));
+  // Overseas best/easiest must be executable now. Unverified eBay destination eligibility remains an alternative, never Best.
+  const best=country==="JP"?(assessed[0]||null):(practicalCandidates[0]||null);
+  const easiestPool=country==="JP"?assessed:practicalCandidates;
+  const easiest=easiestPool.slice().sort((a,b)=>(b.purchase_route?.purchase_ease_score||0)-(a.purchase_route?.purchase_ease_score||0)||(b.purchase_route?.country_fit_score||0)-(a.purchase_route?.country_fit_score||0)||numOrInf(a.total_price_jpy)-numOrInf(b.total_price_jpy))[0]||null;
+  const knownTotalPractical=practicalCandidates.filter(x=>x.shipping_known===true&&Number.isFinite(Number(x.total_price_jpy))&&Number(x.total_price_jpy)>0);
+  const lowestPractical=knownTotalPractical.slice().sort((a,b)=>Number(a.total_price_jpy)-Number(b.total_price_jpy))[0]||null;
+  if(best)best.purchase_route.tradeoff=purchaseRouteTradeoff(best,cheapest,country);
+  return {buyer_country:country,selection_policy:"purchase_feasibility_then_ease_then_known_cost",best_purchase_route:best,cheapest_offer:cheapest,easiest_purchase_route:easiest,lowest_known_practical_route:lowestPractical,alternatives:assessed.slice(0,7),candidate_count:assessed.length,practical_direct_candidate_count:verifiedDirectCandidates.length,verified_proxy_candidate_count:verifiedProxyCandidates.length,practical_route_candidate_count:practicalCandidates.length,notes:["Cheapest apparent price is not automatically the recommended route for overseas buyers.","Destination shipping, taxes/duties and payment acceptance are not invented when listing-specific evidence is unavailable.","For overseas buyers, an exact Japanese listing can be converted into a verified multilingual proxy-shopping route instead of being recommended as a raw Japanese-only checkout.","Supported official/direct international routes outrank proxy routes when sufficiently practical; verified proxy routes are used when no good direct route exists."]};
+}
+
+function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
+  const country=normalizeBuyerCountry(buyerCountry);
+  const best=bestPlace||null;
+  if(!best)return {buyer_country:country,postal_code:postalCode||null,status:"no_current_offer",known_total_jpy:null,estimated_landed_total_jpy:null,confidence:"low",unknown_components:["item offer","shipping","tax/duty"],note:"No current matched purchase route is available."};
+  const source=String(best.source||"").toLowerCase(),profile=best.purchase_route||sourcePurchaseProfile(source,country),domesticJP=country==="JP"&&(source==="yahoo_shopping"||source==="rakuten");
+  const itemRaw=best.asking_price_jpy??best.price_jpy??best.reference_price_jpy,knownRaw=best.total_price_jpy??best.price_jpy;
+  const item=itemRaw==null?null:Number(itemRaw),shipping=best.shipping_jpy==null?null:Number(best.shipping_jpy),known=knownRaw==null?null:Number(knownRaw);
+  const unknown=[];
+  if(shipping==null)unknown.push("destination-specific shipping if not included in the marketplace total");
+  if(profile.destination_confirmation_required)unknown.push("listing-specific shipping eligibility to buyer country");
+  if(profile.proxy_required)unknown.push("proxy/forwarder service fee");
+  if(!domesticJP)unknown.push("destination-specific import duty/tax","destination-specific carrier/brokerage fee");
+  const verifiedProxy=profile.route_type==="verified_proxy_international";
+  const shippingKnown=best.shipping_known===true||Number.isFinite(shipping);
+  const knownTotal=shippingKnown&&Number.isFinite(known)?known:null;
+  return {buyer_country:country,postal_code:postalCode||null,source:best.source||null,seller:best.seller||null,item_price_jpy:Number.isFinite(item)?item:null,known_shipping_jpy:Number.isFinite(shipping)?shipping:null,known_total_jpy:knownTotal,estimated_landed_total_jpy:domesticJP&&knownTotal!=null?knownTotal:null,domestic_japan_route:domesticJP,direct_shipping_status:profile.direct_shipping||null,proxy_required:!!profile.proxy_required,language_support:profile.language_support||null,payment_compatibility:profile.payment_compatibility||null,account_difficulty:profile.account_difficulty||null,purchase_ease_score:profile.purchase_ease_score??null,country_fit_score:profile.country_fit_score??null,import_duty_estimate_jpy:domesticJP?0:null,import_tax_estimate_jpy:domesticJP?0:null,confidence:domesticJP?(shippingKnown?"high":"medium"):(verifiedProxy?"medium_low":profile.proxy_required?"low":"medium_low"),unknown_components:[...new Set(unknown)],purchase_url:best.url||null,source_product_url:best.source_product_url||null,recommended_action:profile.recommended_action||null,note:domesticJP?(shippingKnown?"For a Japan buyer using a domestic Yahoo/Rakuten route, the verified item-plus-shipping total is used as the known landed total; marketplace tax treatment is not independently decomposed.":"For a Japan buyer, the item price is known but shipping is not verified, so no landed total is claimed until checkout."):verifiedProxy?"This is a verified proxy-assisted international route for the exact Japanese listing. The Japanese item price can be shown as a reference, but proxy fee, international shipping and import charges are not treated as a landed total until quoted.":"For cross-border routes, ANIME INTELLIGENCE ranks purchase feasibility and ease before apparent price. Destination eligibility, taxes, duties, brokerage and proxy fees are not invented when source data is unavailable."};
+}
+
+async function buildIntelligence(env,product,refresh=false,lang="en",options={}){
+  let obs=await getObservations(env,product.id);const initialMarket=marketView(product,obs),autoRefresh=options.autoRefresh===true&&(initialMarket.age_hours==null||initialMarket.age_hours>PIPELINE.marketAutoRefreshHours),refreshRequested=refresh||autoRefresh;let refresh_log=[];if(refreshRequested){refresh_log=await refreshLiveMarketForProduct(env,product,obs);obs=await getObservations(env,product.id);}const market=marketView(product,obs),rarity=rarityAnalysis(product,market),authenticity=authenticityRisk(product,market,obs),buyWait=buyWaitDecision(product,market,rarity,authenticity,lang),quality=identityQualityReasons(product),priceHistory=priceHistoryView(product,obs),deadline=purchaseDeadlineView(product),listingMatch=listingMatchView(product,obs,options.listingUrl||"",options.listingTitle||"");
+  let rakuten;try{rakuten=await rakutenSearch(env,product);}catch(e){rakuten={configured:rakutenConfigured(env),mode:"affiliate_link_only",web_service_api:false,offers:[],best:null,search_url:rakutenPublicSearchUrl(product),affiliate_ready:false,error:safeError(e)};}
+  const buyerCountry=normalizeBuyerCountry(options.buyerCountry||"JP"),fxInfo=await resolveUsdJpy(env),officialOffers=officialPurchaseOffersForProduct(product,fxInfo),purchaseRouting=countryAwarePurchaseRouting(obs,rakuten,buyerCountry,officialOffers,product),purchaseBest=purchaseRouting.best_purchase_route||market.best_place||null;
+  const landedCost=landedCostView(purchaseBest,buyerCountry,options.postalCode||"");
+  return {language:lang,product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),manufacturer:product.manufacturer,brand:product.brand,series:product.series,franchise:product.franchise,characters:product.character_names,jan_code:product.jan_code,model_number:product.model_number,product_type:product.product_type,specialist_attributes:productSpecialistProfile(product),identity_quality:quality.score,identification_confidence:product.identification_confidence??identificationConfidenceFor(product),scale:product.scale,edition:product.edition,limited_type:product.limited_type,msrp_jpy:product.msrp_jpy,release_date:product.original_release_date,latest_official_schedule_date:product.metadata?.latest_official_schedule_date||product.metadata?.calendar?.date||null,release_date_type:product.metadata?.release_date_type||product.metadata?.calendar?.date_type||null,rerelease:!!product.metadata?.rerelease,rerelease_generation:product.metadata?.rerelease_generation||product.metadata?.calendar?.rerelease_generation||null,possible_release_delay:!!product.metadata?.possible_release_delay,status:product.product_status,official_url:product.official_url,official_english_url:product.metadata?.official_english_url||null,image_url:product.official_image_url},market,price_history:priceHistory,deadline,listing_match:listingMatch,landed_cost:landedCost,rarity,authenticity_risk:authenticity,buy_wait:buyWait,best_place:purchaseBest,purchase_routing:purchaseRouting,routing:{buyer_country:buyerCountry,policy:purchaseRouting.selection_policy,yahoo:purchaseRouting.alternatives.find(x=>x.source==="yahoo_shopping")||null,ebay:purchaseRouting.alternatives.find(x=>x.source==="ebay")||null,rakuten:{configured:rakuten.configured,mode:rakuten.mode,affiliate_ready:rakuten.affiliate_ready,offers:rakuten.offers||[],best:purchaseRouting.alternatives.find(x=>x.source==="rakuten")||null,search_url:rakuten.search_url,pricing_source:rakuten.pricing_source},cheapest_offer:purchaseRouting.cheapest_offer,easiest_purchase_route:purchaseRouting.easiest_purchase_route,lowest_known_practical_route:purchaseRouting.lowest_known_practical_route},freshness:{product_last_checked:product.source_last_checked_at||null,market_observations:obs.length,newest_market_observation:market.newest_observed_at,market_age_hours:market.age_hours,market_status:market.freshness_status,auto_refresh_threshold_hours:PIPELINE.marketAutoRefreshHours,refresh_requested:refreshRequested,refresh_log},affiliate:{rakuten_configured:rakuten.configured,rakuten_mode:rakuten.mode,rakuten_affiliate_ready:rakuten.affiliate_ready,rakuten_candidates:rakuten.offers||[],rakuten_search_url:rakuten.search_url},provenance:product.metadata?.field_provenance||null,generated_at:new Date().toISOString()};
+}
+
+function compactProductResponse(product){
+  return {
+    id:product.id,
+    name_ja:product.name_ja,
+    name_en:product.name_en,
+    jan_code:product.jan_code,
+    product_type:product.product_type||null,
+    image_url:product.image_url||null
+  };
+}
+
+
+
+/* =========================================================
+   TRAVEL ADAPTER v3.9.0
+   Provider: Booking.com Demand API v3.2
+   Required Cloudflare secrets / vars:
+     BOOKING_DEMAND_TOKEN
+     BOOKING_AFFILIATE_ID
+   Optional:
+     BOOKING_DEMAND_SANDBOX=1
+========================================================= */
+
+
+function duffelConfigured(env){
+  return !!String(env.DUFFEL_ACCESS_TOKEN||"").trim();
+}
+
+function amadeusConfigured(env){
+  return !!String(env.AMADEUS_CLIENT_ID||"").trim()&&!!String(env.AMADEUS_CLIENT_SECRET||"").trim();
+}
+
+function expediaRapidConfigured(env){
+  return !!String(env.EXPEDIA_RAPID_API_KEY||"").trim()&&!!String(env.EXPEDIA_RAPID_SHARED_SECRET||"").trim();
+}
+
+async function sha512Hex(v){
+  const data=new TextEncoder().encode(String(v||""));
+  const digest=await crypto.subtle.digest("SHA-512",data);
+  return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+function expediaRapidBase(env){
+  return String(env.EXPEDIA_RAPID_TEST||"").trim()==="1"?"https://test.ean.com":"https://api.ean.com";
+}
+async function expediaRapidAuthHeader(env){
+  if(!expediaRapidConfigured(env))throw new Error("expedia_rapid_not_configured");
+  const apiKey=String(env.EXPEDIA_RAPID_API_KEY||"").trim();
+  const secret=String(env.EXPEDIA_RAPID_SHARED_SECRET||"").trim();
+  const timestamp=String(Math.floor(Date.now()/1000));
+  const signature=await sha512Hex(apiKey+secret+timestamp);
+  return `EAN APIKey=${apiKey},Signature=${signature},timestamp=${timestamp}`;
+}
+async function expediaRapidAvailability(env,body){
+  if(!expediaRapidConfigured(env))return {ok:false,status:503,charged:false,error:"expedia_rapid_not_configured"};
+  const ids=Array.isArray(body?.expedia_property_ids)
+    ?body.expedia_property_ids.map(x=>String(x).trim()).filter(Boolean).slice(0,50)
+    :(String(body?.expedia_property_id||"").trim()?[String(body.expedia_property_id).trim()]:[]);
+  if(!ids.length)return {ok:false,status:400,charged:false,error:"expedia_property_id_required",detail:"Provide expedia_property_id or expedia_property_ids."};
+  const dateCheck=validateTravelDates(body);
+  if(!dateCheck.ok)return {ok:false,status:400,charged:false,error:dateCheck.error};
+
+  const u=new URL(expediaRapidBase(env)+"/v3/properties/availability");
+  u.searchParams.set("checkin",String(body.checkin));
+  u.searchParams.set("checkout",String(body.checkout));
+  u.searchParams.set("currency",String(body.currency||"JPY").toUpperCase());
+  u.searchParams.set("country_code",String(body.country_code||body.booker_country||"JP").toUpperCase());
+  u.searchParams.set("language",String(body.language||"ja-JP"));
+  u.searchParams.set("occupancy",String(Math.max(1,Number(body.adults||2)||2)));
+  for(const id of ids)u.searchParams.append("property_id",id);
+  u.searchParams.set("rate_plan_count",String(Math.max(1,Math.min(10,Number(body.rate_plan_count||3)||3))));
+  u.searchParams.set("sales_channel",String(body.sales_channel||"website"));
+  u.searchParams.set("sales_environment",String(body.sales_environment||"hotel_only"));
+
+  const r=await fetch(u.toString(),{
+    headers:{
+      authorization:await expediaRapidAuthHeader(env),
+      accept:"application/json",
+      "accept-encoding":"gzip",
+      "user-agent":"ANIME-INTELLIGENCE-AI-PURCHASE/3.9.2"
+    }
+  });
+  const raw=await r.text();let data=null;
+  try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,8000)};}
+  if(!r.ok)return {ok:false,status:r.status,charged:false,error:"expedia_rapid_error",detail:data};
+
+  const offers=[];
+  for(const property of (Array.isArray(data)?data:[])){
+    for(const room of (Array.isArray(property?.rooms)?property.rooms:[])){
+      for(const rate of (Array.isArray(room?.rates)?room.rates:[])){
+        const occ=Object.values(rate?.occupancy_pricing||{})[0]||{};
+        const inclusive=Number(occ?.totals?.inclusive?.request_currency?.value??occ?.totals?.inclusive?.billable_currency?.value);
+        const exclusive=Number(occ?.totals?.exclusive?.request_currency?.value??occ?.totals?.exclusive?.billable_currency?.value);
+        const amount=Number.isFinite(inclusive)?inclusive:(Number.isFinite(exclusive)?exclusive:null);
+        offers.push({
+          provider:"expedia_rapid",
+          property_id:String(property?.property_id||"")||null,
+          room_id:String(room?.id||"")||null,
+          room_name:room?.room_name||null,
+          rate_id:String(rate?.id||"")||null,
+          status:rate?.status||property?.status||null,
+          refundable:rate?.refundable??null,
+          total_price:amount,
+          currency:String(body.currency||"JPY").toUpperCase(),
+          price_check_url:rate?.links?.price_check?.href||null,
+          cancellation_penalties:rate?.cancel_penalties||null
+        });
+      }
+    }
+  }
+  offers.sort((a,b)=>(a.total_price??Number.MAX_SAFE_INTEGER)-(b.total_price??Number.MAX_SAFE_INTEGER));
+  return {ok:true,service:"AI PURCHASE INTELLIGENCE",version:VERSION,domain:"travel",vertical:"accommodation",provider:"expedia_rapid",count:offers.length,recommended_offer:offers[0]||null,offers:offers.slice(0,30),generated_at:new Date().toISOString()};
+}
+
+function travelProviderRegistry(env){
+  return {
+    strategy:"multi_provider_by_vertical_with_fallback_slots",
+    providers:[
+      {
+        id:"booking",
+        name:"Booking.com Demand API",
+        configured:bookingDemandConfigured(env),
+        implementation:"active",
+        verticals:["accommodation","car","attraction","transfer"],
+        role:"primary_accommodation_and_ground_inventory"
+      },
+      {
+        id:"duffel",
+        name:"Duffel",
+        configured:duffelConfigured(env),
+        implementation:"active",
+        verticals:["flight"],
+        role:"primary_flight_inventory"
+      },
+      {
+        id:"expedia_rapid",
+        name:"Expedia Rapid",
+        configured:expediaRapidConfigured(env),
+        implementation:"active_property_id_availability",
+        verticals:["accommodation"],
+        role:"secondary_accommodation_provider"
+      },
+      {
+        id:"amadeus",
+        name:"Amadeus",
+        configured:amadeusConfigured(env),
+        implementation:"adapter_slot",
+        verticals:["flight","accommodation","car","transfer"],
+        role:"secondary_global_travel_provider"
+      }
+    ]
+  };
+}
+
+function duffelHeaders(env){
+  return {
+    authorization:"Bearer "+String(env.DUFFEL_ACCESS_TOKEN||"").trim(),
+    "duffel-version":"v2",
+    accept:"application/json",
+    "content-type":"application/json",
+    "accept-encoding":"gzip"
+  };
+}
+
+async function duffelRequest(env,path,{method="GET",body=null}={}){
+  if(!duffelConfigured(env)){
+    const e=new Error("duffel_not_configured");
+    e.code="DUFFEL_NOT_CONFIGURED";
+    throw e;
+  }
+  const r=await fetch(DUFFEL_API_BASE+path,{
+    method,
+    headers:duffelHeaders(env),
+    body:body==null?undefined:JSON.stringify(body)
+  });
+  const raw=await r.text();
+  let data=null;
+  try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,8000)};}
+  if(!r.ok){
+    const e=new Error("Duffel "+r.status+": "+raw.slice(0,2000));
+    e.status=r.status;
+    e.body=data;
+    throw e;
+  }
+  return data;
+}
+
+function normalizeDuffelFlightOffer(o,index=0){
+  const amount=Number(o?.total_amount);
+  const slices=Array.isArray(o?.slices)?o.slices:[];
+  const segments=slices.flatMap(x=>Array.isArray(x?.segments)?x.segments:[]);
+  const carriers=[...new Set(segments.map(x=>x?.operating_carrier?.name||x?.marketing_carrier?.name).filter(Boolean))];
+  const stops=Math.max(0,segments.length-slices.length);
+  return {
+    rank:index+1,
+    provider:"duffel",
+    id:String(o?.id||"").trim()||null,
+    total_price:Number.isFinite(amount)?amount:null,
+    currency:String(o?.total_currency||"").toUpperCase()||null,
+    total_duration:String(o?.total_duration||"").trim()||null,
+    stops,
+    carriers,
+    expires_at:o?.expires_at||null,
+    passenger_identity_documents_required:!!o?.passenger_identity_documents_required,
+    raw:o
+  };
+}
+
+function scoreFlightOffer(o){
+  let score=0;
+  if(o.total_price!=null)score+=Math.max(0,65-Math.log10(Math.max(1,o.total_price))*9);
+  if(Number.isFinite(o.stops))score+=Math.max(0,20-o.stops*7);
+  if(o.expires_at)score+=5;
+  if(o.carriers?.length)score+=5;
+  if(o.id)score+=5;
+  return Number(score.toFixed(4));
+}
+
+function validateFlightSearch(body){
+  const origin=String(body?.origin||body?.origin_iata||"").trim().toUpperCase();
+  const destination=String(body?.destination||body?.destination_iata||"").trim().toUpperCase();
+  const departureDate=String(body?.departure_date||"").trim();
+  const returnDate=String(body?.return_date||"").trim();
+  if(!/^[A-Z]{3}$/.test(origin))return {ok:false,error:"origin_iata_required"};
+  if(!/^[A-Z]{3}$/.test(destination))return {ok:false,error:"destination_iata_required"};
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(departureDate))return {ok:false,error:"departure_date_required_yyyy_mm_dd"};
+  if(returnDate&&!/^\d{4}-\d{2}-\d{2}$/.test(returnDate))return {ok:false,error:"return_date_must_be_yyyy_mm_dd"};
+  return {ok:true,origin,destination,departureDate,returnDate};
+}
+
+async function duffelFlightSearch(env,body){
+  const v=validateFlightSearch(body);
+  if(!v.ok)return {ok:false,status:400,error:v.error,charged:false};
+  if(!duffelConfigured(env)){
+    return {ok:false,status:503,charged:false,error:"flight_provider_not_configured",required:["DUFFEL_ACCESS_TOKEN"],provider:"duffel",version:VERSION};
+  }
+
+  const slices=[{origin:v.origin,destination:v.destination,departure_date:v.departureDate}];
+  if(v.returnDate)slices.push({origin:v.destination,destination:v.origin,departure_date:v.returnDate});
+
+  const adults=Math.max(1,Math.min(9,Number(body?.adults||1)||1));
+  const children=Math.max(0,Math.min(9,Number(body?.children||0)||0));
+  const passengers=[
+    ...Array.from({length:adults},()=>({type:"adult"})),
+    ...Array.from({length:children},()=>({age:Math.max(2,Math.min(17,Number(body?.child_age||10)||10))}))
+  ];
+  const cabinRaw=String(body?.cabin_class||"economy").toLowerCase();
+  const cabin=["first","business","premium_economy","economy"].includes(cabinRaw)?cabinRaw:"economy";
+  const maxConnections=body?.max_connections==null?1:Math.max(0,Math.min(3,Number(body.max_connections)||0));
+
+  const payload=await duffelRequest(env,"/air/offer_requests?return_offers=true&supplier_timeout=10000",{
+    method:"POST",
+    body:{data:{slices,passengers,cabin_class:cabin,max_connections:maxConnections}}
+  });
+  const root=payload?.data||payload;
+  const offers=Array.isArray(root?.offers)?root.offers:[];
+  const ranked=offers
+    .map((o,i)=>normalizeDuffelFlightOffer(o,i))
+    .map(x=>({...x,optimization_score:scoreFlightOffer(x)}))
+    .sort((a,b)=>b.optimization_score-a.optimization_score)
+    .slice(0,Math.max(1,Math.min(30,Number(body?.limit||10)||10)))
+    .map((x,i)=>({...x,rank:i+1}));
+
+  return {
+    ok:true,
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    vertical:"flight",
+    provider:"duffel",
+    provider_version:"v2",
+    request:{
+      origin:v.origin,destination:v.destination,departure_date:v.departureDate,
+      return_date:v.returnDate||null,adults,children,cabin_class:cabin,max_connections:maxConnections
+    },
+    count:ranked.length,
+    recommended_offer:ranked[0]||null,
+    offers:ranked,
+    offer_request_id:root?.id||null,
+    generated_at:new Date().toISOString()
+  };
+}
+
+function providerConcentrationWarning(env,vertical){
+  const v=String(vertical||"").toLowerCase();
+  if(v==="flight"||v==="flights"){
+    return duffelConfigured(env)&&!amadeusConfigured(env)?"single_live_flight_provider":null;
+  }
+  if(["accommodation","hotel","hotels"].includes(v)){
+    return bookingDemandConfigured(env)&&!expediaRapidConfigured(env)&&!amadeusConfigured(env)?"single_live_accommodation_provider":null;
+  }
+  return null;
+}
+
+function bookingDemandConfigured(env){
+  return !!String(env.BOOKING_DEMAND_TOKEN||"").trim()&&!!String(env.BOOKING_AFFILIATE_ID||"").trim();
+}
+
+function bookingDemandBase(env){
+  return String(env.BOOKING_DEMAND_SANDBOX||"").trim()==="1"
+    ?BOOKING_DEMAND_SANDBOX_BASE
+    :BOOKING_DEMAND_PROD_BASE;
+}
+
+function bookingDemandHeaders(env){
+  return {
+    authorization:"Bearer "+String(env.BOOKING_DEMAND_TOKEN||"").trim(),
+    "x-affiliate-id":String(env.BOOKING_AFFILIATE_ID||"").trim(),
+    "content-type":"application/json",
+    accept:"application/json"
+  };
+}
+
+async function bookingDemandPost(env,path,body,{beta=false}={}){
+  if(!bookingDemandConfigured(env)){
+    const e=new Error("booking_demand_not_configured");
+    e.code="BOOKING_DEMAND_NOT_CONFIGURED";
+    throw e;
+  }
+  const base=beta?BOOKING_DEMAND_BETA_BASE:bookingDemandBase(env);
+  const r=await fetch(base+path,{
+    method:"POST",
+    headers:bookingDemandHeaders(env),
+    body:JSON.stringify(body||{})
+  });
+  const raw=await r.text();
+  let data=null;
+  try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,8000)};}
+  if(!r.ok){
+    const e=new Error("Booking Demand "+r.status+": "+raw.slice(0,2000));
+    e.status=r.status;
+    e.body=data;
+    throw e;
+  }
+  return data;
+}
+
+function travelArray(payload){
+  if(Array.isArray(payload))return payload;
+  if(Array.isArray(payload?.data))return payload.data;
+  if(Array.isArray(payload?.results))return payload.results;
+  if(Array.isArray(payload?.data?.results))return payload.data.results;
+  return [];
+}
+
+function travelPriceCandidates(x){
+  const out=[];
+  const walk=(v,depth=0)=>{
+    if(depth>4||v==null)return;
+    if(Array.isArray(v)){for(const y of v.slice(0,20))walk(y,depth+1);return;}
+    if(typeof v!=="object")return;
+    for(const [k,val] of Object.entries(v)){
+      const key=String(k).toLowerCase();
+      if(typeof val==="number"&&Number.isFinite(val)&&val>=0&&/(price|amount|total|display|book|value)/.test(key)){
+        out.push(val);
+      }else if(val&&typeof val==="object"){
+        walk(val,depth+1);
+      }
+    }
+  };
+  walk(x);
+  return out.filter(n=>n>0);
+}
+
+function travelCurrency(x){
+  const seen=[];
+  const walk=(v,depth=0)=>{
+    if(depth>4||v==null||seen.length)return;
+    if(Array.isArray(v)){for(const y of v.slice(0,20))walk(y,depth+1);return;}
+    if(typeof v!=="object")return;
+    for(const [k,val] of Object.entries(v)){
+      if(seen.length)break;
+      const key=String(k).toLowerCase();
+      if(typeof val==="string"&&/(currency)/.test(key)&&/^[A-Z]{3}$/.test(val.toUpperCase()))seen.push(val.toUpperCase());
+      else if(val&&typeof val==="object")walk(val,depth+1);
+    }
+  };
+  walk(x);
+  return seen[0]||null;
+}
+
+function travelUrl(x){
+  const candidates=[
+    x?.url,x?.web_url,x?.deep_link,x?.deeplink,x?.booking_url,x?.redirect_url,
+    x?.links?.web,x?.links?.booking,x?.links?.redirect,
+    x?.products?.[0]?.url,x?.products?.[0]?.deep_link
+  ].filter(Boolean);
+  return candidates.find(v=>/^https?:\/\//i.test(String(v)))||null;
+}
+
+function travelReviewScore(x){
+  const vals=[
+    x?.review_score,x?.reviewScore,x?.rating,x?.score,
+    x?.reviews?.score,x?.review?.score,x?.rating?.score
+  ];
+  for(const v of vals){
+    const n=Number(v);
+    if(Number.isFinite(n)&&n>=0)return n;
+  }
+  return null;
+}
+
+function travelName(x){
+  return String(
+    x?.name||x?.title||x?.accommodation?.name||x?.property?.name||
+    x?.vehicle?.name||x?.attraction?.name||x?.supplier?.name||x?.id||""
+  ).trim()||null;
+}
+
+function normalizeTravelOffer(x,index=0){
+  const prices=travelPriceCandidates(x);
+  const total=prices.length?Math.min(...prices):null;
+  return {
+    rank:index+1,
+    id:String(x?.id||x?.offer_id||x?.product_id||x?.accommodation||x?.vehicle?.id||"").trim()||null,
+    name:travelName(x),
+    total_price:total,
+    currency:travelCurrency(x),
+    review_score:travelReviewScore(x),
+    purchase_url:travelUrl(x),
+    raw:x
+  };
+}
+
+function scoreTravelOffer(o){
+  let score=0;
+  if(o.total_price!=null)score+=Math.max(0,60-Math.log10(Math.max(1,o.total_price))*8);
+  if(o.review_score!=null)score+=Math.min(25,Number(o.review_score)*2.5);
+  if(o.purchase_url)score+=10;
+  if(o.name)score+=5;
+  return Number(score.toFixed(4));
+}
+
+function rankTravelOffers(payload,limit=10){
+  const normalized=travelArray(payload).map((x,i)=>normalizeTravelOffer(x,i));
+  return normalized
+    .map(x=>({...x,optimization_score:scoreTravelOffer(x)}))
+    .sort((a,b)=>b.optimization_score-a.optimization_score)
+    .slice(0,Math.max(1,Math.min(50,Number(limit)||10)))
+    .map((x,i)=>({...x,rank:i+1}));
+}
+
+function validateTravelDates(body){
+  const checkin=String(body?.checkin||"").trim();
+  const checkout=String(body?.checkout||"").trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(checkin)||!/^\d{4}-\d{2}-\d{2}$/.test(checkout)){
+    return {ok:false,error:"checkin_and_checkout_required_yyyy_mm_dd"};
+  }
+  const a=Date.parse(checkin+"T00:00:00Z"),b=Date.parse(checkout+"T00:00:00Z");
+  if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a)return {ok:false,error:"checkout_must_be_after_checkin"};
+  return {ok:true};
+}
+
+function defaultTravelBooker(body){
+  const src=body?.booker&&typeof body.booker==="object"?body.booker:{};
+  return {
+    country:String(src.country||body?.booker_country||"jp").toLowerCase(),
+    platform:String(src.platform||"mobile").toLowerCase()
+  };
+}
+
+function defaultTravelGuests(body){
+  const g=body?.guests&&typeof body.guests==="object"?body.guests:{};
+  return {
+    number_of_adults:Math.max(1,Math.min(30,Number(g.number_of_adults||body?.adults||2)||2)),
+    number_of_rooms:Math.max(1,Math.min(30,Number(g.number_of_rooms||body?.rooms||1)||1)),
+    ...(Number(g.number_of_children||body?.children||0)>0?{
+      number_of_children:Math.max(0,Math.min(30,Number(g.number_of_children||body?.children||0)||0))
+    }:{})
+  };
+}
+
+function travelLocationFields(body){
+  const out={};
+  for(const key of ["city","airport","country","district","landmark","region","accommodations"]){
+    if(body?.[key]!=null&&body[key]!=="")out[key]=body[key];
+  }
+  if(body?.coordinates&&typeof body.coordinates==="object")out.coordinates=body.coordinates;
+  return out;
+}
+
+function buildAccommodationSearchBody(body){
+  return {
+    booker:defaultTravelBooker(body),
+    checkin:String(body.checkin),
+    checkout:String(body.checkout),
+    guests:defaultTravelGuests(body),
+    ...travelLocationFields(body),
+    ...(body.currency?{currency:String(body.currency).toUpperCase()}:{currency:"JPY"}),
+    extras:Array.isArray(body.extras)&&body.extras.length?body.extras:["extra_charges","products"],
+    ...(body.rows?{rows:Math.max(10,Math.min(100,Math.ceil(Number(body.rows)/10)*10))}:{rows:20}),
+    ...(body.filters?{filters:body.filters}:{}),
+    ...(body.sort?{sort:body.sort}:{})
+  };
+}
+
+async function travelAccommodationSearch(env,body,{smart=false}={}){
+  const dateCheck=validateTravelDates(body);
+  if(!dateCheck.ok)return {ok:false,status:400,error:dateCheck.error,charged:false};
+  const req=buildAccommodationSearchBody(body);
+  if(smart){
+    const q=String(body.search_query||body.query||"").trim();
+    if(q.length<3)return {ok:false,status:400,error:"search_query_required_min_3_chars",charged:false};
+    req.search_query=q.slice(0,300);
+  }
+  const payload=await bookingDemandPost(
+    env,
+    smart?"/accommodations/smart-search":"/accommodations/search",
+    req,
+    {beta:smart}
+  );
+  const offers=rankTravelOffers(payload,body.limit||10);
+  return {
+    ok:true,
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    vertical:"accommodation",
+    provider:"booking_demand_api",
+    provider_version:"3.2",
+    mode:smart?"smart_search":"search",
+    request:req,
+    count:offers.length,
+    recommended_offer:offers[0]||null,
+    offers,
+    provider_request_id:payload?.request_id||null,
+    provider_metadata:payload?.metadata||null,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function travelGenericBookingSearch(env,vertical,body){
+  const routes={
+    car:"/cars/search",
+    cars:"/cars/search",
+    attraction:"/attractions/search",
+    attractions:"/attractions/search",
+    transfer:"/transfers/search",
+    transfers:"/transfers/search"
+  };
+  const path=routes[vertical];
+  if(!path)return {ok:false,status:400,error:"unsupported_travel_vertical",supported:["accommodation","car","attraction","transfer"]};
+  const beta=vertical==="attraction"||vertical==="attractions"||vertical==="transfer"||vertical==="transfers";
+  const payload=await bookingDemandPost(env,path,body,{beta});
+  const offers=rankTravelOffers(payload,body?.limit||10);
+  return {
+    ok:true,
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    vertical,
+    provider:"booking_demand_api",
+    provider_version:"3.2",
+    count:offers.length,
+    recommended_offer:offers[0]||null,
+    offers,
+    provider_request_id:payload?.request_id||null,
+    provider_metadata:payload?.metadata||null,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function travelShoppingIntelligence(env,body){
+  if(!bookingDemandConfigured(env)){
+    return {
+      ok:false,
+      status:503,
+      charged:false,
+      error:"travel_provider_not_configured",
+      required:["BOOKING_DEMAND_TOKEN","BOOKING_AFFILIATE_ID"],
+      provider:"Booking.com Demand API v3.2",
+      domain:"travel",
+      version:VERSION
+    };
+  }
+  const vertical=String(body?.vertical||body?.service||"accommodation").toLowerCase();
+  let result;
+  if(vertical==="flight"||vertical==="flights"){
+    result=await duffelFlightSearch(env,body);
+  }else if(vertical==="accommodation"||vertical==="hotel"||vertical==="hotels"){
+    if(!bookingDemandConfigured(env)){
+      return {
+        ok:false,status:503,charged:false,error:"accommodation_provider_not_configured",
+        required:["BOOKING_DEMAND_TOKEN","BOOKING_AFFILIATE_ID"],
+        secondary_provider_slots:["EXPEDIA_RAPID_API_KEY + EXPEDIA_RAPID_SHARED_SECRET","AMADEUS_CLIENT_ID + AMADEUS_CLIENT_SECRET"],
+        version:VERSION
+      };
+    }
+    const smart=!!String(body?.search_query||body?.query||"").trim();
+    result=await travelAccommodationSearch(env,body,{smart});
+  }else{
+    result=await travelGenericBookingSearch(env,vertical,body);
+  }
+  if(!result?.ok)return result;
+  const best=result.recommended_offer||null;
+  return {
+    ...result,
+    recommendation:{
+      decision:best?"SELECT":"ASK_USER",
+      next_action:best?.purchase_url?"OPEN_BOOKING_URL":"REVIEW_OPTIONS",
+      confidence:best?Math.max(0.5,Math.min(0.99,Number((best.optimization_score/100).toFixed(2)))):0,
+      reason_codes:best?[
+        "ranked_by_total_value",
+        ...(best.total_price!=null?["price_available"]:[]),
+        ...(best.review_score!=null?["review_signal_available"]:[]),
+        ...(best.purchase_url?["booking_route_available"]:[])
+      ]:[]
+    },
+    agent_actions:{
+      can_book:!!best,
+      recommended_next_action:best?.purchase_url?"OPEN_BOOKING_URL":"REVIEW_OPTIONS",
+      requires_user_confirmation:true
+    },
+    provider_strategy:{
+      mode:"multi_provider",
+      concentration_warning:providerConcentrationWarning(env,vertical),
+      registry:travelProviderRegistry(env)
+    }
+  };
+}
+
+async function travelStatus(env){
+  const registry=travelProviderRegistry(env);
+  return {
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    architecture:"multi_provider_travel_core",
+    providers:registry.providers,
+    configured_any:registry.providers.some(x=>x.configured),
+    live_verticals:{
+      accommodation:bookingDemandConfigured(env),
+      flight:duffelConfigured(env),
+      car:bookingDemandConfigured(env),
+      attraction:bookingDemandConfigured(env),
+      transfer:bookingDemandConfigured(env)
+    },
+    concentration:{
+      accommodation:providerConcentrationWarning(env,"accommodation"),
+      flight:providerConcentrationWarning(env,"flight")
+    },
+    required_secrets:{
+      booking:["BOOKING_DEMAND_TOKEN","BOOKING_AFFILIATE_ID"],
+      duffel:["DUFFEL_ACCESS_TOKEN"],
+      expedia_rapid:["EXPEDIA_RAPID_API_KEY","EXPEDIA_RAPID_SHARED_SECRET"],
+      amadeus:["AMADEUS_CLIENT_ID","AMADEUS_CLIENT_SECRET"]
+    }
+  };
+}
+
+async function travelApi(request,env,url){
+  if(url.pathname==="/v1/travel/status"&&request.method==="GET")return json(await travelStatus(env));
+  if(request.method!=="POST")return null;
+  let body={};
+  try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
+  try{
+    if(url.pathname==="/v1/travel/flights/search"){
+      const out=await duffelFlightSearch(env,body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/expedia/availability"){
+      const out=await expediaRapidAvailability(env,body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/accommodations/search"){
+      const out=await travelAccommodationSearch(env,body,{smart:false});
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/accommodations/smart-search"){
+      const out=await travelAccommodationSearch(env,body,{smart:true});
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/shopping-intelligence"){
+      const out=await travelShoppingIntelligence(env,body);
+      if(out?.ok&&out?.recommended_offer){
+        await logEvent(env,"travel_offer_selected",{
+          endpoint:url.pathname,
+          product_id:null,
+          metadata:{
+            vertical:out.vertical||"accommodation",
+            provider:"booking_demand_api",
+            offer_id:out.recommended_offer.id||null,
+            version:VERSION
+          }
+        });
+      }
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/cars/search"){
+      const out=await travelGenericBookingSearch(env,"car",body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/attractions/search"){
+      const out=await travelGenericBookingSearch(env,"attraction",body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/transfers/search"){
+      const out=await travelGenericBookingSearch(env,"transfer",body);
+      return json(out,out?.status||200);
+    }
+  }catch(e){
+    return json({
+      ok:false,
+      domain:"travel",
+      version:VERSION,
+      charged:false,
+      error:e?.code||"travel_provider_error",
+      detail:safeError(e)
+    },Number(e?.status)||503);
+  }
+  return null;
+}
+
+/* =========================================================
+   AGENT COMMERCE CORE v3.9.0
+   - Agent-neutral purchase-decision layer
+   - Anime collectibles are production-active
+   - Large-market domains are declared as planned adapters
+========================================================= */
+
+const COMMERCE_DOMAIN_REGISTRY={
+  active:[
+    {
+      domain:"anime_collectibles",
+      status:"full",
+      priority:1,
+      capabilities:[
+        "identity",
+        "offer_matching",
+        "market_value",
+        "authenticity_risk",
+        "rarity",
+        "buy_wait",
+        "landed_cost",
+        "purchase_routing"
+      ]
+    }
+  ],
+  planned:[
+    {
+      domain:"travel",
+      priority:2,
+      status:"active_if_any_provider_configured",
+      adapter:"multi_provider_travel_core_v3_9_1",
+      market_role:"consumer_high_frequency_high_gmv",
+      why:"Large global market, digital inventory, high comparison complexity and transaction-ready booking flows.",
+      capabilities:[
+        "flight_search",
+        "hotel_search",
+        "bundle_optimization",
+        "cancellation_policy",
+        "baggage_and_fees",
+        "total_trip_cost",
+        "booking_route"
+      ]
+    },
+    {
+      domain:"consumer_electronics",
+      priority:3,
+      status:"active_generic_market_search",
+      market_role:"consumer_large_gmv",
+      why:"Large global market with model, specification, warranty and price-dispersion complexity.",
+      capabilities:["model_identity","spec_fit","price","warranty","seller_risk","total_cost"]
+    },
+    {
+      domain:"automotive_parts",
+      priority:4,
+      status:"active_with_exact_part_guard",
+      market_role:"consumer_and_b2b_large_aftermarket",
+      why:"Fitment mistakes are expensive and OEM cross-reference can materially improve purchase quality.",
+      capabilities:["vehicle_fitment","oe_cross_reference","seller_risk","landed_cost"]
+    },
+    {
+      domain:"enterprise_procurement",
+      priority:5,
+      status:"active_with_exact_mpn_guard",
+      market_role:"b2b_very_large_gmv",
+      why:"Enterprise purchasing rewards supplier, lifecycle, lead-time and total-cost optimization.",
+      capabilities:["requirements","supplier_comparison","lead_time","commercial_terms","lifecycle","tco"]
+    },
+    {
+      domain:"mro_and_industrial_components",
+      priority:6,
+      market_role:"b2b_high_repeat_procurement",
+      why:"Specification equivalence and downtime cost often dominate unit price.",
+      capabilities:["spec_match","approved_substitute","lead_time","supplier_risk","downtime_cost"]
+    },
+    {
+      domain:"electronic_components",
+      priority:7,
+      market_role:"b2b_high_value_supply_chain",
+      why:"Exact part identity, lifecycle, counterfeit risk and lead time are purchase-critical.",
+      capabilities:["mpn_identity","parametric_match","lifecycle","counterfeit_risk","lead_time"]
+    },
+    {
+      domain:"enterprise_it_hardware",
+      priority:8,
+      market_role:"b2b_large_gmv",
+      why:"Configuration, support and lifecycle drive total cost of ownership.",
+      capabilities:["configuration","support","lifecycle","availability","tco"]
+    },
+    {
+      domain:"pc_components",
+      priority:9,
+      market_role:"consumer_and_prosumer",
+      why:"Compatibility is purchase-critical and price/performance changes quickly.",
+      capabilities:["compatibility","performance_per_cost","warranty","seller_risk","availability"]
+    },
+    {
+      domain:"appliances_and_hvac",
+      priority:10,
+      market_role:"consumer_large_ticket",
+      why:"Installation, energy cost and long-term ownership materially affect value.",
+      capabilities:["fit","energy_cost","installation","warranty","total_cost"]
+    },
+    {
+      domain:"datacenter_power_and_cooling",
+      priority:11,
+      market_role:"b2b_infrastructure",
+      why:"Capacity, efficiency, compatibility and lead time are high-value purchase variables.",
+      capabilities:["capacity_match","efficiency","compatibility","lead_time","tco"]
+    },
+    {
+      domain:"industrial_automation",
+      priority:12,
+      market_role:"b2b_capital_and_mro",
+      why:"Compatibility, certification and obsolescence are critical.",
+      capabilities:["compatibility","certification","lifecycle","replacement_cross_reference"]
+    },
+    {
+      domain:"laboratory_equipment",
+      priority:13,
+      market_role:"b2b_specialty",
+      why:"Measurement specifications, calibration and service determine real purchase value.",
+      capabilities:["spec_fit","calibration","service","consumables","tco"]
+    },
+    {
+      domain:"power_tools_and_equipment",
+      priority:14,
+      market_role:"consumer_and_b2b",
+      why:"Battery platform, accessories, duty cycle and durability affect purchase quality.",
+      capabilities:["platform_compatibility","duty_cycle","warranty","total_cost"]
+    },
+    {
+      domain:"software_and_saas",
+      priority:15,
+      market_role:"b2b_recurring_spend",
+      why:"License, security, integration and contract terms drive total cost.",
+      capabilities:["license_fit","integration","security","contract_terms","tco"]
+    }
+  ],
+  excluded_initially:[
+    {domain:"prescription_drugs",reason:"regulated_high_stakes"},
+    {domain:"weapons",reason:"regulated_or_high_risk"},
+    {domain:"financial_products",reason:"high_stakes_and_not_core_procurement"}
+  ]
+};
+
+
+
+
+/* =========================================================
+   PARTS INTELLIGENCE LIGHT INGEST v3.10.2
+   Deploy-safe version:
+   - No autonomous crawling in Worker runtime.
+   - No new external API keys.
+   - Keeps source registry, manual/admin upsert and PARTS DB.
+   - Initial bulk population is done through Supabase SQL/CSV import,
+     which is more reliable than large in-Worker crawling on mobile/dashboard.
+========================================================= */
+
+async function seedDefaultPartsSources(env){
+  const rows=DEFAULT_PARTS_SOURCES.map(x=>({
+    slug:x.slug,
+    manufacturer:x.manufacturer,
+    root_url:x.root_url,
+    category:x.category,
+    enabled:true,
+    crawl_priority:100,
+    crawl_cursor:null,
+    last_crawled_at:null,
+    metadata:{source_type:"official_public",version:VERSION},
+    updated_at:new Date().toISOString()
+  }));
+  await sb(env,"/parts_sources?on_conflict=slug",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return {ok:true,seeded:rows.length,sources:rows.map(x=>x.slug)};
+}
+
+async function partsIngestStatus(env){
+  const [catalog,sources,runs]=await Promise.all([
+    sbOptional(env,"/parts_catalog?select=id&limit=1"),
+    sbOptional(env,"/parts_sources?select=slug,manufacturer,enabled,last_crawled_at&order=crawl_priority.desc"),
+    sbOptional(env,"/parts_ingest_runs?select=*&order=finished_at.desc.nullslast&limit=5")
+  ]);
+  return {
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    catalog_initialized:Array.isArray(catalog),
+    sources:Array.isArray(sources)?sources:[],
+    recent_runs:Array.isArray(runs)?runs:[],
+    ingest_mode:"supabase_bulk_import_plus_embedded_collector_v3",
+    autonomous_worker_crawl:true,
+    embedded_collector_version:"3.0.0",
+    collector_ownership:"main_worker_embedded_v3_authoritative",
+    legacy_collector_runs_are_non_authoritative:true,legacy_external_cron_disable_recommended:true,
+    new_external_api_keys_required:false,
+    target_initial_catalog:"thousands_to_10000_high_quality_FA_and_industrial_parts",
+    compatibility_policy:"No substitute recommendation without explicit verified relation evidence."
