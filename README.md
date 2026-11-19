@@ -6,6 +6,8 @@
 
 GPD is an API and MCP service for AI agents that need to **find, identify, compare and choose physical products and sourcing options**. It supports anime collectibles, industrial parts and broader product discovery. Its business model is paid purchase-decision intelligence, not payment for the physical goods themselves.
 
+**Developer quickstart:** [Integrate GPD with your AI agent, inspect the API, and test the x402 payment flow](docs/AGENT_INTEGRATION.md)
+
 ## Start here — AI agents and developers
 
 | Resource | URL |
