@@ -20,8 +20,10 @@ assert seg.count('&limit=240')==4 and seg.count('&limit=600')==1
 seg=seg.replace('&limit=240','&order=occurred_at.desc&limit=24').replace('&limit=600','&order=occurred_at.desc&limit=48')
 src=src[:start]+seg+src[end:]
 once('const ai=Math.floor(now/21600000+di)%anchors.length;','const ai=Math.floor(now/14400000+di)%anchors.length;')
-once('const preferred=[...rotationCandidates].sort((a,b)=>universalIdentityRoleScore(b)-universalIdentityRoleScore(a))[0];','''const growthRank=x=>universalIdentityRoleScore(x)+Math.min(4,Number(x.history_canonical_new_count||0)/Math.max(1,Number(x.history_runs||0)))-((Number(x.history_runs||0)>0&&Number(x.history_canonical_new_count||0)===0)?3:0)-(x.last_run_age_hours!==null&&x.last_run_age_hours<4?4:0);
-    const preferred=[...rotationCandidates].sort((a,b)=>growthRank(b)-growthRank(a))[0];''')
+once('if(ar!==br)return ar-br;\n      return universalIdentityRoleScore(b)-universalIdentityRoleScore(a);','''const rank=x=>universalIdentityRoleScore(x)+Math.min(4,Number(x.history_canonical_new_count||0)/Math.max(1,Number(x.history_runs||0)))-(Number(x.history_runs||0)>0&&Number(x.history_canonical_new_count||0)===0?3:0)-(x.last_run_age_hours!==null&&x.last_run_age_hours<4?4:0);
+      if(ar===0&&br!==0)return -1;
+      if(br===0&&ar!==0)return 1;
+      return rank(b)-rank(a);''')
 # Avoid expensive market memory evaluation for autonomous discovery; paid
 # decision and ordinary requests retain their original memory behavior.
 once('const memory=await loadUniversalMarketMemory(env,domain,identityKey,q,Math.min(12,limit));','const memory=body?._discovery_mode===true?[]:await loadUniversalMarketMemory(env,domain,identityKey,q,Math.min(12,limit));')
