@@ -29,3 +29,5 @@ jobs:
           git add releases/GPD32_9_COMPLETE_WORKER.js
           git commit -m 'Publish complete GPD v32.9 Worker'
           git push
+
+# Rebuild against corrected rotation patch.
