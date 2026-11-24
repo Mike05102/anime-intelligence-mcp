@@ -1,0 +1,300 @@
+      warranty_required:Boolean(requirements.warranty_required??body?.warranty_required??false),
+      regulatory_required:Boolean(requirements.regulatory_required??body?.regulatory_required??false),
+      fitment_evidence:String(requirements.fitment_evidence??body?.fitment_evidence??"").trim()||null,
+      required_voltage:String(requirements.required_voltage??body?.required_voltage??"").trim()||null,
+      size:String(requirements.size??body?.size??"").trim()||null,
+      condition:String(requirements.condition??body?.condition??"").trim()||null
+    }
+  };
+}
+function purchaseDeadlineDays(deadline){
+  if(!deadline)return null;const t=Date.parse(deadline);if(!Number.isFinite(t))return null;
+  return Math.max(0,Math.ceil((t-Date.now())/86400000));
+}
+function purchaseKnownOfferTotal(offer,quantity=1){
+  const price=purchaseFinite(offer?.price);if(price==null)return null;
+  const shipping=purchaseFinite(offer?.shipping_cost);
+  // A landed total is only known when shipping is explicitly known. Missing shipping is not zero.
+  if(shipping==null)return null;
+  return price*Math.max(1,quantity)+shipping;
+}
+function assessPartMerchantOffer(x,intent){
+  const o=x?.offer||{},m=x?.merchant||{},score=x?.agent_score||{};
+  const itemSubtotal=purchaseFinite(o?.price)==null?null:purchaseFinite(o.price)*Math.max(1,intent.quantity);
+  const total=purchaseKnownOfferTotal(o,intent.quantity);
+  const currency=String(o.currency||"").toUpperCase()||null;
+  const max=intent.requirements.max_total_cost,deadlineDays=purchaseDeadlineDays(intent.requirements.delivery_deadline);
+  const exact=normalizePartNumber(o.part_number||o.mpn||"")===normalizePartNumber(intent.product.mpn||"");
+  const evidenceBackedAuthorized=Boolean(o.authorized_distributor&&(m.verified||o.authenticity_evidence_url));
+  const authorizedOk=!intent.requirements.authorized_only||evidenceBackedAuthorized;
+  const authenticityOk=!intent.requirements.authenticity_required||Boolean(m.verified||o.authenticity_evidence_url);
+  // A hard budget cannot pass on a currency mismatch or unknown landed total.
+  const budgetOk=max==null||(currency===intent.requirements.currency&&total!=null&&total<=max);
+  // A hard delivery deadline cannot pass when lead time is unknown.
+  const deliveryOk=deadlineDays==null||(o.lead_time_days!=null&&Number.isFinite(Number(o.lead_time_days))&&Number(o.lead_time_days)<=deadlineDays);
+  const stockOk=["in_stock","low_stock"].includes(String(o.stock_status||""));
+  const moq=purchaseFinite(o?.global_fulfillment?.minimum_order_quantity);
+  const quantityOk=moq==null||intent.quantity>=moq;
+  const ships=(o.ships_to||[]).map(v=>String(v).toUpperCase());
+  const destinationOk=!ships.length||ships.includes(intent.destination.country)||ships.includes("WORLDWIDE")||ships.includes("ALL");
+  const eligible=exact&&authorizedOk&&authenticityOk&&budgetOk&&deliveryOk&&stockOk&&quantityOk&&destinationOk;
+  const unknown=[...(o.shipping_cost==null?["shipping"]:[])];
+  if(o?.global_fulfillment?.tax_included!==true)unknown.push("tax_or_vat");
+  if(o?.global_fulfillment?.duty_included!==true&&intent.destination.country!==String(m.country_code||"").toUpperCase())unknown.push("customs_or_duty");
+  if(intent.destination.country!==String(m.country_code||"").toUpperCase())unknown.push("brokerage_if_applicable");
+  return {...x,purchase_evaluation:{eligible,exact_identity:exact,authorized_requirement_met:authorizedOk,authenticity_requirement_met:authenticityOk,budget_requirement_met:budgetOk,delivery_requirement_met:deliveryOk,stock_usable:stockOk,quantity_requirement_met:quantityOk,destination_requirement_met:destinationOk,item_subtotal:itemSubtotal,known_total:total,currency,unknown_cost_components:[...new Set(unknown)],overall_agent_score:Number(score.overall_agent_score||0)}};
+}
+function globalPartsOfferBlockers(x,intent){
+  const e=x?.purchase_evaluation||{},o=x?.offer||{};
+  const blockers=[];
+  if(!e.exact_identity)blockers.push("identity_mismatch");
+  if(!e.stock_usable)blockers.push("stock_unavailable");
+  if(!e.authorized_requirement_met)blockers.push("authorized_status_not_verified");
+  if(!e.authenticity_requirement_met)blockers.push("authenticity_evidence_missing");
+  if(!e.delivery_requirement_met)blockers.push(o.lead_time_days==null?"lead_time_unknown":"delivery_deadline_not_met");
+  if(!e.budget_requirement_met)blockers.push(e.known_total==null?"landed_total_unknown_or_shipping_unknown":"budget_exceeded_or_currency_mismatch");
+  if(!o.product_url&&!o.checkout_url)blockers.push("purchase_url_missing");
+  return [...new Set(blockers)];
+}
+function globalPartsDecision(partIntel,evaluated,intent){
+  const eligible=evaluated.filter(x=>x.purchase_evaluation?.eligible);
+  const best=eligible[0]||null;
+  const exact=evaluated.filter(x=>x.purchase_evaluation?.exact_identity);
+  const stocked=exact.filter(x=>x.purchase_evaluation?.stock_usable);
+  const successors=partIntel?.relations?.successors||[];
+  const substitutes=partIntel?.relations?.verified_substitutes||[];
+  let action="NO_VERIFIED_PURCHASE_ROUTE",reason_codes=[];
+  if(best){action="BUY_EXACT";reason_codes=["exact_mpn","merchant_offer_eligible","hard_constraints_met","evidence_based_ranking"]; }
+  else if(stocked.length){
+    const blockers=[...new Set(stocked.flatMap(x=>globalPartsOfferBlockers(x,intent)))];
+    if(blockers.some(x=>["authorized_status_not_verified","authenticity_evidence_missing"].includes(x))){action="VERIFY_SELLER_EVIDENCE";reason_codes=blockers;}
+    else {action="VERIFY_FULFILLMENT_OR_TOTAL";reason_codes=blockers.length?blockers:["hard_constraint_unknown"]; }
+  }else if(exact.length){action="WAIT_FOR_STOCK";reason_codes=["exact_offer_exists_but_not_currently_buyable"]; }
+  else if(intent.requirements.substitutes_allowed&&successors.length){action="REVIEW_VERIFIED_SUCCESSOR";reason_codes=["no_eligible_exact_offer","verified_successor_available"]; }
+  else if(intent.requirements.substitutes_allowed&&substitutes.length){action="REVIEW_VERIFIED_SUBSTITUTE";reason_codes=["no_eligible_exact_offer","verified_substitute_available"]; }
+  else if(!intent.requirements.substitutes_allowed){action="NO_ELIGIBLE_EXACT_OFFER";reason_codes=["substitution_not_allowed","no_exact_offer_meets_constraints"]; }
+  else {action="NO_SAFE_SUBSTITUTE";reason_codes=["no_exact_offer","no_verified_successor_or_substitute"]; }
+  const evidenceComplete=best?(!globalPartsOfferBlockers(best,intent).length):false;
+  const confidence=best&&evidenceComplete?"high":stocked.length?"medium":exact.length?"medium_low":"low";
+  return {action,can_purchase:!!best,requires_user_confirmation:true,reason_codes,decision_confidence:confidence,best,eligible_count:eligible.length,exact_offer_count:exact.length,compatibility_policy:"never_infer_substitute_from_name_or_dimensions"};
+}
+
+function rankPurchasePartOffers(items=[]){
+  return [...items].sort((a,b)=>{
+    const A=a.purchase_evaluation||{},B=b.purchase_evaluation||{};
+    if(Boolean(A.eligible)!==Boolean(B.eligible))return B.eligible?1:-1;
+    const sa=Number(A.overall_agent_score||0),sb=Number(B.overall_agent_score||0);if(sa!==sb)return sb-sa;
+    if(A.currency&&A.currency===B.currency&&A.known_total!=null&&B.known_total!=null)return A.known_total-B.known_total;
+    return 0;
+  });
+}
+async function buildUniversalPurchaseDecision(request,env,body,origin){
+  const intent=normalizePurchaseDecisionIntent(body,request);
+  if(!intent.original_query&&!intent.product.mpn&&!intent.product.canonical_product_id)return {ok:false,status:400,error:"purchase_query_or_product_required",normalized_intent:intent,charged:false};
+
+  if(intent.domain==="parts"){
+    if(!intent.product.mpn&&!intent.original_query)return {ok:false,status:400,error:"exact_part_number_or_query_required",normalized_intent:intent,charged:false};
+    const resolved=await resolvePart(env,{query:intent.original_query||"",part_number:intent.product.mpn||"",manufacturer:intent.product.manufacturer||""});
+    if(!resolved.ok)return {ok:false,status:resolved.status||404,error:"part_not_resolved",resolution:resolved,normalized_intent:intent,charged:false};
+    intent.product.mpn=resolved.part.part_number||intent.product.mpn;
+    intent.product.manufacturer=resolved.part.manufacturer||intent.product.manufacturer;
+    const [partIntel,merchantMarket]=await Promise.all([
+      buildPartsIntelligence(env,resolved.part),
+      searchMerchantOffers(env,{part_number:resolved.part.part_number||intent.product.mpn,manufacturer:resolved.part.manufacturer||intent.product.manufacturer||"",buyer_country:intent.destination.country,limit:50})
+    ]);
+    const evaluated=rankPurchasePartOffers((merchantMarket?.offers||[]).map(x=>assessPartMerchantOffer(x,intent)));
+    const d=globalPartsDecision(partIntel,evaluated,intent),best=d.best;
+    const blockers=evaluated.slice(0,20).map(x=>({...x,blockers:globalPartsOfferBlockers(x,intent)}));
+    const successors=partIntel?.relations?.successors||[],substitutes=partIntel?.relations?.verified_substitutes||[];
+    return {
+      ok:true,service:PLATFORM_NAME,product_name:"GLOBAL PARTS PURCHASE DECISION",product_version:"2.0",version:VERSION,schema_version:"purchase-decision.v1",domain:"parts",normalized_intent:intent,
+      resolved_product:partIntel.part||resolved.part,
+      lifecycle:partIntel.lifecycle||null,
+      relations:partIntel.relations||null,
+      documents:partIntel.documents||null,
+      decision:{action:d.action,can_purchase:d.can_purchase,requires_user_confirmation:true,reason_codes:d.reason_codes,decision_confidence:d.decision_confidence,exact_offer_count:d.exact_offer_count,eligible_offer_count:d.eligible_count,compatibility_policy:d.compatibility_policy},
+      best_offer:best,
+      candidate_offers:blockers,
+      alternatives:{verified_successors:successors,verified_substitutes:substitutes,substitution_allowed:intent.requirements.substitutes_allowed},
+      landed_cost:{mode:"known-components-only",best_known_total:best?.purchase_evaluation?.known_total??null,currency:best?.purchase_evaluation?.currency??null,unknown_components:best?.purchase_evaluation?.unknown_cost_components||["shipping","tax_or_vat","customs_or_duty","brokerage_if_applicable"],policy:"unknown_components_are_never_assumed_zero"},
+      evidence_summary:{merchant_verified:!!best?.merchant?.verified,authorized_evidence:!!(best?.offer?.authorized_distributor&&(best?.merchant?.verified||best?.offer?.authenticity_evidence_url)),authenticity_evidence_url:best?.offer?.authenticity_evidence_url||null,datasheet_url:best?.offer?.datasheet_url||null,fulfillment_evidence_url:best?.offer?.global_fulfillment?.fulfillment_evidence_url||null,last_verified_at:best?.offer?.global_fulfillment?.last_verified_at||null},
+      evidence_policy:{paid_placement:false,merchant_ranking:"evidence_based_no_paid_placement",compatibility_claims_require_evidence:true,authorized_status_requires_verification_or_evidence:true,hard_constraint_unknowns_fail:true},
+      purchase:{purchase_intent_endpoint:`${origin}/v1/purchase-intent`,checkout_ready:!!(best&&(best.offer?.checkout_url||best.offer?.product_url)),checkout_mode:best?.offer?.checkout_url?"direct_checkout":"product_handoff",checkout_url:best?.offer?.checkout_url||best?.offer?.product_url||null,requires_user_confirmation:true},
+      internationalization:{request_language:intent.language,response_language:intent.language,canonical_fact_fields_not_translated:true,destination_country:intent.destination.country,currency:intent.requirements.currency},
+      generated_at:new Date().toISOString()
+    };
+  }
+
+  if(intent.domain==="anime_collectibles"){
+    const u=new URL(`${origin}/v1/full-intelligence`);
+    if(intent.product.canonical_product_id)u.searchParams.set("id",intent.product.canonical_product_id);
+    else u.searchParams.set("query",intent.original_query||"");
+    u.searchParams.set("buyer_country",intent.destination.country);
+    if(intent.destination.postal_code)u.searchParams.set("postal_code",intent.destination.postal_code);
+    u.searchParams.set("lang",intent.language);
+    const preflight=await preflightPaidProduct(env,u);
+    if(!preflight.ok)return {ok:false,status:preflight.status||404,error:"collectible_not_resolved",normalized_intent:intent,resolution:preflight.body,charged:false};
+    const intel=await buildIntelligence(env,preflight.product,false,intent.language,{autoRefresh:true,buyerCountry:intent.destination.country,postalCode:intent.destination.postal_code||""});
+    const view=shoppingIntelligenceView(intel,origin);
+    return {ok:true,service:PLATFORM_NAME,version:VERSION,schema_version:"purchase-decision.v1",domain:"anime_collectibles",normalized_intent:intent,resolved_product:view.product,recommendation:view.recommendation,market:view.market,authenticity:view.authenticity,rarity:view.rarity,price_history:view.price_history,landed_cost:view.landed_cost,best_offer:view.best_offer,routing:view.routing,decision:{action:view.agent_actions?.recommended_next_action||"ASK_USER",can_purchase:!!view.agent_actions?.can_purchase,requires_user_confirmation:true},evidence_policy:{paid_placement:false,identity_resolved_before_recommendation:true,unknown_cross_border_costs_not_fabricated:true},purchase:view.purchase,internationalization:{request_language:intent.language,response_language:intent.language,canonical_fact_fields_not_translated:true,destination_country:intent.destination.country},generated_at:new Date().toISOString()};
+  }
+
+  const generic=await genericCommerceSearch(env,{...body,domain:intent.domain,query:intent.original_query||body?.query||"",mpn:intent.product.mpn||undefined,part_number:intent.product.mpn||undefined,gtin:intent.product.gtin||undefined,language:intent.language,buyer_country:intent.destination.country,currency:intent.requirements.currency,quantity:intent.quantity,max_total_cost:intent.requirements.max_total_cost,delivery_deadline:intent.requirements.delivery_deadline,authenticity_required:intent.requirements.authenticity_required,limit:30,_persist:true,_decision_live:true});
+  const evaluated=(generic?.offers||[]).map(o=>o?.purchase_evaluation?o:evaluateGenericOffer(intent.domain,o,intent,body));const gd=decideGenericPurchase(intent.domain,evaluated,intent),best=gd.best;
+  return {ok:!!generic?.ok,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,schema_version:"purchase-decision.v3",domain:intent.domain,normalized_intent:intent,resolved_identity:{identity_key:generic?.identity_key||null,identifiers:generic?.identifiers||{},confidence:best?.purchase_evaluation?.identity?.confidence??null,method:best?.purchase_evaluation?.identity?.method||null},decision:{action:gd.action,can_purchase:gd.can_purchase,requires_user_confirmation:true,reason_codes:gd.reason_codes,decision_quality:"domain_profile_evidence_gated",domain_profile:genericDomainProfile(intent.domain)},best_offer:best,candidate_offers:evaluated.slice(0,30),provider_errors:generic?.provider_errors||[],response_path:generic?.response_path||"request_time_live_enrichment_plus_cache",live_enrichment_performed:!!generic?.live_enrichment_performed,answerability:{answered_in_same_request:true,live_offers_found:Number(generic?.live_count||0),fallback_memory_offers:Number(generic?.memory_count||0),insufficient_evidence:gd.action==="NO_EVIDENCE"},persistence:generic?.persistence||null,landed_cost:{mode:"known-components-only",best_known_total:best?.purchase_evaluation?.known_total??null,currency:best?.purchase_evaluation?.currency??null,unknown_components:best?.purchase_evaluation?.unknowns||["shipping","tax_or_vat_or_duty_if_cross_border"],policy:"unknown_components_are_never_assumed_zero"},evaluation:{identity:best?.purchase_evaluation?.identity||null,hard_blockers:best?.purchase_evaluation?.hard_blockers||[],unknowns:best?.purchase_evaluation?.unknowns||[],budget_ok:best?.purchase_evaluation?.budget_ok??null,delivery_ok:best?.purchase_evaluation?.delivery_ok??null,stock_ok:best?.purchase_evaluation?.stock_ok??null,returns_known:best?.returns_accepted!=null,warranty_known:best?.warranty!=null,authenticity_evidence:!!(best?.authenticity_evidence_url||best?.merchant_verified)},evidence_policy:{paid_placement:false,domain_specific_hard_gates:true,compatibility_claims_require_evidence:true,authenticity_claims_require_evidence:true,unknown_shipping_tax_duty_returns_warranty_explicit:true,marketplace_observation_is_not_manufacturer_truth:true},purchase:{purchase_intent_endpoint:`${origin}/v1/purchase-intent`,purchase_url:best?.url||null,requires_user_confirmation:true},internationalization:{request_language:intent.language,response_language:intent.language,canonical_fact_fields_not_translated:true,destination_country:intent.destination.country,currency:intent.requirements.currency},generated_at:new Date().toISOString()};
+}
+
+function purchaseDecisionBodyFromUrl(url){
+  const b={};
+  for(const k of ["query","need","intent","language","lang","domain","vertical","category","manufacturer","mpn","part_number","gtin","buyer_country","country","postal_code","currency","delivery_deadline","deadline","canonical_product_id","fitment_evidence","required_voltage","size","condition"]){
+    const v=url.searchParams.get(k);if(v!==null&&v!=="")b[k]=v;
+  }
+  for(const k of ["quantity","max_total_cost","budget"]){const v=url.searchParams.get(k);if(v!==null&&v!=="")b[k]=Number(v);}
+  for(const k of ["authorized_only","authenticity_required","substitutes_allowed","returns_required","warranty_required","regulatory_required"]){const v=url.searchParams.get(k);if(v!==null)b[k]=/^(1|true|yes)$/i.test(v);}
+  return b;
+}
+
+async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
+  const hasPaymentHeader=!!(request.headers.get("payment-signature")||request.headers.get("x-payment"));
+  let body={};
+  if(request.method==="GET"){
+    body=purchaseDecisionBodyFromUrl(new URL(request.url));
+  }else{
+    try{body=await request.json();}catch{
+      if(hasPaymentHeader)return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"invalid_json",charged:false},400);
+      return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{throw new Error("purchase_body_required");},ctx);
+    }
+  }
+  const intent=normalizePurchaseDecisionIntent(body,request);
+  if(intent.original_query&&!hasPaymentHeader){
+    deferTelemetry(ctx,logEvent(env,"universal_product_demand",{endpoint:"/v1/purchase-decision",metadata:{domain:intent.domain,query_text:String(intent.original_query).slice(0,180),query_key:universalQueryKey(intent.domain,intent.original_query),query_family:universalQueryFamily(intent.domain,intent.original_query),language:intent.language,buyer_country:intent.destination.country,pre_payment:true,attribution_key:purchaseAttributionKey(intent),version:VERSION}}));
+  }
+  if(!intent.original_query&&!intent.product.mpn&&!intent.product.canonical_product_id){
+    if(!hasPaymentHeader)return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{throw new Error("purchase_query_or_product_required");},ctx);
+    return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"purchase_query_or_product_required",charged:false,normalized_intent:intent},400);
+  }
+  // Preserve the existing pre-payment identity principle: unresolved exact products are rejected before settlement.
+  if(intent.domain==="parts"){
+    const resolved=await resolvePart(env,{query:intent.original_query||"",part_number:intent.product.mpn||"",manufacturer:intent.product.manufacturer||""});
+    if(!resolved.ok)return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"part_not_resolved",charged:false,normalized_intent:intent,resolution:resolved},resolved.status||404,{"cache-control":"no-store"});
+  }else if(intent.domain==="anime_collectibles"){
+    const u=new URL(`${origin}/v1/full-intelligence`);
+    if(intent.product.canonical_product_id)u.searchParams.set("id",intent.product.canonical_product_id);else u.searchParams.set("query",intent.original_query||"");
+    u.searchParams.set("buyer_country",intent.destination.country);u.searchParams.set("lang",intent.language);
+    const preflight=await preflightPaidProduct(env,u);
+    if(!preflight.ok)return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"collectible_not_resolved",charged:false,normalized_intent:intent,resolution:preflight.body},preflight.status||404,{"cache-control":"no-store"});
+  }
+  return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{
+    const out=await buildUniversalPurchaseDecision(request,env,body,origin);
+    if(out?.status&&out.status>=400){const e=new Error(out.error||"purchase_decision_failed");e.public_payload=out;throw e;}
+    deferTelemetry(ctx,logRequestStage(env,request,"universal_purchase_decision_served",{metadata:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||""),attribution_key:purchaseAttributionKey(intent),language:intent.language,destination_country:intent.destination.country,can_purchase:!!out?.decision?.can_purchase,decision_action:out?.decision?.action||null,reason_codes:Array.isArray(out?.decision?.reason_codes)?out.decision.reason_codes.slice(0,12):[],cross_provider_corroborated_offers:Number(out?.cross_provider_corroborated_offers||out?.persistence?.cross_provider_corroborated_candidates||0)}}));
+    return {...out,_payment_attribution:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||""),attribution_key:purchaseAttributionKey(intent),decision_action:out?.decision?.action||null,can_purchase:!!out?.decision?.can_purchase},price_usdc_atomic:PRICES.purchaseDecision,price_usdc:Number(PRICES.purchaseDecision)/1000000};
+  },ctx);
+}
+
+function shapePaidResponse(path,intel){
+  const base={language:intel.language,generated_at:intel.generated_at};
+  if(path==="/v1/identify")return {...base,product:intel.product,provenance:intel.provenance};
+  if(path==="/v1/market")return {...base,product:compactProductResponse(intel.product),market:intel.market,freshness:intel.freshness,routing:intel.routing};
+  if(path==="/v1/rarity")return {...base,product:compactProductResponse(intel.product),rarity:intel.rarity,rerelease:intel.product.rerelease,rerelease_generation:intel.product.rerelease_generation};
+  if(path==="/v1/authenticity")return {...base,product:compactProductResponse(intel.product),authenticity_risk:intel.authenticity_risk};
+  if(path==="/v1/buy-wait")return {...base,product:compactProductResponse(intel.product),buy_wait:intel.buy_wait,market_snapshot:{lowest_price_jpy:intel.market.lowest_price_jpy,median_price_jpy:intel.market.median_price_jpy,msrp_jpy:intel.market.msrp_jpy},rarity:intel.rarity,routing:intel.routing};
+  if(path==="/v1/best-place")return {...base,product:compactProductResponse(intel.product),best_place:intel.best_place,routing:intel.routing};
+  if(path==="/v1/listing-match")return {...base,product:compactProductResponse(intel.product),listing_match:intel.listing_match};
+  if(path==="/v1/deadline")return {...base,product:compactProductResponse(intel.product),deadline:intel.deadline};
+  if(path==="/v1/landed-cost")return {...base,product:compactProductResponse(intel.product),landed_cost:intel.landed_cost,best_place:intel.best_place,routing:intel.routing};
+  if(path==="/v1/price-history")return {...base,product:compactProductResponse(intel.product),price_history:intel.price_history,market_snapshot:{lowest_price_jpy:intel.market.lowest_price_jpy,median_price_jpy:intel.market.median_price_jpy,highest_price_jpy:intel.market.highest_price_jpy,msrp_jpy:intel.market.msrp_jpy},freshness:intel.freshness};
+  if(path==="/v1/shopping-intelligence")return shoppingIntelligenceView(intel,"https://anime-intelligence.goodmy0312.workers.dev");
+  return intel;
+}
+
+/* =========================================================
+   X402 / DISCOVERY
+========================================================= */
+
+const DISCOVERY_CONFIG={
+  "/v1/identify":{service_name:"ANIME INTELLIGENCE - Find Recommend or Identify Anime Collectibles",intent:"Start from an ordinary shopping request even when the buyer does not know the character, exact product, JAN or edition. Infer the requested franchise/category/budget/location, rank relevant commercial candidates, recommend the strongest option and preserve alternatives; if the request is already exact, resolve that exact edition.",when_to_use:"Use as the low-cost entry point for requests such as 'I want a ONE PIECE figure', 'find a Hatsune Miku figure under $100', 'Naruto figure gift', character/franchise-only requests, Japanese titles, JAN/EAN or partial descriptions. Character and exact edition are NOT required.",value:"natural_language_product_discovery_recommendation_and_identity",tags:["anime-collectibles","shopping-recommendation","product-discovery","multilingual","japan","product-identification","franchise-search","character-goods","shopping-agent"],examples:["I want a ONE PIECE figure. What should I buy?","Find me a good Hatsune Miku figure under $100","I want a Naruto figure as a gift","Which exact Nendoroid is this Hatsune Miku release?"],output_fields:["recommended product","ranked alternatives","official product image URL","canonical identity","product type","JAN/EAN","manufacturer or brand","series or franchise","edition or variant","release data","identity quality"],why_pay:"Pay for a commercially useful recommendation/identity result rather than a raw keyword list: the service interprets vague shopping intent, ranks candidates and returns a canonical product with image and alternatives.",selection_triggers:["I want","what should I buy","recommend","find me","looking for","gift","anime figure","ONE PIECE figure","Pokemon collectible","exact edition","which version","JAN","EAN","identify this"],prefer_over:["The buyer knows only a franchise, character, category, budget or use case.","The agent needs a recommended product rather than a generic search-result page.","Generic search returns several similar editions or rereleases."],buyer_outcome:"A recommended canonical product plus ranked alternatives that downstream paid intelligence can price, assess and route to purchase.",description:"Multilingual vague-to-canonical shopping intelligence for physical anime collectibles. Accept requests such as 'I want a ONE PIECE figure', 'a big cheap Pikachu plush', '部屋に飾れるかっこいいゾロ', or 'a Japan-only Luffy figure' even when the exact product is unknown. Interpret hard identity constraints plus soft preferences such as budget, color, size, style, gift/display use, condition, availability and buyer location; rank compatible canonical products, return confidence and alternatives, and expose missing prior/social context instead of guessing. Exact JAN/model/edition identification is also supported."},
+  "/v1/market":{service_name:"ANIME INTELLIGENCE - Anime Figure Market Value & Price Comparison",intent:"Get matched Japan-market and global asking-price intelligence for the exact collectible instead of mixing prices from wrong editions or similarly named goods.",when_to_use:"Use when an agent needs current value, resale context or matched asking prices for a Japanese anime collectible and identity mismatch would make generic marketplace search unreliable.",value:"identity_matched_japan_global_market_intelligence",tags:["anime-collectibles","japan-market-price","global-market-price","collectible-valuation","market-value","resale-value","identity-matched-pricing","price-comparison","yahoo-japan","ebay","shopping-agent"],examples:["Current Japan and global market value for this exact ONE PIECE figure","Price this Nendoroid without mixing rereleases","Compare matched asking prices for JAN 4573102721365"],output_fields:["lowest price","median price","highest price","offer count","market freshness","best matched listing","purchase routing","official product image URL"],why_pay:"Pay for identity-matched pricing when generic marketplace search risks mixing rereleases, sizes, prize versions or similarly named goods.",selection_triggers:["current price","market value","worth","resale value","Japan price","global price","price comparison","how much is this worth"],prefer_over:["The user needs current product-level value, not general shopping links.","Wrong-edition prices would materially distort the answer."],buyer_outcome:"A matched current valuation and market snapshot for the exact collectible.",description:"Identity-matched market intelligence for Japanese anime collectibles. Resolve the exact product first, then compare supported Japan and global marketplace observations while rejecting likely wrong editions and name collisions. Returns low/median/high asking prices, offer count, freshness and best matched listing."},
+  "/v1/rarity":{service_name:"ANIME INTELLIGENCE - Collectible Rarity & Rerelease Risk",intent:"Estimate whether the exact Japanese collectible is genuinely scarce and how rerelease or replenishment risk changes its collectibility.",when_to_use:"Use before paying a scarcity premium for limited, discontinued, old, prize, card or hard-to-find merchandise where a future rerelease could destroy the premium.",value:"scarcity_and_rerelease_risk",tags:["anime-collectibles","collectible-rarity","scarcity","limited-edition","hard-to-find","rerelease-risk","japan-collectibles","shopping-agent"],examples:["Is this exact ONE PIECE prize actually rare?","Rerelease risk for this Nendoroid","Is the scarcity premium justified for this Japanese collectible?"],output_fields:["rarity score","rarity level","supply signals","price premium signals","rerelease or replenishment risk","official product image URL"],why_pay:"Pay when scarcity or rerelease risk can change whether a premium is justified; raw listing counts alone are not enough.",selection_triggers:["rare","rarity","scarce","limited","hard to find","discontinued","rerelease","re-release","restock","premium justified"],prefer_over:["The buying decision depends on true scarcity or future supply risk."],buyer_outcome:"A scarcity judgment with rerelease/replenishment context.",description:"Estimate scarcity and rerelease/replenishment risk for the exact Japanese collectible, not just the franchise. Combines matched supply, price premium, release age and limited-edition signals so an agent can avoid paying a false rarity premium."},
+  "/v1/authenticity":{service_name:"ANIME INTELLIGENCE - Anime Figure Authenticity & Bootleg Risk",intent:"Screen an anime collectible purchase for bootleg, counterfeit, identity mismatch and suspicious-listing risk before an agent recommends spending money.",when_to_use:"Use when an offer is unusually cheap, the seller title is vague, official references are missing or Japanese and overseas listings disagree on identity.",value:"counterfeit_and_listing_risk",tags:["anime-collectibles","bootleg-detection","counterfeit-risk","authenticity","listing-risk","identity-mismatch","purchase-risk","shopping-agent"],examples:["Is this cheap Nendoroid listing suspicious?","Bootleg risk for this ONE PIECE figure","Does this listing match the official Japanese product?"],output_fields:["risk score","risk level","risk reasons","suspicious listing signals","official product image URL"],why_pay:"Pay before recommending a suspicious offer when counterfeit, bootleg or wrong-edition risk could cause a bad purchase.",selection_triggers:["fake","bootleg","counterfeit","authentic","genuine","suspicious","too cheap","wrong version","listing mismatch"],prefer_over:["The user is evaluating a specific purchase risk rather than asking for generic anti-counterfeit advice."],buyer_outcome:"A pre-purchase risk screen tied to the exact collectible and listing context.",description:"Pre-purchase counterfeit and listing-risk screening for Japanese anime collectibles. Cross-checks canonical identity, official references, price relationships and matched listing signals to flag bootleg risk, suspiciously cheap offers and identity mismatches."},
+  "/v1/buy-wait":{service_name:"ANIME INTELLIGENCE - Buy or Wait Decision for Anime Collectibles",intent:"Make a concrete BUY, WAIT, WATCH or AVOID decision only after the collectible is exactly identified; broad category/franchise timing requests are stopped before payment.",when_to_use:"Use when an autonomous shopping agent must decide whether to buy now rather than merely report data. Especially useful when waiting for a rerelease or avoiding a scarcity premium could save money.",value:"actionable_purchase_timing_decision",tags:["anime-collectibles","buy-or-wait","shopping-decision","purchase-timing","rerelease-risk","collectible-price","autonomous-shopping-agent"],examples:["Buy or wait for this ONE PIECE figure?","Should I buy this Nendoroid now or wait for rerelease?","BUY WAIT WATCH or AVOID this Japanese collectible"],output_fields:["decision","decision reasons","market snapshot","rarity context","risk context","purchase routing","official product image URL"],why_pay:"Pay when the agent must make a timing decision. This converts price, scarcity, rerelease and risk signals into a direct action instead of returning raw data.",selection_triggers:["buy now","buy or wait","should I buy","wait for rerelease","watch","avoid","purchase timing","is now a good time"],prefer_over:["The user asks for an action or timing recommendation, not merely a price."],buyer_outcome:"A BUY, WAIT, WATCH or AVOID decision with reasons.",description:"Turn Japanese collectible data into an actionable BUY, WAIT, WATCH or AVOID decision. Uses identity-matched price, availability, scarcity, rerelease/replenishment risk and authenticity signals so an agent can act instead of assembling several searches manually."},
+  "/v1/best-place":{service_name:"ANIME INTELLIGENCE - Best Place to Buy Anime Figure or Collectible",intent:"Choose the best current purchase route for the exact Japanese anime collectible from matched seller offers rather than sending the buyer to a generic search page.",when_to_use:"Use when the buyer is ready to purchase and needs the best matched seller, current price, availability and route for the exact edition.",value:"best_identity_matched_purchase_route",tags:["anime-collectibles","best-place-to-buy","where-to-buy","cheapest-matched-offer","seller","availability","japan-shopping","marketplace-comparison","purchase-route","shopping-agent"],examples:["Best place to buy this exact Nendoroid now","Where can I buy this ONE PIECE figure without edition mismatch?","Find the best matched seller for JAN 4573102721365"],output_fields:["best purchase route","matched seller offer","current price","seller","availability","identity match quality","market freshness","official product image URL"],why_pay:"Pay when the user is purchase-ready and needs an identity-matched seller route rather than a generic marketplace search page.",selection_triggers:["where to buy","best place to buy","best seller","cheapest matched offer","buy this now","purchase route","in stock"],prefer_over:["The user intends to transact and seller/edition matching matters."],buyer_outcome:"A concrete current purchase route for the exact collectible.",description:"Return the best current purchase route for an exact Japanese anime collectible. Compares identity-matched seller offers, price, availability, marketplace and freshness so an autonomous agent can move from product identification to a concrete seller route."},
+  "/v1/full-intelligence":{service_name:"ANIME INTELLIGENCE - Complete Anime Collectible Purchase Intelligence",intent:"Replace multiple collectible searches with one paid purchase-decision call: exact identity, matched pricing, rarity, rerelease risk, authenticity risk, BUY-WAIT and best purchase route.",when_to_use:"Use as the default high-value call when an agent has a real buying question and needs enough evidence to decide and route the purchase in one response.",value:"one_call_end_to_end_collectible_purchase_decision",tags:["anime-collectibles","japan-only-products","collectibles-intelligence","exact-product-identification","market-value","rarity","authenticity","buy-or-wait","where-to-buy","shopping-agent","purchase-decision","one-call-intelligence"],examples:["Should I buy this exact ONE PIECE figure now, what is it worth, and where?","Full purchase intelligence for this Japanese Nendoroid","Identify, value and find the safest purchase route for this Pokemon collectible"],output_fields:["identity","product type","market","price history","listing match","purchase deadline","landed cost by buyer country","rarity","rerelease or replenishment status","authenticity risk","BUY-WAIT","best place","purchase routing","freshness","official product image URL"],why_pay:"Pay for this by default when the buying task needs two or more specialized signals. One 0.05 USDC call resolves identity, value, scarcity, rerelease risk, authenticity risk, timing and purchase routing together.",selection_triggers:["should I buy","is it worth it","full analysis","safe to buy","what is it worth and where to buy","identify value authenticate buy","purchase decision"],prefer_over:["The task combines multiple paid questions.","The agent needs a final purchase decision rather than separate specialist facts."],buyer_outcome:"One end-to-end purchase decision that replaces multiple searches and reconciliation steps.",description:"One paid call for an end-to-end Japanese anime collectible purchase decision. Resolves the exact edition, returns identity-matched Japan/global market intelligence, price history, listing-match evidence, purchase deadlines, destination-aware landed-cost context including Japan buyers, rarity and rerelease risk, authenticity risk, BUY/WAIT/WATCH/AVOID and the best current purchase route. Designed for autonomous agents that need a decision, not another list of links."},
+  "/v1/listing-match":{service_name:"ANIME INTELLIGENCE - Verify Listing Matches Exact Anime Collectible",intent:"Check whether a marketplace listing actually matches the intended canonical Japanese collectible or a wrong edition, rerelease, size or variant.",when_to_use:"Use immediately before purchase when the agent has a seller listing and identity mismatch could cause a bad order. A listing URL or title can be supplied; otherwise the service returns the strongest currently observed matched listings.",value:"listing_to_canonical_identity_match",tags:["anime-collectibles","listing-match","edition-match","seller-listing","identity-verification","wrong-version","shopping-agent"],examples:["Does this eBay listing match the exact Nendoroid edition?","Verify this Yahoo listing is the same ONE PIECE figure","Is this seller listing the correct Japanese release?"],output_fields:["match verdict","match score","canonical identity","matched listing","match basis","known alternative listings"],why_pay:"Pay before purchase when a wrong edition, rerelease or similarly named item would make the transaction incorrect even if the price looks attractive.",selection_triggers:["same product","same edition","does this listing match","correct version","wrong version","listing match","edition match"],prefer_over:["A concrete seller listing must be matched to the canonical product before purchase."],buyer_outcome:"A listing-to-canonical match verdict that reduces wrong-item purchases.",description:"Verify whether a seller listing matches the exact Japanese anime collectible, edition or variant. Uses canonical identity, JAN/model evidence and stored marketplace match signals to detect wrong-version and name-collision risk."},
+  "/v1/deadline":{service_name:"ANIME INTELLIGENCE - Preorder Lottery and Purchase Deadline",intent:"Return the latest verified stored preorder, reservation, lottery or sales deadline for a Japanese collectible without confusing the release date with an order deadline.",when_to_use:"Use when an agent could lose the purchase opportunity by waiting: preorder closing, lottery entry closing, limited-order end or sales-end timing.",value:"purchase_opportunity_deadline",tags:["anime-collectibles","preorder-deadline","lottery-deadline","reservation-deadline","limited-order","purchase-deadline","shopping-agent"],examples:["When does preorder close for this figure?","How long is left to enter this Japanese lottery sale?","Is the order window for this limited collectible still open?"],output_fields:["deadline known","deadline type","deadline timestamp","hours remaining","open/closed status","release schedule separately"],why_pay:"Pay when missing a verified order window can eliminate the purchase opportunity. Unknown deadlines are explicitly returned as unknown rather than inferred from release dates.",selection_triggers:["deadline","preorder closes","lottery ends","reservation deadline","order window","sales end","how long left"],prefer_over:["The user needs transaction timing rather than general release-date information."],buyer_outcome:"A clear deadline/open-status answer with no fabricated timing.",description:"Purchase-window intelligence for Japanese anime collectibles. Returns stored verified preorder, lottery, reservation or sales deadlines when available, with remaining time and a separate release schedule so agents do not confuse release dates with order cutoffs."},
+  "/v1/landed-cost":{service_name:"ANIME INTELLIGENCE - Landed Cost for Japan or International Buyer",intent:"Calculate the known purchase total for a specific buyer country and expose any unknown shipping, duty, tax or brokerage components instead of pretending a sticker price is the final cost.",when_to_use:"Use when an agent is ready to buy and must compare the actual payable route for a Japan-based buyer or a cross-border buyer. Japan is a first-class destination, not a fallback case.",value:"buyer_destination_landed_cost",tags:["anime-collectibles","landed-cost","Japan-buyer","shipping-cost","import-duty","tax","total-cost","cross-border-shopping","shopping-agent"],examples:["What is the real total cost for a buyer in Japan?","Landed cost of this Nendoroid to the US","Compare final payable cost for Japan versus overseas purchase"],output_fields:["buyer country","item price","known shipping","known total","Japan domestic route","estimated landed total when defensible","unknown tax/duty components","purchase URL"],why_pay:"Pay when the cheapest sticker price may not be the cheapest transaction after shipping or cross-border costs. The service identifies what is known and what remains unknown.",selection_triggers:["landed cost","total cost","shipping to Japan","shipping to US","final price","all-in cost","import duty","tax included"],prefer_over:["The buyer has a destination and wants a transaction-ready cost rather than a raw asking price."],buyer_outcome:"A destination-aware known total with uncertainty surfaced explicitly.",description:"Destination-aware purchase cost for Japanese anime collectibles. Supports Japan buyers explicitly and cross-border buyers conservatively, returning known item/shipping totals and refusing to invent unavailable duty, tax or brokerage amounts."},
+  "/v1/price-history":{service_name:"ANIME INTELLIGENCE - Anime Collectible Price History",intent:"Show stored asking-price history and whether the current observation sits high or low versus recent supported-marketplace history.",when_to_use:"Use before BUY/WAIT when the agent needs 7/30/90/180-day context, recent lows, medians, highs or a price percentile instead of a one-point snapshot.",value:"historical_asking_price_context",tags:["anime-collectibles","price-history","historical-price","30-day-price","90-day-price","price-percentile","market-timing","shopping-agent"],examples:["Show 90-day price history for this Nendoroid","Is today's price high or low versus the last 30 days?","Historical asking-price range for this ONE PIECE figure"],output_fields:["7-day stats","30-day stats","90-day stats","180-day stats","daily median series","current percentile","trend"],why_pay:"Pay when historical context can prevent buying at a temporary spike or missing an unusually cheap current offer.",selection_triggers:["price history","historical price","30 day","90 day","price trend","historical low","price percentile","is this price high"],prefer_over:["A current snapshot alone is insufficient for timing the purchase."],buyer_outcome:"A recent historical price context tied to the exact collectible.",description:"Stored asking-price history for the exact Japanese anime collectible across supported marketplaces. Returns 7/30/90/180-day ranges, daily medians, current percentile and trend without claiming completed-sale history."}
+,
+  "/v1/parts-intelligence":{
+    service_name:"PARTS INTELLIGENCE - Exact Part Lifecycle Compatibility and Sourcing",
+    intent:"Resolve an exact manufacturer part number, then return lifecycle status, verified successor/substitute evidence, official documents, sourcing observations and AI-agent-ready merchant offers.",
+    when_to_use:"Use for industrial, MRO, service, appliance, camera, audio, tool, IT and other exact model-number parts when lifecycle, replacement, compatibility or sourcing evidence matters.",
+    value:"exact_part_lifecycle_compatibility_replacement_and_sourcing",
+    tags:["parts","industrial","mro","replacement-parts","sourcing"],
+    examples:["OMRON E2E-X5ME1","Mitsubishi Electric exact replacement part","Find verified successor and suppliers for this discontinued part"],
+    output_fields:["canonical part identity","lifecycle status","successor","verified substitutes","official documents","evidence-gated relation candidates","merchant offers","sourcing decision"],
+    why_pay:"Pay for exact-part resolution plus evidence-gated lifecycle, replacement and sourcing intelligence. The service does not infer compatibility from similar names or dimensions.",
+    selection_triggers:["part number","MPN","discontinued part","successor","replacement","substitute","compatible","MRO","industrial part","source this part"],
+    prefer_over:["The buyer has an exact manufacturer part number and needs lifecycle or replacement evidence.","A wrong substitute could cause fit, electrical, safety or operational failure.","The agent needs machine-readable merchant offers tied to the exact MPN."],
+    buyer_outcome:"An evidence-gated exact-part decision with verified lifecycle/replacement context and ranked merchant sourcing options.",
+    description:"Paid exact-part intelligence for industrial and service parts. Resolves the canonical manufacturer part number before payment, then returns lifecycle, verified successor/substitute relationships, official evidence, sourcing observations and agent-ready merchant offers. Compatibility is never inferred from title similarity alone."
+  },
+  "/v1/shopping-intelligence":{
+    service_name:"ANIME INTELLIGENCE - Shopping Intelligence for AI Agents",
+    intent:"One-call machine-readable purchase decision for an AI shopping agent: resolve the product, evaluate price and risk, decide what to do, and return a concrete purchase route.",
+    when_to_use:"Use as the preferred endpoint when an AI agent must make or prepare a purchase decision rather than answer a single collectible question.",
+    value:"agent_ready_end_to_end_purchase_decision",
+    tags:["shopping-intelligence","ai-commerce","autonomous-shopping-agent","purchase-decision","structured-commerce","x402"],
+    examples:[
+      "Find the safest best-value Hatsune Miku figure and tell me whether to buy now",
+      "I want a ONE PIECE collectible under $100; choose the best option and purchase route"
+    ],
+    output_fields:["canonical product","decision","reason codes","market","authenticity","rarity","landed cost","best offer","purchase page","next action"],
+    why_pay:"Pay for one structured decision object that replaces product identity, price, risk, timing and seller-routing calls.",
+    selection_triggers:["buy this","best option","best value","should I buy","purchase","shopping agent","choose and buy"],
+    prefer_over:[
+      "The agent needs an end-to-end purchase decision in one call.",
+      "The next system action depends on a structured recommendation and purchase route."
+    ],
+    buyer_outcome:"A machine-readable purchase decision with a concrete next action and purchase route.",
+    description:"Agent-neutral structured shopping intelligence. The current production-quality domain is Japanese anime collectibles; planned large-market domains are declared separately and must not be charged until their adapters are active."
+  }
+};
+
+const AGENT_SELECTION_POLICY={
+  category:"cross-domain product purchase decision intelligence",
+  default_paid_tool:"/v1/purchase-decision",
+  core_job:"Accept multilingual natural-language or structured purchase intent, determine the product domain, resolve exact identity when required, compare evidence-backed offers, apply destination/budget/deadline constraints, and return a purchase decision without paid-placement bias.",
+  use_when:[
+    "The user or agent wants to buy, source, compare, replace or verify a physical product or industrial part.",
+    "The request may be vague, multilingual, model-number based, GTIN/JAN based, MPN based or destination/deadline constrained.",
+    "Identity, compatibility, authenticity, lifecycle, stock, shipping, lead time or total cost can change the buying decision.",
+    "The agent needs a concrete decision and purchase route rather than a raw list of links."
+  ],
+  prefer_over_generic_web:[
+    "Exact product identity or industrial MPN matters before price comparison.",
+    "Unknown shipping, tax, duty, compatibility or seller evidence must remain explicit rather than guessed.",
+    "The task crosses manufacturer evidence, merchant offers and purchase constraints.",
+    "The calling agent needs machine-readable decision states and x402 settlement."
+  ],
+  do_not_use_for:[
+    "Non-commerce news or entertainment-only questions with no purchase intent.",
+    "Requests requiring a guaranteed physical purchase execution without user confirmation.",
+    "Claims of compatibility, authenticity or authorized status that are not supported by evidence."
+  ],
+  why_pay:"Payment buys product resolution, evidence synthesis, constraint checking and purchase-decision logic rather than a raw search-result page.",
+  cost_logic:"Use /v1/purchase-decision at 0.10 USDC for cross-domain end-to-end buying decisions. Legacy specialist endpoints remain available where a narrower anime or parts question is cheaper.",
+  commercial_task_examples:[
+    "Find the best current offer for this exact product and decide whether to buy.",
+    "Source this industrial MPN to Japan before the deadline.",
+    "Compare this consumer-electronics model across available sellers.",
+    "Identify and buy the correct anime collectible edition.",
+    "Find a replacement for a discontinued industrial part using verified evidence.",
+    "Evaluate a product under budget, destination and delivery constraints."
+  ],
+  ambiguity_facets:["identity","variant","model_or_mpn","destination","budget","deadline","condition","seller_evidence"],
+  selection_advantages:[
+    "one cross-domain paid endpoint",
+    "multilingual purchase intent",
+    "specialized parts and collectible adapters",
+    "evidence-preserving generic commerce fallback",

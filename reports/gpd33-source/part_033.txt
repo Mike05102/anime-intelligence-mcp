@@ -1,0 +1,300 @@
+      properties:{
+        vertical:{type:"string",enum:["accommodation","flight","car","attraction","transfer"],default:"accommodation"},
+        search_query:{type:"string"},
+        origin:{type:"string",description:"IATA airport code for flight search."},
+        destination:{type:"string",description:"IATA airport code for flight search."},
+        departure_date:{type:"string",description:"YYYY-MM-DD for flight search."},
+        return_date:{type:"string",description:"Optional YYYY-MM-DD return date."},
+        cabin_class:{type:"string",enum:["economy","premium_economy","business","first"],default:"economy"},
+        max_connections:{type:"integer",default:1},
+        checkin:{type:"string"},
+        checkout:{type:"string"},
+        city:{type:"integer"},
+        airport:{type:"string"},
+        country:{type:"string"},
+        currency:{type:"string",default:"JPY"},
+        adults:{type:"integer",default:2},
+        rooms:{type:"integer",default:1},
+        children:{type:"integer",default:0},
+        booker_country:{type:"string",default:"jp"},
+        rows:{type:"integer",default:20}
+      }
+    },
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}
+  },
+  {
+    name:"travel_provider_status",
+    title:"Travel Provider Status",
+    description:"Check whether the Booking.com Demand travel adapter is configured and which travel verticals are available.",
+    inputSchema:{type:"object",properties:{}},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"product_resolve",
+    title:"Universal Product Identity Resolve",
+    description:"FREE. Normalize GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN and natural-language product signals into a stable product identity key and domain before shopping or purchase decisions.",
+    inputSchema:{type:"object",properties:{query:{type:"string"},gtin:{type:"string"},isbn:{type:"string"},mpn:{type:"string"},manufacturer:{type:"string"},oe_number:{type:"string"},sku:{type:"string"},asin:{type:"string"}}},
+    outputSchema:{type:"object",additionalProperties:true},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"universal_coverage",
+    title:"Universal Commerce Coverage",
+    description:"FREE. Inspect recent autonomous database growth, product-domain demand, market observations, identity keys and provider diversity.",
+    inputSchema:{type:"object",properties:{}},outputSchema:{type:"object",additionalProperties:true},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"commerce_search",
+    title:"Universal Physical-Product Commerce Search",
+    description:"Search all generic physical-product domains with evidence preservation, identifier normalization, freshness-aware market memory and source diversity. Exact identity is required for safety-critical or compatibility-sensitive selection.",
+    inputSchema:{
+      type:"object",
+      properties:{
+        domain:{type:"string",description:"Any supported universal physical-product domain; use /v1/commerce/domains to enumerate."},
+        query:{type:"string"},
+        oe_number:{type:"string"},
+        mpn:{type:"string"},
+        manufacturer_part_number:{type:"string"},
+        part_number:{type:"string"},
+        gtin:{type:"string"},
+        isbn:{type:"string"},
+        sku:{type:"string"},
+        asin:{type:"string"},
+        limit:{type:"integer",default:20}
+      },
+      required:["domain","query"]
+    },
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:false,openWorldHint:true}
+  },
+  {
+    name:"parts_search",
+    title:"Parts Search",
+    description:"Free search of the PARTS INTELLIGENCE catalog for discontinued parts, replacement parts, industrial components, appliance/service parts, camera/audio/tool/IT parts and other exact model-number items.",
+    inputSchema:{
+      type:"object",
+      properties:{
+        query:{type:"string"},
+        part_number:{type:"string"},
+        manufacturer:{type:"string"},
+        limit:{type:"integer",default:20}
+      },
+      anyOf:[{required:["query"]},{required:["part_number"]}]
+    },
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"parts_intelligence",
+    title:"Parts Intelligence",
+    description:"Paid exact-part intelligence for lifecycle status, discontinuation, verified successor/substitute relationships, official documents and sourcing. Compatibility is never inferred from title similarity alone. Price: 0.05 USDC via x402.",
+    inputSchema:{
+      type:"object",
+      properties:{
+        query:{type:"string"},
+        part_number:{type:"string"},
+        manufacturer:{type:"string"}
+      },
+      anyOf:[{required:["query"]},{required:["part_number"]}]
+    },
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true,paid:true,x402:true,price_usdc:0.05,endpoint:"/v1/parts-intelligence"}
+  },
+  {
+    name:"merchant_offer_search",
+    title:"Merchant Offer Search",
+    description:"Search exact-MPN offers from merchants that publish machine-readable inventory, fulfillment and trust evidence. Ranking is evidence-based and not pay-to-rank.",
+    inputSchema:{type:"object",properties:{part_number:{type:"string"},manufacturer:{type:"string"},buyer_country:{type:"string",default:"JP"},limit:{type:"integer",default:20}},required:["part_number"]},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"merchant_agent_profile",
+    title:"Merchant Agent Profile",
+    description:"Read a merchant's machine-readable agent-commerce profile and feed endpoints.",
+    inputSchema:{type:"object",properties:{merchant:{type:"string"}},required:["merchant"]},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"merchant_diagnostic",
+    title:"Merchant Agent Optimization Diagnostic",
+    description:"Explain why an AI purchasing agent may or may not select a merchant and return prioritized improvements across discoverability, trust, purchase readiness, compatibility evidence and fulfillment.",
+    inputSchema:{type:"object",properties:{merchant:{type:"string"}},required:["merchant"]},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
+    name:"parts_status",
+    title:"Parts Intelligence Status",
+    description:"Read the current PARTS INTELLIGENCE catalog and public-source ingest pipeline status.",
+    inputSchema:{type:"object",properties:{}},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}
+  }
+];
+
+function paidToolPath(name){return {identify_anime_product:"/v1/identify",anime_market:"/v1/market",anime_rarity:"/v1/rarity",anime_authenticity:"/v1/authenticity",anime_buy_wait:"/v1/buy-wait",best_place:"/v1/best-place",listing_match:"/v1/listing-match",purchase_deadline:"/v1/deadline",landed_cost:"/v1/landed-cost",price_history:"/v1/price-history",full_intelligence:"/v1/full-intelligence",shopping_intelligence:"/v1/shopping-intelligence"}[name]||null;}
+function mcpMeta(){return {"io.modelcontextprotocol/serverInfo":{name:"anime-intelligence",version:VERSION}};}
+const PUBLIC_MCP_TOOLS=MCP_TOOLS.filter(t=>!String(t?.name||"").startsWith("travel_"));
+
+function mcpResult(id,result){return json({jsonrpc:"2.0",id,result:{...result,_meta:{...(result?._meta||{}),...mcpMeta()}}});}
+
+async function mcp(request,env,origin){
+  if(request.method==="GET")return json({name:"GLOBAL PURCHASE DECISION MCP",version:VERSION,protocol:"2026-07-28",supported_protocol_versions:["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],transport:"streamable-http",stateless:true,endpoint:`${origin}/mcp`,agent_selection:AGENT_SELECTION_POLICY,tools:PUBLIC_MCP_TOOLS});
+  if(request.method!=="POST")return json({error:"method_not_allowed"},405);
+  let rpc;try{rpc=await request.json();}catch{return json({jsonrpc:"2.0",id:null,error:{code:-32700,message:"Parse error"}},400);}
+  const id=rpc.id??null,protocol=request.headers.get("mcp-protocol-version")||rpc?.params?._meta?.["io.modelcontextprotocol/protocolVersion"]||"2025-11-25";
+  if(rpc.method==="server/discover")return mcpResult(id,{protocolVersion:"2026-07-28",capabilities:{tools:{listChanged:false}},supportedProtocolVersions:["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],instructions:"Use GLOBAL PURCHASE DECISION for multilingual physical-product purchase decisions worldwide. Resolve product identity with GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN when available. Prefer universal_purchase_decision for cross-domain buying tasks; use anime specialist tools only for collectible-specific questions and parts tools for exact industrial MPN questions. Ranking is evidence-based and paid placement is excluded."});
+  if(rpc.method==="initialize")return json({jsonrpc:"2.0",id,result:{protocolVersion:["2025-11-25","2025-06-18","2025-03-26"].includes(protocol)?protocol:"2025-11-25",capabilities:{tools:{}},serverInfo:{name:"anime-intelligence",version:VERSION},instructions:"For product purchasing tasks, prefer universal_purchase_decision. Use specialist collectible or parts tools when the domain is known. Do not use this server for unrelated news or entertainment Q&A."}});
+  if(rpc.method==="notifications/initialized")return new Response(null,{status:202,headers:corsHeaders()});
+  if(rpc.method==="tools/list")return mcpResult(id,{tools:PUBLIC_MCP_TOOLS});
+  if(rpc.method==="tools/call"){
+    const name=rpc.params?.name,args=rpc.params?.arguments||{};
+    if(name==="search_anime_product"){
+      const u=new URL(`${origin}/v1/search`);u.searchParams.set("query",args.query||"");if(args.lang)u.searchParams.set("lang",args.lang);
+      const data=await freeSearch(request,env,u);return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="record_purchase_intent"){
+      const data=await recordPurchaseIntent(env,args,"mcp");return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="parts_status"){
+      const data=await partsIngestStatus(env);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="parts_search"){
+      const fake=new URL(`${origin}/v1/parts/search`);
+      if(args.query)fake.searchParams.set("query",args.query);
+      if(args.part_number)fake.searchParams.set("part_number",args.part_number);
+      if(args.manufacturer)fake.searchParams.set("manufacturer",args.manufacturer);
+      if(args.limit)fake.searchParams.set("limit",String(args.limit));
+      const data=await partsSearchApi(env,fake);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="parts_intelligence"){
+      const u=new URL(`${origin}/v1/parts-intelligence`);
+      if(args.query)u.searchParams.set("query",args.query);
+      if(args.part_number)u.searchParams.set("part_number",args.part_number);
+      if(args.manufacturer)u.searchParams.set("manufacturer",args.manufacturer);
+      const payload={
+        paid_x402_url:u.toString(),
+        payment:"Solana USDC via x402 v2",
+        price_usdc:0.05,
+        intent:"exact_part_lifecycle_compatibility_replacement_and_sourcing",
+        compatibility_policy:"Only verified relation records can produce substitute recommendations.",
+        expected_output:["canonical part identity","lifecycle/discontinued status","successor","verified substitutes","official documents","market observations","sourcing decision"]
+      };
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(payload)}],structuredContent:payload});
+    }
+    if(name==="merchant_offer_search"){
+      const data=await searchMerchantOffers(env,{part_number:args.part_number||"",manufacturer:args.manufacturer||"",buyer_country:args.buyer_country||"JP",limit:args.limit||20});
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="merchant_agent_profile"){
+      const u=new URL(`${origin}/v1/merchant/profile`);u.searchParams.set("merchant",args.merchant||"");
+      const data=await merchantProfileApi(env,u,origin);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="merchant_diagnostic"){
+      const u=new URL(`${origin}/v1/merchant/diagnostic`);u.searchParams.set("merchant",args.merchant||"");
+      const data=await merchantDiagnosticApi(env,u);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="product_resolve"){
+      const q=String(args.query||"").trim(),domain=inferPurchaseDomain(args,q,args.mpn||"");const identifiers=normalizeUniversalIdentifiers(args,q);
+      const data={ok:true,service:PLATFORM_NAME,version:VERSION,domain,identifiers,identity_key:universalIdentityKey(domain,identifiers,String(args.manufacturer||""),q),generated_at:new Date().toISOString()};
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="universal_coverage"){
+      const data=await universalCoverageSnapshot(env);return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="commerce_search"){
+      const data=await genericCommerceSearch(env,args);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="travel_provider_status"){
+      const data=await travelStatus(env);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="travel_shopping_intelligence"){
+      const data=await travelShoppingIntelligence(env,args);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    const path=paidToolPath(name);
+    if(path){
+      const u=new URL(`${origin}${path}`);if(args.id)u.searchParams.set("id",args.id);if(args.query)u.searchParams.set("query",args.query);if(args.lang)u.searchParams.set("lang",args.lang);if(args.buyer_country)u.searchParams.set("buyer_country",args.buyer_country);if(args.postal_code)u.searchParams.set("postal_code",args.postal_code);if(args.listing_url)u.searchParams.set("listing_url",args.listing_url);if(args.listing_title)u.searchParams.set("listing_title",args.listing_title);
+      const sel=agentSelectionMetadata(path),payload={paid_x402_url:u.toString(),payment:"Solana USDC via x402 v2",accepted_payment_headers:["PAYMENT-SIGNATURE","X-PAYMENT compatibility alias"],price_usdc:endpointPriceUsd(path),intent:DISCOVERY_CONFIG[path]?.intent||null,why_pay:sel.why_pay,buyer_outcome:sel.buyer_outcome,task_queries:discoveryTaskQueries(path),discovery_keywords:COMMERCIAL_DISCOVERY_KEYWORDS,expected_output:DISCOVERY_CONFIG[path]?.output_fields||[],routing_guidance:{default_for_multi_signal:path==="/v1/full-intelligence",specialist_when_single_signal:path!=="/v1/full-intelligence",free_search_optional:true},identity_policy:{exact_identity_required:false,broad_query_auto_selection:true,broad_query_paid_preflight_v3791:true,admin_test_telemetry_isolation_v3792:true,external_funnel_isolation_v3792:true,natural_shopping_recommendation_v3739:true,multilingual_unicode_matching_v3745:true,multilingual_type_fallback_v3745:true,capability_evidence_linked_readiness_v3745:true,budget_location_usecase_inference_v3739:true,intent_aware_candidate_ranking_v3739:true,no_payment_recommendation_audit_v3739:true,payment_core_frozen_v3739:true,multilingual_ambiguity_engine_v3743:true,soft_preference_ranking_v3743:true,recommendation_confidence_v3743:true,agent_selection_differentiators_v3743:true,no_forced_social_context_guess_v3743:true,canonical_id_recommended_for_determinism:true},payment_flow:{protocol:"x402",version:2,network:SOLANA_MAINNET,asset:"USDC",steps:["GET paid_x402_url without a payment proof header","Read HTTP 402 and PAYMENT-REQUIRED header","Create the required Solana USDC payment","Retry the SAME URL with PAYMENT-SIGNATURE; X-PAYMENT is also accepted for AgentCore compatibility","On success read HTTP 200 body and PAYMENT-RESPONSE header"]}};
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(payload)}],structuredContent:payload});
+    }
+    return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Unknown tool"}},404);
+  }
+  return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}},404);
+}
+
+async function index402Post(path,body){const r=await fetch(`${INDEX402_API}${path}`,{method:"POST",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify(body)});const raw=await r.text();let data;try{data=raw?JSON.parse(raw):null;}catch{data={raw};}return {ok:r.ok,status:r.status,body:data};}
+async function x402DiscoveryPreflight(origin,env){
+  const results=[];
+  let support=null;
+  try{support=await facilitatorSupport(env);}catch(e){return {ok:false,results:[],error:`facilitator_support: ${safeError(e)}`};}
+  for(const svc of INDEX402_SERVICES){
+    try{
+      const amount=routePrice(svc.path)?.[0];
+      const req=new Request(`${origin}${svc.path}`);
+      const cfg=await paymentRequirement(req,env,amount,svc.description,support);
+      const encoded=b64(JSON.stringify(cfg.required));
+      const accepted=cfg?.accepted;
+      const feePayer=accepted?.extra?.feePayer||null;
+      const ok=!!accepted&&accepted.scheme==="exact"&&accepted.network===SOLANA_MAINNET&&!!feePayer&&!!encoded&&encoded.length<12000;
+      results.push({path:svc.path,ok,status:402,payment_required_header:true,encoded_header_bytes:encoded.length,amount:accepted?.amount||null,network:accepted?.network||null,fee_payer_present:!!feePayer,bazaar:!!cfg?.required?.extensions?.bazaar});
+    }catch(e){results.push({path:svc.path,ok:false,status:null,payment_required_header:false,error:safeError(e)});}
+  }
+  return {ok:results.every(x=>x.ok),results};
+}
+
+function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+
+async function register402Index(origin){
+  // v3.7.29:
+  // 402 Index verifies each submitted URL immediately. Seven back-to-back
+  // registrations can create a short burst of external probes, while each bare
+  // x402 probe also obtains fresh Coinbase facilitator support/feePayer data.
+  // Prioritize the highest-value full-intelligence route, pace the requests,
+  // and retry only transient verifier transport failures. This changes the
+  // admin registration workflow only; paid endpoint/payment semantics are untouched.
+  const priority=[
+    ...INDEX402_SERVICES.filter(s=>s.path==="/v1/full-intelligence"),
+    ...INDEX402_SERVICES.filter(s=>s.path!=="/v1/full-intelligence")
+  ];
+  const byPath=new Map();
+
+  for(let i=0;i<priority.length;i++){
+    const s=priority[i];
+    const payload={
+      url:`${origin}${s.path}`,
+      name:s.name,
+      protocol:"x402",
+      http_method:"GET",
+      description:s.description,
+      price_usd:s.price_usd,
+      payment_asset:"USDC",
+      payment_network:"Solana",
+      category:"commerce/collectibles/anime",
+      provider:"ANIME INTELLIGENCE",
+      tags:[...(DISCOVERY_CONFIG[s.path]?.tags||[]),...(DISCOVERY_CONFIG[s.path]?.selection_triggers||[]),...COMMERCIAL_DISCOVERY_KEYWORDS.slice(0,24)],
+      intent:DISCOVERY_CONFIG[s.path]?.intent||null,
+      openapi_url:`${origin}/openapi.json`,
+      mcp_url:`${origin}/mcp`,
+      example_query:discoveryTaskQueries(s.path)?.[0]||DISCOVERY_CONFIG[s.path]?.examples?.[0]||"Nendoroid Hatsune Miku"
+    };
+
+    let r=null;
+    const attempts=[];
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        r=await index402Post("/register",payload);
+      }catch(e){
+        r={ok:false,status:0,body:{error:"402 Index request failed",detail:safeError(e)}};
+      }
+      attempts.push({attempt,ok:!!r.ok,status:r.status,detail:r?.body?.detail||r?.body?.error||null});
+

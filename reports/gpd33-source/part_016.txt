@@ -1,0 +1,300 @@
+    },Number(e?.status)||503);
+  }
+  return null;
+}
+
+/* =========================================================
+   AGENT COMMERCE CORE v3.9.0
+   - Agent-neutral purchase-decision layer
+   - Anime collectibles are production-active
+   - Large-market domains are declared as planned adapters
+========================================================= */
+
+const COMMERCE_DOMAIN_REGISTRY={
+  active:[
+    {
+      domain:"anime_collectibles",
+      status:"full",
+      priority:1,
+      capabilities:[
+        "identity",
+        "offer_matching",
+        "market_value",
+        "authenticity_risk",
+        "rarity",
+        "buy_wait",
+        "landed_cost",
+        "purchase_routing"
+      ]
+    }
+  ],
+  planned:[
+    {
+      domain:"travel",
+      priority:2,
+      status:"active_if_any_provider_configured",
+      adapter:"multi_provider_travel_core_v3_9_1",
+      market_role:"consumer_high_frequency_high_gmv",
+      why:"Large global market, digital inventory, high comparison complexity and transaction-ready booking flows.",
+      capabilities:[
+        "flight_search",
+        "hotel_search",
+        "bundle_optimization",
+        "cancellation_policy",
+        "baggage_and_fees",
+        "total_trip_cost",
+        "booking_route"
+      ]
+    },
+    {
+      domain:"consumer_electronics",
+      priority:3,
+      status:"active_generic_market_search",
+      market_role:"consumer_large_gmv",
+      why:"Large global market with model, specification, warranty and price-dispersion complexity.",
+      capabilities:["model_identity","spec_fit","price","warranty","seller_risk","total_cost"]
+    },
+    {
+      domain:"automotive_parts",
+      priority:4,
+      status:"active_with_exact_part_guard",
+      market_role:"consumer_and_b2b_large_aftermarket",
+      why:"Fitment mistakes are expensive and OEM cross-reference can materially improve purchase quality.",
+      capabilities:["vehicle_fitment","oe_cross_reference","seller_risk","landed_cost"]
+    },
+    {
+      domain:"enterprise_procurement",
+      priority:5,
+      status:"active_with_exact_mpn_guard",
+      market_role:"b2b_very_large_gmv",
+      why:"Enterprise purchasing rewards supplier, lifecycle, lead-time and total-cost optimization.",
+      capabilities:["requirements","supplier_comparison","lead_time","commercial_terms","lifecycle","tco"]
+    },
+    {
+      domain:"mro_and_industrial_components",
+      priority:6,
+      market_role:"b2b_high_repeat_procurement",
+      why:"Specification equivalence and downtime cost often dominate unit price.",
+      capabilities:["spec_match","approved_substitute","lead_time","supplier_risk","downtime_cost"]
+    },
+    {
+      domain:"electronic_components",
+      priority:7,
+      market_role:"b2b_high_value_supply_chain",
+      why:"Exact part identity, lifecycle, counterfeit risk and lead time are purchase-critical.",
+      capabilities:["mpn_identity","parametric_match","lifecycle","counterfeit_risk","lead_time"]
+    },
+    {
+      domain:"enterprise_it_hardware",
+      priority:8,
+      market_role:"b2b_large_gmv",
+      why:"Configuration, support and lifecycle drive total cost of ownership.",
+      capabilities:["configuration","support","lifecycle","availability","tco"]
+    },
+    {
+      domain:"pc_components",
+      priority:9,
+      market_role:"consumer_and_prosumer",
+      why:"Compatibility is purchase-critical and price/performance changes quickly.",
+      capabilities:["compatibility","performance_per_cost","warranty","seller_risk","availability"]
+    },
+    {
+      domain:"appliances_and_hvac",
+      priority:10,
+      market_role:"consumer_large_ticket",
+      why:"Installation, energy cost and long-term ownership materially affect value.",
+      capabilities:["fit","energy_cost","installation","warranty","total_cost"]
+    },
+    {
+      domain:"datacenter_power_and_cooling",
+      priority:11,
+      market_role:"b2b_infrastructure",
+      why:"Capacity, efficiency, compatibility and lead time are high-value purchase variables.",
+      capabilities:["capacity_match","efficiency","compatibility","lead_time","tco"]
+    },
+    {
+      domain:"industrial_automation",
+      priority:12,
+      market_role:"b2b_capital_and_mro",
+      why:"Compatibility, certification and obsolescence are critical.",
+      capabilities:["compatibility","certification","lifecycle","replacement_cross_reference"]
+    },
+    {
+      domain:"laboratory_equipment",
+      priority:13,
+      market_role:"b2b_specialty",
+      why:"Measurement specifications, calibration and service determine real purchase value.",
+      capabilities:["spec_fit","calibration","service","consumables","tco"]
+    },
+    {
+      domain:"power_tools_and_equipment",
+      priority:14,
+      market_role:"consumer_and_b2b",
+      why:"Battery platform, accessories, duty cycle and durability affect purchase quality.",
+      capabilities:["platform_compatibility","duty_cycle","warranty","total_cost"]
+    },
+    {
+      domain:"software_and_saas",
+      priority:15,
+      market_role:"b2b_recurring_spend",
+      why:"License, security, integration and contract terms drive total cost.",
+      capabilities:["license_fit","integration","security","contract_terms","tco"]
+    }
+  ],
+  excluded_initially:[
+    {domain:"prescription_drugs",reason:"regulated_high_stakes"},
+    {domain:"weapons",reason:"regulated_or_high_risk"},
+    {domain:"financial_products",reason:"high_stakes_and_not_core_procurement"}
+  ]
+};
+
+
+
+
+/* =========================================================
+   PARTS INTELLIGENCE LIGHT INGEST v3.10.2
+   Deploy-safe version:
+   - No autonomous crawling in Worker runtime.
+   - No new external API keys.
+   - Keeps source registry, manual/admin upsert and PARTS DB.
+   - Initial bulk population is done through Supabase SQL/CSV import,
+     which is more reliable than large in-Worker crawling on mobile/dashboard.
+========================================================= */
+
+async function seedDefaultPartsSources(env){
+  const rows=DEFAULT_PARTS_SOURCES.map(x=>({
+    slug:x.slug,
+    manufacturer:x.manufacturer,
+    root_url:x.root_url,
+    category:x.category,
+    enabled:true,
+    crawl_priority:100,
+    crawl_cursor:null,
+    last_crawled_at:null,
+    metadata:{source_type:"official_public",version:VERSION},
+    updated_at:new Date().toISOString()
+  }));
+  await sb(env,"/parts_sources?on_conflict=slug",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return {ok:true,seeded:rows.length,sources:rows.map(x=>x.slug)};
+}
+
+async function partsIngestStatus(env){
+  const [catalog,sources,runs]=await Promise.all([
+    sbOptional(env,"/parts_catalog?select=id&limit=1"),
+    sbOptional(env,"/parts_sources?select=slug,manufacturer,enabled,last_crawled_at&order=crawl_priority.desc"),
+    sbOptional(env,"/parts_ingest_runs?select=*&order=finished_at.desc.nullslast&limit=5")
+  ]);
+  return {
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    catalog_initialized:Array.isArray(catalog),
+    sources:Array.isArray(sources)?sources:[],
+    recent_runs:Array.isArray(runs)?runs:[],
+    ingest_mode:"supabase_bulk_import_plus_embedded_collector_v3",
+    autonomous_worker_crawl:true,
+    embedded_collector_version:"3.0.0",
+    collector_ownership:"main_worker_embedded_v3_authoritative",
+    legacy_collector_runs_are_non_authoritative:true,legacy_external_cron_disable_recommended:true,
+    new_external_api_keys_required:false,
+    target_initial_catalog:"thousands_to_10000_high_quality_FA_and_industrial_parts",
+    compatibility_policy:"No substitute recommendation without explicit verified relation evidence."
+  };
+}
+
+async function runPartsIngest(env,{sources=1,pages=1}={}){
+  // Intentionally disabled in v3.10.2 to keep the Worker compact and deploy-safe.
+  // Use Supabase bulk import / CSV for initial population, then admin upsert for incremental updates.
+  return {
+    ok:true,
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    status:"disabled_in_worker",
+    reason:"v3.10.2 uses Supabase bulk import instead of autonomous crawling to reduce Worker bundle/runtime complexity.",
+    next_action:"Populate parts_catalog/parts_documents/parts_relations in Supabase; the API serves them immediately.",
+    requested:{sources,pages}
+  };
+}
+
+/* =========================================================
+   PARTS INTELLIGENCE v3.10.0
+   API-key independent core.
+   - Supabase is the system of record.
+   - Existing Yahoo/eBay connectors are optional enrichers only.
+   - Compatibility is NEVER inferred from title similarity alone.
+========================================================= */
+
+function normalizePartNumber(v=""){
+  return String(v||"").normalize("NFKC").toUpperCase().replace(/\s+/g,"").replace(/[‐‑‒–—―]/g,"-").trim();
+}
+
+function partRowShape(row){
+  if(!row)return null;
+  return {
+    id:row.id,
+    manufacturer:row.manufacturer||null,
+    brand:row.brand||null,
+    part_number:row.part_number||null,
+    normalized_part_number:row.normalized_part_number||normalizePartNumber(row.part_number||""),
+    name:row.name||null,
+    category:row.category||null,
+    lifecycle_status:row.lifecycle_status||"unknown",
+    discontinued_at:row.discontinued_at||null,
+    successor_part_number:row.successor_part_number||null,
+    aliases_text:row.aliases_text||null,
+    specifications:row.specifications||{},
+    dimensions:row.dimensions||{},
+    electrical:row.electrical||{},
+    mechanical:row.mechanical||{},
+    notes:row.notes||null,
+    official_url:row.official_url||null,
+    source_confidence:Number(row.source_confidence??0),
+    source_last_checked_at:row.source_last_checked_at||null,
+    created_at:row.created_at||null,
+    updated_at:row.updated_at||null
+  };
+}
+
+function partSearchScore(row,q,pn,manufacturer){
+  let score=0;
+  const rpn=normalizePartNumber(row?.part_number||row?.normalized_part_number||"");
+  const rq=normalize(String(q||""));
+  const hay=normalize([row?.manufacturer,row?.brand,row?.part_number,row?.name,row?.category,row?.aliases_text].filter(Boolean).join(" "));
+  if(pn&&rpn===normalizePartNumber(pn))score+=120;
+  else if(pn&&rpn.includes(normalizePartNumber(pn)))score+=70;
+  if(manufacturer&&normalize(row?.manufacturer||"")===normalize(manufacturer))score+=25;
+  if(rq&&hay.includes(rq))score+=30;
+  const toks=tokens(q||"").filter(Boolean);
+  if(toks.length){
+    const hit=toks.filter(t=>hay.includes(t)).length;
+    score+=Math.min(30,hit*8);
+  }
+  score+=Math.min(10,Number(row?.source_confidence||0)*10);
+  if(String(row?.lifecycle_status||"").toLowerCase()==="active")score+=3;
+  return score;
+}
+
+async function searchPartsCatalog(env,{query="",part_number="",manufacturer="",limit=20}={}){
+  const q=String(query||"").trim();
+  const pn=normalizePartNumber(part_number||"");
+  const m=String(manufacturer||"").trim();
+  const lim=Math.max(1,Math.min(100,Number(limit)||20));
+  let rows=[];
+
+  if(pn){
+    const encoded=encodeURIComponent(pn);
+    const exact=await sbOptional(env,`/parts_catalog?select=*&normalized_part_number=eq.${encoded}&limit=${lim}`);
+    if(Array.isArray(exact)&&exact.length)rows.push(...exact);
+  }
+
+  if(q||m){
+    const terms=[];
+    if(q){
+      const safe=q.replace(/[%*,()]/g," ").replace(/\s+/g," ").trim().slice(0,120);
+      if(safe){
+        terms.push(`name.ilike.*${safe}*`);
+        terms.push(`part_number.ilike.*${safe}*`);
+        terms.push(`manufacturer.ilike.*${safe}*`);
+        terms.push(`brand.ilike.*${safe}*`);
+        terms.push(`category.ilike.*${safe}*`);
+        terms.push(`aliases_text.ilike.*${safe}*`);
+      }

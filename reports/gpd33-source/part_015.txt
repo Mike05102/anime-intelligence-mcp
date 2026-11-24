@@ -1,0 +1,300 @@
+
+function normalizeTravelOffer(x,index=0){
+  const prices=travelPriceCandidates(x);
+  const total=prices.length?Math.min(...prices):null;
+  return {
+    rank:index+1,
+    id:String(x?.id||x?.offer_id||x?.product_id||x?.accommodation||x?.vehicle?.id||"").trim()||null,
+    name:travelName(x),
+    total_price:total,
+    currency:travelCurrency(x),
+    review_score:travelReviewScore(x),
+    purchase_url:travelUrl(x),
+    raw:x
+  };
+}
+
+function scoreTravelOffer(o){
+  let score=0;
+  if(o.total_price!=null)score+=Math.max(0,60-Math.log10(Math.max(1,o.total_price))*8);
+  if(o.review_score!=null)score+=Math.min(25,Number(o.review_score)*2.5);
+  if(o.purchase_url)score+=10;
+  if(o.name)score+=5;
+  return Number(score.toFixed(4));
+}
+
+function rankTravelOffers(payload,limit=10){
+  const normalized=travelArray(payload).map((x,i)=>normalizeTravelOffer(x,i));
+  return normalized
+    .map(x=>({...x,optimization_score:scoreTravelOffer(x)}))
+    .sort((a,b)=>b.optimization_score-a.optimization_score)
+    .slice(0,Math.max(1,Math.min(50,Number(limit)||10)))
+    .map((x,i)=>({...x,rank:i+1}));
+}
+
+function validateTravelDates(body){
+  const checkin=String(body?.checkin||"").trim();
+  const checkout=String(body?.checkout||"").trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(checkin)||!/^\d{4}-\d{2}-\d{2}$/.test(checkout)){
+    return {ok:false,error:"checkin_and_checkout_required_yyyy_mm_dd"};
+  }
+  const a=Date.parse(checkin+"T00:00:00Z"),b=Date.parse(checkout+"T00:00:00Z");
+  if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a)return {ok:false,error:"checkout_must_be_after_checkin"};
+  return {ok:true};
+}
+
+function defaultTravelBooker(body){
+  const src=body?.booker&&typeof body.booker==="object"?body.booker:{};
+  return {
+    country:String(src.country||body?.booker_country||"jp").toLowerCase(),
+    platform:String(src.platform||"mobile").toLowerCase()
+  };
+}
+
+function defaultTravelGuests(body){
+  const g=body?.guests&&typeof body.guests==="object"?body.guests:{};
+  return {
+    number_of_adults:Math.max(1,Math.min(30,Number(g.number_of_adults||body?.adults||2)||2)),
+    number_of_rooms:Math.max(1,Math.min(30,Number(g.number_of_rooms||body?.rooms||1)||1)),
+    ...(Number(g.number_of_children||body?.children||0)>0?{
+      number_of_children:Math.max(0,Math.min(30,Number(g.number_of_children||body?.children||0)||0))
+    }:{})
+  };
+}
+
+function travelLocationFields(body){
+  const out={};
+  for(const key of ["city","airport","country","district","landmark","region","accommodations"]){
+    if(body?.[key]!=null&&body[key]!=="")out[key]=body[key];
+  }
+  if(body?.coordinates&&typeof body.coordinates==="object")out.coordinates=body.coordinates;
+  return out;
+}
+
+function buildAccommodationSearchBody(body){
+  return {
+    booker:defaultTravelBooker(body),
+    checkin:String(body.checkin),
+    checkout:String(body.checkout),
+    guests:defaultTravelGuests(body),
+    ...travelLocationFields(body),
+    ...(body.currency?{currency:String(body.currency).toUpperCase()}:{currency:"JPY"}),
+    extras:Array.isArray(body.extras)&&body.extras.length?body.extras:["extra_charges","products"],
+    ...(body.rows?{rows:Math.max(10,Math.min(100,Math.ceil(Number(body.rows)/10)*10))}:{rows:20}),
+    ...(body.filters?{filters:body.filters}:{}),
+    ...(body.sort?{sort:body.sort}:{})
+  };
+}
+
+async function travelAccommodationSearch(env,body,{smart=false}={}){
+  const dateCheck=validateTravelDates(body);
+  if(!dateCheck.ok)return {ok:false,status:400,error:dateCheck.error,charged:false};
+  const req=buildAccommodationSearchBody(body);
+  if(smart){
+    const q=String(body.search_query||body.query||"").trim();
+    if(q.length<3)return {ok:false,status:400,error:"search_query_required_min_3_chars",charged:false};
+    req.search_query=q.slice(0,300);
+  }
+  const payload=await bookingDemandPost(
+    env,
+    smart?"/accommodations/smart-search":"/accommodations/search",
+    req,
+    {beta:smart}
+  );
+  const offers=rankTravelOffers(payload,body.limit||10);
+  return {
+    ok:true,
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    vertical:"accommodation",
+    provider:"booking_demand_api",
+    provider_version:"3.2",
+    mode:smart?"smart_search":"search",
+    request:req,
+    count:offers.length,
+    recommended_offer:offers[0]||null,
+    offers,
+    provider_request_id:payload?.request_id||null,
+    provider_metadata:payload?.metadata||null,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function travelGenericBookingSearch(env,vertical,body){
+  const routes={
+    car:"/cars/search",
+    cars:"/cars/search",
+    attraction:"/attractions/search",
+    attractions:"/attractions/search",
+    transfer:"/transfers/search",
+    transfers:"/transfers/search"
+  };
+  const path=routes[vertical];
+  if(!path)return {ok:false,status:400,error:"unsupported_travel_vertical",supported:["accommodation","car","attraction","transfer"]};
+  const beta=vertical==="attraction"||vertical==="attractions"||vertical==="transfer"||vertical==="transfers";
+  const payload=await bookingDemandPost(env,path,body,{beta});
+  const offers=rankTravelOffers(payload,body?.limit||10);
+  return {
+    ok:true,
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    vertical,
+    provider:"booking_demand_api",
+    provider_version:"3.2",
+    count:offers.length,
+    recommended_offer:offers[0]||null,
+    offers,
+    provider_request_id:payload?.request_id||null,
+    provider_metadata:payload?.metadata||null,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function travelShoppingIntelligence(env,body){
+  if(!bookingDemandConfigured(env)){
+    return {
+      ok:false,
+      status:503,
+      charged:false,
+      error:"travel_provider_not_configured",
+      required:["BOOKING_DEMAND_TOKEN","BOOKING_AFFILIATE_ID"],
+      provider:"Booking.com Demand API v3.2",
+      domain:"travel",
+      version:VERSION
+    };
+  }
+  const vertical=String(body?.vertical||body?.service||"accommodation").toLowerCase();
+  let result;
+  if(vertical==="flight"||vertical==="flights"){
+    result=await duffelFlightSearch(env,body);
+  }else if(vertical==="accommodation"||vertical==="hotel"||vertical==="hotels"){
+    if(!bookingDemandConfigured(env)){
+      return {
+        ok:false,status:503,charged:false,error:"accommodation_provider_not_configured",
+        required:["BOOKING_DEMAND_TOKEN","BOOKING_AFFILIATE_ID"],
+        secondary_provider_slots:["EXPEDIA_RAPID_API_KEY + EXPEDIA_RAPID_SHARED_SECRET","AMADEUS_CLIENT_ID + AMADEUS_CLIENT_SECRET"],
+        version:VERSION
+      };
+    }
+    const smart=!!String(body?.search_query||body?.query||"").trim();
+    result=await travelAccommodationSearch(env,body,{smart});
+  }else{
+    result=await travelGenericBookingSearch(env,vertical,body);
+  }
+  if(!result?.ok)return result;
+  const best=result.recommended_offer||null;
+  return {
+    ...result,
+    recommendation:{
+      decision:best?"SELECT":"ASK_USER",
+      next_action:best?.purchase_url?"OPEN_BOOKING_URL":"REVIEW_OPTIONS",
+      confidence:best?Math.max(0.5,Math.min(0.99,Number((best.optimization_score/100).toFixed(2)))):0,
+      reason_codes:best?[
+        "ranked_by_total_value",
+        ...(best.total_price!=null?["price_available"]:[]),
+        ...(best.review_score!=null?["review_signal_available"]:[]),
+        ...(best.purchase_url?["booking_route_available"]:[])
+      ]:[]
+    },
+    agent_actions:{
+      can_book:!!best,
+      recommended_next_action:best?.purchase_url?"OPEN_BOOKING_URL":"REVIEW_OPTIONS",
+      requires_user_confirmation:true
+    },
+    provider_strategy:{
+      mode:"multi_provider",
+      concentration_warning:providerConcentrationWarning(env,vertical),
+      registry:travelProviderRegistry(env)
+    }
+  };
+}
+
+async function travelStatus(env){
+  const registry=travelProviderRegistry(env);
+  return {
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    architecture:"multi_provider_travel_core",
+    providers:registry.providers,
+    configured_any:registry.providers.some(x=>x.configured),
+    live_verticals:{
+      accommodation:bookingDemandConfigured(env),
+      flight:duffelConfigured(env),
+      car:bookingDemandConfigured(env),
+      attraction:bookingDemandConfigured(env),
+      transfer:bookingDemandConfigured(env)
+    },
+    concentration:{
+      accommodation:providerConcentrationWarning(env,"accommodation"),
+      flight:providerConcentrationWarning(env,"flight")
+    },
+    required_secrets:{
+      booking:["BOOKING_DEMAND_TOKEN","BOOKING_AFFILIATE_ID"],
+      duffel:["DUFFEL_ACCESS_TOKEN"],
+      expedia_rapid:["EXPEDIA_RAPID_API_KEY","EXPEDIA_RAPID_SHARED_SECRET"],
+      amadeus:["AMADEUS_CLIENT_ID","AMADEUS_CLIENT_SECRET"]
+    }
+  };
+}
+
+async function travelApi(request,env,url){
+  if(url.pathname==="/v1/travel/status"&&request.method==="GET")return json(await travelStatus(env));
+  if(request.method!=="POST")return null;
+  let body={};
+  try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}
+  try{
+    if(url.pathname==="/v1/travel/flights/search"){
+      const out=await duffelFlightSearch(env,body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/expedia/availability"){
+      const out=await expediaRapidAvailability(env,body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/accommodations/search"){
+      const out=await travelAccommodationSearch(env,body,{smart:false});
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/accommodations/smart-search"){
+      const out=await travelAccommodationSearch(env,body,{smart:true});
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/shopping-intelligence"){
+      const out=await travelShoppingIntelligence(env,body);
+      if(out?.ok&&out?.recommended_offer){
+        await logEvent(env,"travel_offer_selected",{
+          endpoint:url.pathname,
+          product_id:null,
+          metadata:{
+            vertical:out.vertical||"accommodation",
+            provider:"booking_demand_api",
+            offer_id:out.recommended_offer.id||null,
+            version:VERSION
+          }
+        });
+      }
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/cars/search"){
+      const out=await travelGenericBookingSearch(env,"car",body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/attractions/search"){
+      const out=await travelGenericBookingSearch(env,"attraction",body);
+      return json(out,out?.status||200);
+    }
+    if(url.pathname==="/v1/travel/transfers/search"){
+      const out=await travelGenericBookingSearch(env,"transfer",body);
+      return json(out,out?.status||200);
+    }
+  }catch(e){
+    return json({
+      ok:false,
+      domain:"travel",
+      version:VERSION,
+      charged:false,
+      error:e?.code||"travel_provider_error",
+      detail:safeError(e)

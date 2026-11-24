@@ -1,0 +1,300 @@
+}
+function explicitIntentPresent(intent){
+  return !!((intent?.franchises?.length||0)||(intent?.product_types?.length||0)||(intent?.characters?.length||0)||(intent?.merch_subtypes?.length||0));
+}
+// v3.7.68: distinguish an explicit character constraint from a franchise word that is also
+// a character name. “ナルトのTシャツ / NARUTO T-shirt” is a franchise-merch request unless
+// the buyer explicitly says Naruto Uzumaki / うずまきナルト. This prevents apparel from
+// being rejected merely because the shirt title contains the franchise but not the protagonist.
+function intentRequiresCharacterConstraint(intent){
+  const chars=intent?.characters||[];
+  if(!chars.length)return false;
+  if(chars.length===1&&chars[0]==="Naruto Uzumaki"&&((intent?.product_types||[]).includes("apparel")||(intent?.merch_subtypes||[]).length)){
+    const q=String(intent?.raw_query||"").normalize("NFKC");
+    if(!/(?:Naruto\s+Uzumaki|Uzumaki\s+Naruto|\u3046\u305a\u307e\u304d\s*\u30ca\u30eb\u30c8|\u6f29\u6da1\u9e23\u4eba|\u6f29\u6e26\u9cf4\u4eba)/i.test(q))return false;
+  }
+  return true;
+}
+function deferredLivePreference(pref){
+  return !!pref&&["shipping","condition","availability"].includes(String(pref.facet||""));
+}
+function strictCatalogPreference(pref){
+  if(!pref)return false;
+  if(["color","size","time","exclusivity"].includes(String(pref.facet||"")))return true;
+  return pref.facet==="style"&&pref.value==="premium";
+}
+function strictCatalogPreferences(intent){return (intent?.preferences||[]).filter(strictCatalogPreference);}
+function rankingPreferences(intent){return (intent?.preferences||[]).filter(p=>p.facet!=="reference"&&!deferredLivePreference(p));}
+function deferredPreferenceKeys(intent){return (intent?.preferences||[]).filter(deferredLivePreference).map(p=>`${p.facet}:${p.value}`);}
+function intentCompatibility(p,intent){
+  const franchiseRequired=!!intent?.franchises?.length;
+  const typeRequired=!!intent?.product_types?.length;
+  const characterRequired=intentRequiresCharacterConstraint(intent);
+  const subtypeRequired=!!intent?.merch_subtypes?.length;
+  const franchise_ok=!franchiseRequired||candidateMatchesIntentFranchises(p,intent.franchises);
+  const type_ok=!typeRequired||candidateMatchesIntentTypes(p,intent.product_types);
+  const character_ok=!characterRequired||candidateMatchesIntentCharacters(p,intent.characters);
+  const merch_subtype_ok=!subtypeRequired||candidateMatchesMerchSubtype(p,intent.merch_subtypes);
+  return {ok:franchise_ok&&type_ok&&character_ok&&merch_subtype_ok,franchise_ok,type_ok,character_ok,merch_subtype_ok,explicit_constraints:franchiseRequired||typeRequired||characterRequired||subtypeRequired};
+}
+function preferredCharacterSearchAlias(character=""){
+  const m={
+    "Pikachu":"\u30d4\u30ab\u30c1\u30e5\u30a6",
+    "Monkey D. Luffy":"\u30eb\u30d5\u30a3",
+    "Roronoa Zoro":"\u30be\u30ed",
+    "Naruto Uzumaki":"\u3046\u305a\u307e\u304d\u30ca\u30eb\u30c8",
+    "Sasuke Uchiha":"\u30b5\u30b9\u30b1",
+    "Hatsune Miku":"\u521d\u97f3\u30df\u30af"
+  };
+  return m[character]||character||"";
+}
+function preferenceSearchTerms(intent){
+  const out=[];const add=v=>{v=String(v||"").trim();if(v&&!out.includes(v))out.push(v);};
+  for(const p of (intent?.preferences||[])){
+    if(p.facet==="size"&&p.value==="large"){add("49cm");add("Lサイズ");add("大きい");add("1/1");add("BIG");}
+    else if(p.facet==="size"&&p.value==="small")add("ミニ");
+    else if(p.facet==="color"&&p.value==="red")add("赤");
+    else if(p.facet==="color"&&p.value==="black")add("黒");
+    else if(p.facet==="color"&&p.value==="white")add("白");
+    else if(p.facet==="style"&&p.value==="premium"){add("高級");add("限定");}
+    else if(p.facet==="style"&&p.value==="cool")add("限定");
+    else if(p.facet==="use_case"&&p.value==="gift")add("プレゼント");
+    else if(p.facet==="condition"&&p.value==="sealed")add("未開封");
+    else if(p.facet==="condition"&&p.value==="new")add("新品");
+    else if(p.facet==="condition"&&p.value==="used")add("中古");
+    else if(p.facet==="availability"&&p.value==="preorder")add("予約");
+    else if(p.facet==="availability"&&p.value==="in_stock")add("在庫");
+    else if(p.facet==="exclusivity"&&p.value==="limited")add("限定");
+    else if(p.facet==="exclusivity"&&p.value==="japan_exclusive")add("日本限定");
+    else if(p.facet==="time"&&p.value==="older")add("旧");
+    else if(p.facet==="time"&&p.value==="recent")add("新作");
+    else if(p.facet==="shipping"&&p.value==="easy_overseas")add("海外発送");
+  }
+  return out.slice(0,5);
+}
+function preferredTypeSearchAlias(intent){
+  const st=intent?.merch_subtypes?.[0];
+  if(st==="tshirt")return "Tシャツ";
+  if(st==="hoodie")return "パーカー";
+  if(st==="jacket")return "ジャケット";
+  if(st==="sweatshirt")return "スウェット";
+  if(st==="swimsuit")return "水着";
+  const t=intent?.product_types?.[0];
+  return ({figure:"フィギュア",plush:"ぬいぐるみ",apparel:"",trading_card:"カード",model_kit:"プラモデル",acrylic_goods:"アクリルスタンド",keychain:"キーホルダー",badge:"缶バッジ",sneaker:"スニーカー"})[t]||String(t||"").replace(/_/g," ");
+}
+function canonicalIntentRetrievalQuery(intent,originalQuery=""){
+  // v3.7.76: equivalent multilingual intents retrieve/rank from one canonical anchor.
+  // This removes JA/ZH/KO candidate-pool drift without weakening hard constraints.
+  const parts=[];
+  if(intentRequiresCharacterConstraint(intent)&&intent?.characters?.[0])parts.push(preferredCharacterSearchAlias(intent.characters[0]));
+  else if(intent?.franchises?.[0])parts.push(preferredFranchiseSearchAlias(intent.franchises[0]));
+  const type=preferredTypeSearchAlias(intent);if(type)parts.push(type);
+  const strict=strictCatalogPreferences(intent);
+  for(const pref of strict){
+    if(pref.facet==="size"&&pref.value==="large")parts.push("49cm");
+    else if(pref.facet==="size"&&pref.value==="small")parts.push("ミニ");
+    else if(pref.facet==="color"&&pref.value==="red")parts.push("赤");
+    else if(pref.facet==="color"&&pref.value==="black")parts.push("黒");
+    else if(pref.facet==="exclusivity"&&pref.value==="japan_exclusive")parts.push("BASE SHOP Limited Edition");
+    else if(pref.facet==="time"&&pref.value==="older")parts.push("旧");
+    else if(pref.facet==="style"&&pref.value==="premium")parts.push("Premium");
+  }
+  const built=parts.filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+  return built||String(originalQuery||"").trim();
+}
+
+function preferenceTargetedQueries(intent,originalQuery=""){
+  const identity=(intentRequiresCharacterConstraint(intent)&&intent?.characters?.[0])?preferredCharacterSearchAlias(intent.characters[0]):(intent?.franchises?.[0]?preferredFranchiseSearchAlias(intent.franchises[0]):"");
+  const type=preferredTypeSearchAlias(intent),terms=preferenceSearchTerms(intent),out=[];
+  const prefs=intent?.preferences||[];
+  const has=(facet,value)=>prefs.some(p=>p.facet===facet&&p.value===value);
+  const add=v=>{v=String(v||"").replace(/\s+/g," ").trim();if(v&&!out.some(x=>normalize(x)===normalize(v)))out.push(v);};
+  if(has("exclusivity","japan_exclusive")){
+    add([identity,type,"BASE SHOP Limited Edition"].filter(Boolean).join(" "));
+    add([identity,type,"麦わらストア 限定"].filter(Boolean).join(" "));
+    add([identity,type,"日本限定"].filter(Boolean).join(" "));
+  }
+  if(has("time","older")){
+    add([identity,type,"旧"].filter(Boolean).join(" "));
+    add([identity,type,"vintage"].filter(Boolean).join(" "));
+  }
+  if(has("condition","sealed")&&has("time","older")){
+    add([identity,type,"未開封 中古"].filter(Boolean).join(" "));
+    add([identity,type,"未開封"].filter(Boolean).join(" "));
+  }
+  if(has("style","premium")&&has("color","black")){
+    add([identity,type,"黒 限定"].filter(Boolean).join(" "));
+    add([identity,type,"black premium"].filter(Boolean).join(" "));
+  }
+  if(has("color","red")&&has("size","small"))add([identity,type,"赤 ミニ"].filter(Boolean).join(" "));
+  for(const term of terms)add([identity,type,term].filter(Boolean).join(" "));
+  if(terms.length>1)add([identity,type,...terms].filter(Boolean).join(" "));
+  if(has("shipping","easy_overseas"))add([identity,type].filter(Boolean).join(" "));
+  add(originalQuery);
+  return out.slice(0,5);
+}
+function preferenceEvidenceSummary(rows=[],intent=null){
+  // Only product-level preferences belong in canonical-catalog evidence gating.
+  // Shipping, sealed/new/used condition and live availability are seller/listing properties
+  // and are intentionally deferred to live purchase-route verification.
+  const prefs=strictCatalogPreferences(intent);
+  if(!prefs.length)return {required:0,best_matched:0};
+  let best=0;for(const p of (rows||[])){const fit=candidatePreferenceFit(p,prefs);best=Math.max(best,fit.matched.length);}return {required:prefs.length,best_matched:best};
+}
+function targetedIntentQuery(intent,originalQuery=""){
+  const parts=[];
+  if(intentRequiresCharacterConstraint(intent)&&intent?.characters?.[0])parts.push(preferredCharacterSearchAlias(intent.characters[0]));
+  else if(intent?.franchises?.[0])parts.push(preferredFranchiseSearchAlias(intent.franchises[0]));
+  if(intent?.product_types?.[0]||intent?.merch_subtypes?.[0]){const ta=preferredTypeSearchAlias(intent);if(ta)parts.push(ta);}
+  const built=parts.join(" ").trim();
+  return built||String(originalQuery||"").trim();
+}
+
+async function lightweightStructuredFallback(env,hints,query,limit=10){
+  const dbTypes=[...new Set((hints.product_types||[]).flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]))];
+  if(!dbTypes.length&&!hints.franchises?.length)return [];
+  const select="id,canonical_name_ja,canonical_name_en,manufacturer,brand,series,franchise,character_names,jan_code,model_number,product_type,official_image_url,official_url,msrp_jpy,original_release_date,product_status,identification_confidence";
+  const typeFilter=dbTypes.length?`&product_type=in.(${dbTypes.map(x=>encodeURIComponent(x)).join(",")})`:"";
+
+  // First try one narrow title query using the most likely catalog language. This
+  // replaces the old 40+ clause OR query with a single field predicate.
+  const franchise=hints.franchises?.[0]||"";
+  const canonicalCharacter=hints.characters?.[0]||"";
+  const aliases=[
+    preferredCharacterSearchAlias(canonicalCharacter),
+    ...(hints.character_aliases||[]),
+    preferredFranchiseSearchAlias(franchise)
+  ].map(safeSearchTerm).filter(Boolean);
+  for(const alias of [...new Set(aliases)].slice(0,4)){
+    const rows=await sbOptional(env,`/products?select=${select}${typeFilter}&canonical_name_ja=ilike.*${encodeURIComponent(alias)}*&limit=${Math.max(20,Math.min(60,limit*5))}`);
+    if(Array.isArray(rows)&&rows.length){
+      const ranked=rankAndFilterDiscoveryProducts(rows,hints,query,limit);
+      if(ranked.length)return ranked;
+    }
+  }
+
+  // If Supabase times out on text matching, inspect only two compact catalog
+  // slices locally. This is bounded (2 requests, <=600 small rows) and cannot
+  // create the runaway subrequest/timeout behavior seen in v3.6.21.
+  if(dbTypes.length){
+    const pooled=[];
+    for(const offset of [0,300]){
+      const rows=await sbOptional(env,`/products?select=${select}${typeFilter}&limit=300&offset=${offset}`);
+      if(Array.isArray(rows))pooled.push(...rows);
+      const ranked=rankAndFilterDiscoveryProducts(pooled,hints,query,limit);
+      if(ranked.length)return ranked;
+    }
+  }
+  return [];
+}
+
+async function findProducts(env,q="",limit=10){
+  const query=String(q||"").trim();
+  if(!query)return [];
+  const jan=cleanJan(query);
+  if(jan){const exact=await loadProductsByJans(env,[jan]);if(exact.length)return exact.slice(0,limit);}
+  const hints=multilingualQueryHints(query),groups=[];
+  const dbTypes=[...new Set(hints.product_types.flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]))];
+  const semanticTerms=[...new Set([...hints.franchise_aliases,...(hints.character_aliases||[]),...hints.residual_terms].map(safeSearchTerm).filter(Boolean))].slice(0,6);
+  const structured=dbTypes.length||hints.franchises.length||(hints.characters?.length||0);
+
+  // For recognized multilingual category/franchise intents, query canonical DB fields directly.
+  // This avoids wasting one Supabase request on the untranslated raw phrase and keeps WORLD AUDIT under subrequest limits.
+  if(dbTypes.length||semanticTerms.length){
+    let path="/products?select=*";
+    if(dbTypes.length)path+=`&product_type=in.(${dbTypes.map(x=>encodeURIComponent(x)).join(",")})`;
+    if(semanticTerms.length){
+      const fields=["canonical_name_ja","canonical_name_en","franchise","manufacturer","brand","series"];
+      const clauses=[];
+      for(const term of semanticTerms.slice(0,4))for(const field of fields)clauses.push(`${field}.ilike.*${term}*`);
+      path+=`&or=(${encodeURIComponent(clauses.join(","))})`;
+    }
+    path+=`&limit=${Math.max(16,Math.min(32,limit*3))}`;
+    groups.push(await sbOptional(env,path));
+  }
+
+  // Raw text fallback remains for exact names, model numbers and queries that could not be semantically normalized.
+  if(!structured||hints.residual_terms.length){
+    const escaped=safeSearchTerm(query);
+    if(escaped){
+      const directOr=["canonical_name_ja","canonical_name_en","franchise","manufacturer","brand","series","model_number"].map(k=>`${k}.ilike.*${escaped}*`).join(",");
+      groups.push(await sbOptional(env,`/products?select=*&or=(${encodeURIComponent(directOr)})&limit=${Math.max(10,Math.min(30,limit*3))}`));
+    }
+  }
+
+  if(hints.generic_intent&&!dbTypes.length&&!semanticTerms.length){
+    groups.unshift(await broadCatalogDiscovery(env,Math.max(10,Math.min(20,limit))));
+  }
+  const merged=mergeUniqueProducts(groups,Math.max(30,limit*4));
+  const ranked=rankAndFilterDiscoveryProducts(merged,hints,query,limit);
+  if(ranked.length)return ranked;
+  // Explicit identity constraints get a second, character-first retrieval pass instead of returning nearby franchise products.
+  return await lightweightStructuredFallback(env,hints,query,limit);
+}
+
+async function resolveProduct(env,url){
+  const id=url.searchParams.get("id");
+  if(id){
+    const rows=await sbOptional(env,`/products?select=*&id=eq.${encodeURIComponent(id)}&limit=1`);
+    if(Array.isArray(rows)&&rows.length)return rows[0];
+  }
+  const q=url.searchParams.get("query")||"";
+  const rows=await findProducts(env,q,5);
+  return rows[0]||null;
+}
+
+/* =========================================================
+   MARKET SELECTION
+========================================================= */
+
+function marketEligible(p){
+  const q=marketIdentityQuality(p),special=productSpecialistProfile(p);
+  const hasSpecial=Object.values(special||{}).some(v=>v!==null&&v!==""&&v!==false&&v!==undefined);
+  return q>=categoryMarketThreshold(p)||(hasSpecial&&q>=30);
+}
+
+function marketPriority(p,history=[],source="yahoo"){
+  const relevant=history.filter(o=>o.product_id===p.id&&o.metadata?.market_source===source);
+  const newest=relevant[0]?.observed_at||null;
+  let score=0;
+  if(!relevant.length)score+=100;
+  if(hoursSince(newest)>PIPELINE.marketAutoRefreshHours)score+=50;
+  if(p.product_status==="preorder")score+=15;
+  if(p.jan_code)score+=12;
+  if(p.canonical_name_en)score+=6;
+  if(p.official_url)score+=6;
+  if(p.model_number)score+=8;
+  score+=marketIdentityQuality(p)/10;
+  if(hoursSince(p.metadata?.market_attempts?.[source]?.at)>PIPELINE.marketRetryHours)score+=5;
+  return score;
+}
+
+async function selectMarketProducts(env,history=[],limit=2,products=null,source="yahoo"){
+  const pool=Array.isArray(products)&&products.length?products:await loadProductCandidates(env,500);
+  return pool.filter(marketEligible).sort((a,b)=>marketPriority(b,history,source)-marketPriority(a,history,source)).slice(0,limit);
+}
+
+async function markMarketAttempt(env,p,source,detail={}){
+  const metadata={...(p.metadata||{}),market_attempts:{...(p.metadata?.market_attempts||{}),[source]:{at:new Date().toISOString(),...detail}}};
+  await sbOptional(env,`/products?id=eq.${encodeURIComponent(p.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({metadata})});
+}
+
+/* =========================================================
+   YAHOO SHOPPING
+========================================================= */
+
+function isYahoo403Error(error){return /(?:^|\b)Yahoo\s+403\b/i.test(safeError(error));}
+const YAHOO_CATALOG_COOLDOWN_MINUTES=30;
+async function yahooCatalogCooldownState(env){
+  const rows=await sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.yahoo_catalog_cooldown&order=occurred_at.desc&limit=1");
+  const row=Array.isArray(rows)&&rows.length?rows[0]:null,m=row?.metadata||null;
+  if(!m?.until)return {active:false,until:null,reason:null,last_error:null};
+  const untilMs=Date.parse(m.until)||0;
+  return {active:untilMs>Date.now(),until:m.until,reason:m.reason||null,last_error:m.last_error||null,occurred_at:row?.occurred_at||null};
+}
+async function setYahooCatalogCooldown(env,error,minutes=YAHOO_CATALOG_COOLDOWN_MINUTES){
+  const now=Date.now(),until=new Date(now+Math.max(5,Number(minutes)||30)*60000).toISOString(),last_error=safeError(error);
+  const metadata={until,reason:"yahoo_403",last_error,cooldown_minutes:Math.max(5,Number(minutes)||30),version:VERSION};
+  await logEvent(env,"yahoo_catalog_cooldown",{endpoint:"scheduled",metadata});
+  return {active:true,...metadata};
+}

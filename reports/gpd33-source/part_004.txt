@@ -1,0 +1,300 @@
+
+function mergeBilingualCalendar(ja=[],en=[]){
+  const map=new Map();
+  for(const x of ja)map.set(x.jan_code,{jan_code:x.jan_code,name_ja:x.name,name_en:null,date:x.date,rerelease:x.rerelease,ja:x,en:null});
+  for(const x of en){
+    const prev=map.get(x.jan_code)||{jan_code:x.jan_code,name_ja:null,name_en:null,date:null,rerelease:false,ja:null,en:null};
+    prev.name_en=x.name;prev.en=x;prev.date=prev.date||x.date;prev.rerelease=prev.rerelease||x.rerelease;map.set(x.jan_code,prev);
+  }
+  return [...map.values()];
+}
+
+async function fetchGoodSmileCalendars(){
+  const [jaR,enR]=await Promise.allSettled([
+    fetchOfficial("https://www.goodsmile.com/ja/releaseinfo"),
+    fetchOfficial("https://www.goodsmile.com/en/releaseinfo")
+  ]);
+  const ja=jaR.status==="fulfilled"?parseGoodSmileCalendar(jaR.value.html,"ja"):[];
+  const en=enR.status==="fulfilled"?parseGoodSmileCalendar(enR.value.html,"en"):[];
+  return {ja,en,merged:mergeBilingualCalendar(ja,en),errors:[jaR,enR].filter(x=>x.status==="rejected").map(x=>safeError(x.reason))};
+}
+
+function goodSmileReleaseSeedPayload(rec,now=new Date().toISOString()){
+  const c=classifyProduct(`${rec.name_ja||""} ${rec.name_en||""}`);
+  return {
+    canonical_name_ja:rec.name_ja||rec.name_en,canonical_name_en:rec.name_en||null,manufacturer:"Good Smile Company",
+    brand:null,series:null,franchise:null,character_names:[],jan_code:rec.jan_code,model_number:null,product_type:c.type,scale:null,edition:null,limited_type:null,
+    msrp_jpy:null,original_release_date:rec.date||null,official_url:null,official_image_url:null,image_source_url:null,image_status:"pending",
+    source_product_key:`goodsmile:jan:${rec.jan_code}`,product_status:"active",identification_confidence:.97,source_last_checked_at:now,
+    metadata:{created_by:"v2.9.7_mass_discovery",calendar:{date:rec.date||null,date_type:"official_release_schedule",rerelease_generation:rec.rerelease?"rerelease":"unknown"},latest_official_schedule_date:rec.date||null,release_date_type:"official_release_schedule",rerelease:!!rec.rerelease,classification:{...c,version:VERSION},identity_quality_score:68,field_provenance:{jan_code:sourceEvidence("goodsmile_release_calendar",now),canonical_name_ja:sourceEvidence("goodsmile_release_calendar",now)},ingestion_version:VERSION}
+  };
+}
+
+async function saveGoodSmileReleaseSeed(env,rec){
+  const existing=await loadProductsByJans(env,[rec.jan_code]);
+  if(existing.length)return {status:"existing",product:existing[0]};
+  const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(goodSmileReleaseSeedPayload(rec))});
+  return {status:"inserted",product:Array.isArray(rows)?rows[0]:null};
+}
+
+async function massDiscoverGoodSmile(env,limit=20,options={}){
+  const cal=await fetchGoodSmileCalendars();
+  const existing=await loadProductsByJans(env,cal.merged.map(x=>x.jan_code));
+  const existingJans=new Set(existing.map(x=>cleanJan(x.jan_code)).filter(Boolean));
+  const missing=cal.merged.filter(x=>!existingJans.has(x.jan_code));
+  const inspect=Math.min(missing.length,Math.max(limit,limit*PIPELINE.massInspectMultiplier));
+  const candidates=deterministicWindow(missing,inspect,options.timeMs||Date.now(),17);
+  const selected=candidates.slice(0,Math.max(1,Math.min(50,Number(limit)||40)));
+  let inserted=0,updated=0,deduplicatedByJan=0,sameJanNameConflicts=0;
+  const errors=[];
+  if(selected.length){
+    try{
+      const now=new Date().toISOString();
+      const payloads=selected.map(rec=>goodSmileReleaseSeedPayload(rec,now));
+      const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});
+      inserted=Array.isArray(rows)?rows.length:selected.length;
+    }catch(e){
+      errors.push({batch:true,selected:selected.length,error:safeError(e)});
+    }
+  }
+  return {
+    discovered:cal.merged.length,
+    inspected:candidates.length,
+    japanese_calendar_records:cal.ja.length,
+    english_calendar_records:cal.en.length,
+    bilingual_jan_matches:cal.merged.filter(x=>x.name_ja&&x.name_en).length,
+    already_in_database:existing.length,
+    missing_from_database:missing.length,
+    deduplicated_by_jan:deduplicatedByJan,
+    deduplicated_by_source_key:0,
+    same_jan_name_conflicts:sameJanNameConflicts,
+    selected:selected.length,
+    inserted,updated,
+    errors:[...cal.errors.map(error=>({error})),...errors]
+  };
+}
+
+
+
+function officialFeedAnchorCandidates(html,feed){
+  const out=[],seen=new Set();
+  for(const m of String(html||"").matchAll(/<a\b[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)){
+    try{
+      const url=canonicalOfficialUrl(new URL(decodeHtml(m[1]),feed.listUrl).toString());
+      const name=htmlTextCompact(m[2]);
+      if(!name||name.length<4||name.length>180)continue;
+      const c=classifyProduct(name);if(!COLLECTIBLE_CATALOG_TYPES.has(c.type))continue;
+      if(/(?:\u30c8\u30c3\u30d7|HOME|\u4e00\u89a7|\u691c\u7d22|\u5e97\u8217|\u30cb\u30e5\u30fc\u30b9|MORE|\u8a73\u7d30\u3092\u898b\u308b)$/i.test(name))continue;
+      if(feed.detailRegex&&!feed.detailRegex.test(url)&&new URL(url).pathname!==new URL(feed.listUrl).pathname)continue;
+      const key=`${name}|${url}`;if(seen.has(key))continue;seen.add(key);out.push({name,url,classification:c});
+    }catch{}
+  }
+  // Some JS-backed official lists expose titles as text but not crawlable product anchors.
+  // Keep strong product-like lines as feed evidence; they still dedupe by deterministic identity.
+  if(out.length<5){
+    const text=decodeHtml(String(html||"")).replace(/<br\s*\/?\s*>/gi,"\n").replace(/<\/li>|<\/article>|<\/section>|<\/div>/gi,"\n").replace(/<[^>]+>/g," ");
+    for(const raw of text.split("\n")){
+      const name=raw.replace(/\s+/g," ").trim();if(name.length<8||name.length>160)continue;
+      const c=classifyProduct(name);if(!COLLECTIBLE_CATALOG_TYPES.has(c.type))continue;
+      const key=`${name}|text`;if(seen.has(key))continue;seen.add(key);out.push({name,url:null,classification:c});if(out.length>=80)break;
+    }
+  }
+  return out;
+}
+function officialFeedSeedPayload(feed,x,now=new Date().toISOString()){
+  const sp=specialistProfile(x.name,x.classification.type),ident=collectibleIdentityKey(x.name,x.classification.type,null);
+  return {canonical_name_ja:x.name,canonical_name_en:feed.language==="en"?x.name:null,manufacturer:feed.manufacturer,brand:sp.brand||null,series:sp.set_code||sp.lottery_series||null,franchise:sp.card_game||sp.collaboration||null,character_names:[],jan_code:null,model_number:sp.style_code||sp.card_number||null,product_type:x.classification.type,scale:sp.scale||null,edition:sp.edition||sp.rarity||null,limited_type:(sp.limited||sp.event_limited)?"limited":null,msrp_jpy:null,original_release_date:null,official_url:x.url||null,official_image_url:null,image_source_url:x.url||feed.listUrl,image_status:"pending",source_product_key:`officialfeed:${feed.slug}:${ident.fingerprint||simpleHash(x.name)}`,product_status:"active",identification_confidence:x.url?.74:.68,source_last_checked_at:now,metadata:{connector:"official_mass_feed",official_feed:true,official_feed_slug:feed.slug,official_feed_url:feed.listUrl,specialist_intelligence:true,specialist:sp,classification:{...x.classification,version:VERSION},canonical_identity_method:ident.identity_method,canonical_identity:ident.identity||null,canonical_fingerprint:ident.fingerprint||null,field_provenance:{canonical_name_ja:sourceEvidence(feed.slug,now),manufacturer:sourceEvidence(feed.slug,now)},quality_version:VERSION,ingestion_version:VERSION}};
+}
+async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,options={}){
+  const feed=deterministicWindow(OFFICIAL_MASS_FEEDS,1,options.timeMs||Date.now(),29)[0];
+  if(!feed)return {status:"no_feeds"};
+  const report={feed:feed.slug,manufacturer:feed.manufacturer,list_url:feed.listUrl,discovered:0,selected:0,inserted:0,existing:0,errors:[]};
+  try{
+    const page=await fetchOfficial(feed.listUrl),all=officialFeedAnchorCandidates(page.html,feed);report.discovered=all.length;
+    const selected=deterministicWindow(all,Math.min(Math.max(1,Number(limit)||30),50),options.timeMs||Date.now(),31);report.selected=selected.length;
+    if(!selected.length)return report;
+    const payloads=selected.map(x=>officialFeedSeedPayload(feed,x));
+    const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key));const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
+    const missing=payloads.filter(x=>!keys.has(x.source_product_key));report.existing=payloads.length-missing.length;
+    if(missing.length){const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(missing)});report.inserted=Array.isArray(rows)?rows.length:missing.length;}
+  }catch(e){report.errors.push({error:safeError(e)});}
+  return report;
+}
+
+const GOODSMILE_ARCHIVE_CATEGORIES=[
+  {id:6,slug:"nendoroid",priority:100},
+  {id:2,slug:"figma",priority:95},
+  {id:1,slug:"scale",priority:100},
+  {id:12,slug:"pop-up-parade",priority:98}
+];
+
+function htmlTextCompact(x){return decodeHtml(String(x||"").replace(/<[^>]+>/g," ")).replace(/\s+/g," ").trim();}
+
+function discoverGoodSmileArchiveCards(html,baseUrl){
+  const out=[],seen=new Set();
+  const re=/<a\b[^>]*href=["']([^"']*\/ja\/product\/\d+[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  for(const m of html.matchAll(re)){
+    try{
+      const url=canonicalOfficialUrl(new URL(decodeHtml(m[1]),baseUrl).toString());
+      if(seen.has(url))continue;
+      let name=htmlTextCompact(m[2]);
+      if(!name||name.length<2)continue;
+      name=name.replace(/\s+[\uffe5\u00a5]\s*[\d,]+.*$/," ").trim();
+      if(!name||/^(?:\u8a73\u7d30|more|image)$/i.test(name))continue;
+      seen.add(url);out.push({url,name});
+    }catch{}
+  }
+  return out;
+}
+
+function archiveSeedPayload(card,category,page,now=new Date().toISOString()){
+  const c=classifyProduct(card.name);
+  return {canonical_name_ja:card.name,canonical_name_en:null,manufacturer:null,brand:null,series:null,franchise:null,character_names:[],jan_code:null,model_number:null,product_type:c.type,scale:null,edition:null,limited_type:null,msrp_jpy:null,original_release_date:null,official_url:card.url,official_image_url:null,image_source_url:null,image_status:"pending",source_product_key:`goodsmile:archive:${canonicalOfficialUrl(card.url)}`,product_status:"active",identification_confidence:.72,source_last_checked_at:now,metadata:{created_by:"v2.9.8_archive_discovery",archive_category:category.slug,archive_category_id:category.id,archive_page:page,archive_priority:category.priority,classification:{...c,version:VERSION},identity_quality_score:32,field_provenance:{canonical_name_ja:sourceEvidence("goodsmile_archive",now),official_url:sourceEvidence("goodsmile_archive",now)},ingestion_version:VERSION}};
+}
+
+async function archiveDiscoverGoodSmile(env,categoryId=6,page=1,limit=40){
+  const category=GOODSMILE_ARCHIVE_CATEGORIES.find(x=>x.id===Number(categoryId))||GOODSMILE_ARCHIVE_CATEGORIES[0];
+  const pg=Math.max(1,Math.min(999,Number(page)||1));
+  const listUrl=`https://www.goodsmile.com/ja/search?search_category=${category.id}&page=${pg}`;
+  const listing=await fetchOfficial(listUrl);
+  const cards=discoverGoodSmileArchiveCards(listing.html,listing.url);
+  const selected=cards.slice(0,Math.max(1,Math.min(50,Number(limit)||40)));
+  if(!selected.length)return {category:category.slug,category_id:category.id,page:pg,list_url:listUrl,discovered:0,selected:0,inserted:0,existing:0,exhausted:true,errors:[]};
+  const urls=selected.map(x=>canonicalOfficialUrl(x.url));
+  const existingRows=await sbOptional(env,`/products?select=id,official_url&official_url=in.(${urls.map(x=>'"'+x.replace(/"/g,'')+'"').join(',')})&limit=100`)||[];
+  const existing=new Set(existingRows.map(x=>canonicalOfficialUrl(x.official_url||"")));
+  const missing=selected.filter(x=>!existing.has(canonicalOfficialUrl(x.url)));
+  let inserted=0;const errors=[];
+  if(missing.length){
+    try{
+      const now=new Date().toISOString(),payloads=missing.map(x=>archiveSeedPayload(x,category,pg,now));
+      const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});
+      inserted=Array.isArray(rows)?rows.length:missing.length;
+    }catch(e){errors.push({batch:true,error:safeError(e)});}
+  }
+  return {category:category.slug,category_id:category.id,page:pg,list_url:listUrl,discovered:cards.length,selected:selected.length,inserted,existing:selected.length-missing.length,exhausted:false,errors};
+}
+
+function invalidOfficialProductPage(connector,url,parsed){
+  const u=canonicalOfficialUrl(url);
+  const title=String(parsed?.canonical_name_ja||parsed?.canonical_name_en||"");
+  if(connector?.slug==="kdcolle"&&(/\/product\/20\d{2}(?:\/\d{1,2})?$/.test(new URL(u).pathname.replace(/\/$/,""))||/\u691c\u7d22\u7d50\u679c/.test(title)))return "kdcolle_listing_or_archive";
+  if(/(?:search|category|archive|products?)$/i.test(new URL(u).pathname.replace(/\/$/,"")))return "listing_or_archive";
+  return null;
+}
+
+async function saveOfficialProduct(env,connector,url,parsed){
+  const invalid=invalidOfficialProductPage(connector,url,parsed);
+  if(invalid)throw new Error(`Rejected non-product official page: ${invalid}`);
+  const jan=cleanJan(parsed.jan_code);
+  let existing=[];
+  if(jan)existing=await loadProductsByJans(env,[jan]);
+  if(!existing.length){
+    existing=await sbOptional(env,`/products?select=*&official_url=eq.${encodeURIComponent(canonicalOfficialUrl(url))}&limit=1`)||[];
+  }
+  const now=new Date().toISOString();
+  const base=existing[0]||{};
+  if(base.jan_code&&jan&&cleanJan(base.jan_code)!==jan&&base.canonical_name_ja&&!janNameCompatible(base.canonical_name_ja,parsed.canonical_name_ja))throw new Error("JAN/name conflict guard");
+  const merged={...base,...parsed};
+  const quality=identityQualityReasons(merged);
+  const metadata={...(base.metadata||{}),...(parsed.metadata||{}),official_connector:connector.slug,quality_version:VERSION,identity_quality_score:quality.score,official_english_url:connector.slug==="goodsmile"?goodSmileEnglishUrl(url):base.metadata?.official_english_url||null,field_provenance:{...(base.metadata?.field_provenance||{}),official_url:sourceEvidence(connector.slug,now),jan_code:jan?sourceEvidence(connector.slug,now):base.metadata?.field_provenance?.jan_code}};
+  const patch={
+    canonical_name_ja:parsed.canonical_name_ja||base.canonical_name_ja,
+    canonical_name_en:parsed.canonical_name_en||base.canonical_name_en,
+    manufacturer:parsed.manufacturer||base.manufacturer,
+    jan_code:jan||base.jan_code,
+    msrp_jpy:parsed.msrp_jpy||base.msrp_jpy,
+    original_release_date:parsed.original_release_date||base.original_release_date,
+    official_url:parsed.official_url||base.official_url,
+    official_image_url:parsed.official_image_url||base.official_image_url,
+    source_product_key:parsed.source_product_key||base.source_product_key,
+    product_type:parsed.product_type||base.product_type,
+    product_status:parsed.product_status||base.product_status,
+    identification_confidence:identificationConfidenceFor(merged),
+    source_last_checked_at:now,
+    metadata
+  };
+  if(base.id){
+    await sb(env,`/products?id=eq.${encodeURIComponent(base.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify(patch)});
+    return {status:"updated",id:base.id};
+  }
+  const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({...patch,brand:null,series:null,franchise:null,character_names:[],model_number:null,scale:null,edition:null,limited_type:null,image_source_url:parsed.official_image_url||null,image_status:parsed.official_image_url?"found":"pending"})});
+  return {status:"inserted",id:rows?.[0]?.id||null};
+}
+
+async function refreshOfficialBatch(env,limit=2,options={}){
+  const connectors=deterministicWindow(OFFICIAL_CONNECTORS,OFFICIAL_CONNECTORS.length,options.timeMs||Date.now(),3);
+  const max=Math.max(1,Math.min(12,Number(limit)||4));
+  const report=[];
+  let processed=0;
+  for(const connector of connectors){
+    if(processed>=max)break;
+    for(const listUrl of connector.listUrls){
+      if(processed>=max)break;
+      try{
+        const listing=await fetchOfficial(listUrl);
+        const links=discoverOfficialLinks(listing.html,listing.url,connector.detailRegex);
+        const chosen=deterministicWindow(links,Math.min(3,max-processed),options.timeMs||Date.now(),processed+1);
+        for(const url of chosen){
+          if(processed>=max)break;
+          try{
+            const page=await fetchOfficial(url);
+            const parsed=parseOfficial(connector,page.url,page.html);
+            const saved=await saveOfficialProduct(env,connector,page.url,parsed);
+            report.push({connector:connector.slug,url:page.url,...saved,jan_code:parsed.jan_code,name:parsed.canonical_name_ja});
+          }catch(e){report.push({connector:connector.slug,url,error:safeError(e)});}
+          processed++;
+        }
+      }catch(e){
+        report.push({connector:connector.slug,list_url:listUrl,error:safeError(e),non_fatal:connector.slug==="kotobukiya"});
+      }
+    }
+  }
+  return report;
+}
+
+async function cleanupKnownBadOfficialRows(env){
+  const rows=await sbOptional(env,"/products?select=id,canonical_name_ja,official_url,source_product_key&limit=1000");
+  if(!Array.isArray(rows))return {scanned:0,deleted:0};
+  const bad=rows.filter(p=>{
+    const u=String(p.official_url||"");
+    const n=String(p.canonical_name_ja||"");
+    return /kdcolle\.kadokawa\.co\.jp\/product\/20\d{2}(?:\/\d{1,2})?\/?$/i.test(u)||(/\u691c\u7d22\u7d50\u679c/.test(n)&&/KDcolle|KADOKAWA/i.test(n));
+  });
+  let deleted=0;
+  for(const p of bad){
+    try{await sb(env,`/products?id=eq.${encodeURIComponent(p.id)}`,{method:"DELETE",headers:{Prefer:"return=minimal"}});deleted++;}catch{}
+  }
+  return {scanned:rows.length,found:bad.length,deleted};
+}
+
+function recentBackfillFailure(p){
+  const t=p.metadata?.backfill_last_attempt_at;
+  return t&&hoursSince(t)<PIPELINE.backfillRetryHours&&p.metadata?.backfill_last_error;
+}
+
+async function backfillOfficialDetails(env,limit=1){
+  const candidates=await loadBackfillCandidates(env,500);
+  const selected=candidates.filter(p=>!recentBackfillFailure(p)).slice(0,Math.max(1,Math.min(PIPELINE.backfillStandalone,Number(limit)||1)));
+  const results=[];
+  for(const p of selected){
+    const now=new Date().toISOString();
+    try{
+      if(p.official_url){
+        const connector=OFFICIAL_CONNECTORS.find(c=>c.detailRegex.test(p.official_url))||OFFICIAL_CONNECTORS[0];
+        const page=await fetchOfficial(p.official_url);
+        const parsed=parseOfficial(connector,page.url,page.html);
+        if(parsed.jan_code&&cleanJan(parsed.jan_code)!==cleanJan(p.jan_code))throw new Error("Backfill JAN mismatch");
+        await saveOfficialProduct(env,connector,page.url,{...parsed,jan_code:p.jan_code});
+        results.push({id:p.id,status:"updated_from_official_url"});
+        continue;
+      }
+      if(normalizedManufacturer(p.manufacturer)==="good smile company"||String(p.source_product_key||"").startsWith("goodsmile:")){
+        const cal=await fetchGoodSmileCalendars();
+        const rec=cal.merged.find(x=>x.jan_code===cleanJan(p.jan_code));
+        if(rec){
+          const patch={canonical_name_en:p.canonical_name_en||rec.name_en||null,original_release_date:p.original_release_date||rec.date||null,source_last_checked_at:now,metadata:{...(p.metadata||{}),backfill_last_attempt_at:now,backfill_last_error:null,calendar:{...(p.metadata?.calendar||{}),date:rec.date||p.metadata?.calendar?.date||null,rerelease_generation:rec.rerelease?"rerelease":p.metadata?.calendar?.rerelease_generation||"unknown"}}};
+          await sb(env,`/products?id=eq.${encodeURIComponent(p.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify(patch)});
+          results.push({id:p.id,status:"calendar_backfilled"});
+          continue;
+        }

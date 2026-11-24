@@ -1,0 +1,300 @@
+  const hit=x.hit,img=hit?.exImage?.url||hit?.image?.medium||hit?.image?.small||null,sp=specialistProfile(x.name,x.classification.type);
+  const modelNumber=x.sneaker?.style_code||x.apparel?.style_code||sp.style_code||sp.card_number||null;
+  return {canonical_name_ja:x.name,canonical_name_en:null,manufacturer:null,brand:x.sneaker?.brand||x.apparel?.brand||sp.brand||hit?.brand?.name||null,series:sp.set_code||sp.lottery_series||null,franchise:sp.card_game||sp.collaboration||null,character_names:[],jan_code:x.jan||null,model_number:modelNumber,product_type:x.classification.type,scale:sp.scale||null,edition:sp.edition||sp.rarity||null,limited_type:(sp.limited||sp.event_limited)?"limited":null,msrp_jpy:Number(hit?.priceLabel?.fixedPrice||0)||null,original_release_date:normalizeCatalogDate(hit?.releaseDate),official_url:null,official_image_url:img,image_source_url:hit?.url||null,image_status:img?"found":"pending",source_id:sourceId||null,source_product_key:x.source_key,product_status:"active",identification_confidence:x.jan?.80:(Object.values(sp).filter(v=>v!==null&&v!==false&&v!=="").length>=2?.74:.66),source_last_checked_at:now,metadata:{connector:"yahoo_collectible_catalog_seed",catalog_seed:true,collectibles_expansion:true,specialist_intelligence:true,discovery_query:query,discovery_start:start,discovery_source:"yahoo_shopping",raw_release_date:hit?.releaseDate??null,canonical_identity_method:x.identity_method||(x.jan?"jan":"normalized_name_type_fingerprint"),canonical_identity:x.canonical_identity||null,canonical_fingerprint:x.canonical_fingerprint||null,trading_card_form:x.trading_card_form||null,sneaker:x.sneaker||null,apparel:x.apparel||null,specialist:sp,classification:{...x.classification,version:VERSION},identity_quality_score:x.jan?45:34,field_provenance:{jan_code:x.jan?sourceEvidence("yahoo_collectible_catalog_seed",now):null,canonical_name_ja:sourceEvidence("yahoo_collectible_catalog_seed",now)},quality_version:VERSION,ingestion_version:VERSION}};
+}
+
+
+function legacyCatalogCleanupClassification(name="",productType=""){
+  const n=String(name||""),pt=String(productType||""),reasons=[];
+  if(pt==="trading_card"&&tradingCardAccessoryReason(n)==="trading_card_accessory")reasons.push("trading_card_accessory_false_positive");
+  if(pt==="apparel"&&/\bHUF\b/i.test(n)&&!apparelHasCollabSignal(n))reasons.push("generic_huf_apparel_false_positive");
+  if(pt==="apparel"&&/(?:head\s*cover|\u30d8\u30c3\u30c9\u30ab\u30d0\u30fc)/i.test(n))reasons.push("golf_head_cover_not_apparel");
+  if(pt==="plush"&&/(?:head\s*cover|\u30d8\u30c3\u30c9\u30ab\u30d0\u30fc)/i.test(n))reasons.push("golf_head_cover_not_plush");
+  if((pt==="plush"||pt==="apparel")&&/(?:happy\s*bag|\u798f\u888b|\u8a70\u3081\u5408\u308f\u305b|\u8a70\u5408\u305b)/i.test(n))reasons.push("mixed_bundle_single_type_false_positive");
+  return reasons;
+}
+function legacyIdentityVersion(sourceKey=""){
+  const k=String(sourceKey||"");
+  if(/^catalog:sneaker:v[12]:/i.test(k))return "legacy_sneaker_identity";
+  if(/^catalog:apparel:v1:/i.test(k))return "legacy_apparel_identity";
+  return null;
+}
+async function loadCatalogSeedRowsForCleanup(env){
+  const all=[];
+  const pageSize=1000;
+  const maxPages=100;
+  for(let page=0;page<maxPages;page++){
+    const offset=page*pageSize;
+    const path=`/products?select=id,canonical_name_ja,jan_code,product_type,source_product_key,metadata&metadata->>catalog_seed=eq.true&order=id.asc&limit=${pageSize}&offset=${offset}`;
+    const rows=await sbOptional(env,path);
+    if(!Array.isArray(rows)||rows.length===0)break;
+    all.push(...rows);
+    if(rows.length<pageSize)break;
+  }
+  return all;
+}
+async function deleteProductsByIdsChunked(env,ids=[]){
+  const clean=[...new Set(ids.map(String).filter(Boolean))];let deleted=0;
+  for(let i=0;i<clean.length;i+=40){
+    const chunk=clean.slice(i,i+40);
+    const expr=`(${chunk.map(x=>`"${String(x).replace(/"/g,'\\"')}"`).join(",")})`;
+    await sb(env,`/products?id=in.${encodeURIComponent(expr)}`,{method:"DELETE"});
+    deleted+=chunk.length;
+  }
+  return deleted;
+}
+async function catalogCleanupPlan(env,{apply=false}={}){
+  const rows=await loadCatalogSeedRowsForCleanup(env),byJan=new Map(),byNameType=new Map();
+  const ntKey=r=>`${String(r.product_type||"")}|${canonicalCollectibleIdentity(r.canonical_name_ja||"",r.product_type||"")}`;
+  for(const r of rows){
+    const jan=cleanJan(r.jan_code);
+    if(jan){if(!byJan.has(jan))byJan.set(jan,[]);byJan.get(jan).push(r);}
+    const nt=ntKey(r);if(!byNameType.has(nt))byNameType.set(nt,[]);byNameType.get(nt).push(r);
+  }
+  const flagged=new Map();
+  const flag=(r,reason)=>{if(!r?.id)return;const k=String(r.id);if(!flagged.has(k))flagged.set(k,{id:r.id,name:r.canonical_name_ja||null,product_type:r.product_type||null,jan:cleanJan(r.jan_code)||null,source_product_key:r.source_product_key||null,reasons:[]});const x=flagged.get(k);if(!x.reasons.includes(reason))x.reasons.push(reason);};
+  for(const r of rows){
+    for(const reason of legacyCatalogCleanupClassification(r.canonical_name_ja||"",r.product_type||""))flag(r,reason);
+    const legacy=legacyIdentityVersion(r.source_product_key||"");
+    if(legacy){
+      const jan=cleanJan(r.jan_code),group=(jan?byJan.get(jan):byNameType.get(ntKey(r)))||[];
+      if(group.some(x=>String(x.id)!==String(r.id)&&!legacyIdentityVersion(x.source_product_key||"")))flag(r,legacy);
+    }
+  }
+  for(const group of byNameType.values()){
+    if(group.some(r=>cleanJan(r.jan_code))){
+      for(const r of group)if(!cleanJan(r.jan_code))flag(r,"duplicate_no_jan_shadowed_by_jan");
+    }
+  }
+  const candidates=[...flagged.values()];
+  let deleted=0;if(apply&&candidates.length)deleted=await deleteProductsByIdsChunked(env,candidates.map(x=>x.id));
+  return {
+    ok:true,
+    version:VERSION,
+    mode:apply?"apply":"dry_run",
+    scanned:rows.length,
+    scan_complete:true,
+    scan_page_size:1000,
+    candidates:candidates.length,
+    deleted,
+    reason_counts:candidates.reduce((o,x)=>{for(const r of x.reasons)o[r]=(o[r]||0)+1;return o;},{}),
+    samples:candidates.slice(0,100)
+  };
+}
+async function seedCollectibleCatalogYahoo(env,queryIndex=0,page=1,options={}){
+  if(!env.YAHOO_CLIENT_ID)throw new Error("YAHOO_CLIENT_ID is missing");
+  const qi=Math.max(0,Math.min(COLLECTIBLE_CATALOG_QUERIES.length-1,Number(queryIndex)||0)),pg=Math.max(1,Math.min(20,Number(page)||1));
+  const query=String(options?.query||COLLECTIBLE_CATALOG_QUERIES[qi]),start=1+(pg-1)*50;
+  const result=await yahooRequest(env,{query,start,condition:"new"},50);
+  const hits=result.hits||[],targetTypes=Array.isArray(options?.targetTypes)&&options.targetTypes.length?new Set(options.targetTypes):null,rejection_counts={missing_name:0,unsupported_product_type:0,category_mismatch:0,trading_card_accessory:0,bootleg_or_replica:0,duplicate_in_page:0},rejection_samples={unsupported_product_type:[],category_mismatch:[]},identity_counts={jan:0,canonical_fingerprint:0,sneaker_style_code:0,sneaker_brand_collab_model:0,sneaker_canonical_name:0,apparel_style_code:0,apparel_brand_collab_type:0,apparel_canonical_name:0};
+  const byIdentity=new Map();
+  for(const hit of hits){
+    const name=cleanOfficialTitle(hit?.name||"")||String(hit?.name||"").trim();
+    if(!name){rejection_counts.missing_name++;continue;}
+    let c=classifyProduct(name);
+    c=((c.type==="other"||!c.type)?apparelClassifierOverride(name,c):c);
+    if(!COLLECTIBLE_CATALOG_TYPES.has(c.type)){
+      rejection_counts.unsupported_product_type++;
+      if(rejection_samples.unsupported_product_type.length<15)rejection_samples.unsupported_product_type.push({name,classified_type:c.type||null,classification:c});
+      continue;
+    }
+    if(targetTypes&&!targetTypes.has(c.type)){
+      rejection_counts.category_mismatch++;
+      if(rejection_samples.category_mismatch.length<10)rejection_samples.category_mismatch.push({name,classified_type:c.type||null});
+      continue;
+    }
+    // Final apparel quality gate: base classifier may already return apparel,
+    // but catalog insertion requires an anime/character/collaboration signal.
+    if(c.type==="apparel"&&!apparelHasCollabSignal(name)){
+      rejection_counts.unsupported_product_type++;
+      if(rejection_samples.unsupported_product_type.length<15)rejection_samples.unsupported_product_type.push({
+        name,
+        classified_type:c.type||null,
+        classification:{...c,reason:"apparel_missing_collab_signal"}
+      });
+      continue;
+    }
+    const tcq=tradingCardQuality(name,c);
+    if(!tcq.ok){rejection_counts.trading_card_accessory++;continue;}
+    if(/\b(?:bootleg|recast|replica|copy|counterfeit|fake)\b/i.test(name)){rejection_counts.bootleg_or_replica++;continue;}
+    const jan=cleanJan(hit?.janCode);
+    const ident=collectibleIdentityKey(name,c.type,jan);
+    const sneaker=c.type==="sneaker"?sneakerIdentity(name):null;
+    const apparel=c.type==="apparel"?apparelIdentity(name):null;
+    const x={jan:jan||null,name,classification:c,trading_card_form:c.type==="trading_card"?tcq.form:null,sneaker,apparel,identity_method:ident.identity_method,hit,canonical_identity:ident.identity||null,canonical_fingerprint:ident.fingerprint||null,source_key:ident.source_key};
+    const key=`src:${ident.source_key}`;
+    const prev=byIdentity.get(key);
+    if(prev){
+      rejection_counts.duplicate_in_page++;
+      // Prefer the listing carrying a JAN; otherwise keep the cleaner/shorter title.
+      if((jan&&!prev.jan)||((!!jan===!!prev.jan)&&name.length<prev.name.length))byIdentity.set(key,x);
+      continue;
+    }
+    byIdentity.set(key,x);
+    identity_counts[ident.identity_method]=(identity_counts[ident.identity_method]||0)+1;
+  }
+  const candidates=[...byIdentity.values()];
+  const countTypes=xs=>xs.reduce((o,x)=>{const t=x?.classification?.type||"unknown";o[t]=(o[t]||0)+1;return o;},{});
+  const trading_card_form_counts=candidates.filter(x=>x.classification.type==="trading_card").reduce((o,x)=>{const f=x.trading_card_form||"unspecified";o[f]=(o[f]||0)+1;return o;},{});
+  const janCandidates=candidates.filter(x=>x.jan),fpCandidates=candidates.filter(x=>!x.jan);
+  const existingJanRows=janCandidates.length?await loadProductsByJans(env,janCandidates.map(x=>x.jan)):[];
+  const existingKeyRows=candidates.length?await loadProductsBySourceKeys(env,candidates.map(x=>x.source_key)):[];
+  const existingJans=new Set(existingJanRows.map(x=>cleanJan(x.jan_code)).filter(Boolean));
+  const existingKeys=new Set(existingKeyRows.map(x=>String(x.source_product_key||"")).filter(Boolean));
+  const missing=candidates.filter(x=>!existingKeys.has(x.source_key)&&!(x.jan&&existingJans.has(x.jan)));
+  let inserted=0;const errors=[];
+  if(missing.length){
+    const source=await ensureYahooSource(env),now=new Date().toISOString(),payloads=missing.map(x=>yahooCatalogSeedPayload(x,query,start,source.source_id,now));
+    try{const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});inserted=Array.isArray(rows)?rows.length:missing.length;}
+    catch(e){
+      // v3.0.11: never fall back to one HTTP request per product.
+      // Retry in bounded chunks so a single Worker invocation stays well below
+      // Cloudflare's subrequest ceiling even with 50 no-JAN candidates.
+      errors.push({batch:true,error:safeError(e),fallback:"bounded_chunk_insert"});
+      const chunkSize=10;
+      for(let i=0;i<payloads.length;i+=chunkSize){
+        const chunk=payloads.slice(i,i+chunkSize);
+        try{
+          const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(chunk)});
+          inserted+=Array.isArray(rows)?rows.length:chunk.length;
+        }catch(one){
+          errors.push({chunk_start:i,chunk_size:chunk.length,error:safeError(one)});
+        }
+      }
+    }
+  }
+  const rejectedTotal=Object.values(rejection_counts).reduce((a,b)=>a+Number(b||0),0);
+  return {query_index:qi,query,page:pg,start,filter_self_test:tradingCardFilterSelfTest(),classification_self_test:catalogClassificationRegressionSelfTest(),yahoo_total:result.total,returned:hits.length,collectible_candidates:candidates.length,jan_collectible_candidates:janCandidates.length,no_jan_canonical_candidates:fpCandidates.length,identity_counts,rejected:rejectedTotal,rejection_counts,rejection_samples,candidate_type_counts:countTypes(candidates),trading_card_form_counts,existing:existingJans.size+existingKeys.size,selected:missing.length,new_type_counts:countTypes(missing),new_samples:missing.slice(0,10).map(x=>({name:x.name,jan:x.jan,product_type:x.classification.type,trading_card_form:x.trading_card_form||null,identity_method:x.identity_method||(x.jan?"jan":"canonical_fingerprint"),canonical_fingerprint:x.canonical_fingerprint||null,sneaker:x.sneaker||null,apparel:x.apparel||null})),inserted,subrequest_safety:{source_key_lookup:"single_batch_request",individual_insert_fallback:false,max_insert_retry_chunks:5},exhausted:hits.length===0||start+50>Math.min(1000,result.total||0),errors};
+}
+
+const CATALOG_TEST_PRESETS={figure:0,plush:15,acrylic_goods:20,lottery_prize:25,model_kit:30,keychain:33,badge:34,limited_goods:35,trading_card:36,sneaker:39,apparel:41};
+const CATALOG_TEST_TARGET_TYPES={figure:["figure","nendoroid","figma"],plush:["plush"],acrylic_goods:["acrylic_goods"],lottery_prize:["lottery_prize"],model_kit:["model_kit"],keychain:["keychain"],badge:["badge"],limited_goods:null,trading_card:["trading_card"],sneaker:["sneaker"],apparel:["apparel"]};
+async function runCatalogCategoryTest(env,category,page=1){
+  const key=String(category||"").trim();
+  if(!(key in CATALOG_TEST_PRESETS))return {ok:false,error:"unknown_category",allowed:Object.keys(CATALOG_TEST_PRESETS)};
+  const targetTypes=CATALOG_TEST_TARGET_TYPES[key]||null;
+  const result=await seedCollectibleCatalogYahoo(env,CATALOG_TEST_PRESETS[key],Math.max(1,Number(page)||1),{targetTypes});
+  return {ok:true,version:VERSION,test_category:key,query_index:CATALOG_TEST_PRESETS[key],target_types:targetTypes,...result};
+}
+
+async function catalogProgress(env){
+  const rows=await sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.catalog_seed_progress&order=occurred_at.desc&limit=1");
+  const m=Array.isArray(rows)&&rows[0]?.metadata?rows[0].metadata:null;
+  // v3 uses a broader query universe. Never let a completed figure-only v2 cursor suppress collectible expansion.
+  if(!m||m.catalog_version!=="collectibles-v3.3.0")return {catalog_version:"collectibles-v3.3.0",queryIndex:0,page:1,totalInserted:0,totalRequests:0,complete:false};
+  return Number.isFinite(Number(m.queryIndex))&&Number.isFinite(Number(m.page))?m:{catalog_version:"collectibles-v3.3.0",queryIndex:0,page:1,totalInserted:0,totalRequests:0,complete:false};
+}
+
+async function saveCatalogProgress(env,state){await logEvent(env,"catalog_seed_progress",{endpoint:"/admin/catalog-run",metadata:state});return state;}
+
+async function catalogAutoStatus(env){
+  const progress=await catalogProgress(env);
+  const rows=await sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.scheduled_growth_run&order=occurred_at.desc&limit=1");
+  const last=Array.isArray(rows)&&rows.length?rows[0]:null;
+  return {
+    version:VERSION,
+    autonomous:true,
+    browser_required:false,
+    scheduled_batches_per_run:"static_5_plus_dynamic_2_per_minute_except_hour_boundary_static_3_dynamic_1",catalog_query_count:COLLECTIBLE_CATALOG_QUERIES.length,catalog_ip_count:CATALOG_IP_UNIVERSE.length,official_mass_feed_count:OFFICIAL_MASS_FEEDS.length,official_mass_feed_expanded_v372:true,dynamic_seed_hygiene_v372:true,goodsmile_exhaustion_cooldown_v372:true,parallel_catalog_enrichment_v372:true,rakuten_affiliate_candidates_v373:true,rakuten_fixed_batches_v375:true,rakuten_registered_registry_v376:true,rakuten_series_grouping_v376:true,rakuten_ui_ascii_safe_v377:true,rakuten_series_inference_v377:true,rakuten_affiliate_scale_target:"10000_plus",dynamic_catalog_pool:await loadDynamicCatalogPool(env),dynamic_catalog_progress:await dynamicCatalogProgress(env),
+    yahoo_catalog_cooldown:await yahooCatalogCooldownState(env),
+    catalog_progress:progress,
+    last_scheduled_growth:last?{occurred_at:last.occurred_at||null,catalog:last.metadata?.catalog||null,dynamic_catalog:last.metadata?.dynamic_catalog||null,fallback_growth:last.metadata?.fallback_growth||null,errors:last.metadata?.errors||[]}:null,
+    note:"Catalog progress is persisted after each completed page. Yahoo 403 enters a 30-minute cooldown without advancing the Yahoo cursor; zero-result archive pages are skipped immediately and fallback continues through Good Smile archive, official mass feeds and official detail sources."
+  };
+}
+
+async function runCatalogBatch(env,batches=10){
+  const max=Math.max(1,Math.min(20,Number(batches)||10));let state=await catalogProgress(env);
+  if(state.complete)return {status:"complete",version:VERSION,...state,results:[]};
+  let qi=Math.max(0,Number(state.queryIndex)||0),pg=Math.max(1,Number(state.page)||1),totalInserted=Number(state.totalInserted)||0,totalRequests=Number(state.totalRequests)||0;const results=[];
+  for(let n=0;n<max&&qi<COLLECTIBLE_CATALOG_QUERIES.length;n++){
+    let a=null;
+    try{a=await seedCollectibleCatalogYahoo(env,qi,pg);}
+    catch(e){a={query_index:qi,query:COLLECTIBLE_CATALOG_QUERIES[qi],page:pg,inserted:0,exhausted:false,skipped_error:true,errors:[{stage:"yahoo_page",error:safeError(e)}]};}
+    results.push(a);totalInserted+=Number(a.inserted||0);totalRequests++;
+    const err=a.skipped_error?(a.errors?.[0]?.error||"unknown"):null,y403=isYahoo403Error(err);
+    if(!a.skipped_error){if(a.exhausted||pg>=20){qi++;pg=1;}else pg++;}
+    const complete=qi>=COLLECTIBLE_CATALOG_QUERIES.length;
+    state={catalog_version:"collectibles-v3.3.0",queryIndex:qi,page:pg,totalInserted,totalRequests,complete,updatedAt:new Date().toISOString(),lastPageError:a.skipped_error?{queryIndex:a.query_index,page:a.page,error:err}:null};await saveCatalogProgress(env,state);
+    if(complete||y403)break;
+    await new Promise(x=>setTimeout(x,1100));
+  }
+  const yahoo403=isYahoo403Error(state.lastPageError?.error);
+  return {status:state.complete?"complete":yahoo403?"yahoo_403":"paused",yahoo_403:yahoo403,version:VERSION,batch_requests:results.length,batch_inserted:results.reduce((n,x)=>n+Number(x.inserted||0),0),...state,results};
+}
+
+const OFFICIAL_FALLBACK_PROGRESS_VERSION="official-fallback-v3.5.5";
+const OFFICIAL_FALLBACK_ARCHIVE_ATTEMPTS=4;
+async function officialFallbackProgress(env){
+  const rows=await sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.official_fallback_progress&order=occurred_at.desc&limit=1");
+  const m=Array.isArray(rows)&&rows[0]?.metadata?rows[0].metadata:null;
+  if(!m||m.version!==OFFICIAL_FALLBACK_PROGRESS_VERSION)return {version:OFFICIAL_FALLBACK_PROGRESS_VERSION,categoryIndex:0,page:1,totalInserted:0,totalAttempts:0,updatedAt:null};
+  return {version:OFFICIAL_FALLBACK_PROGRESS_VERSION,categoryIndex:Math.max(0,Number(m.categoryIndex)||0)%GOODSMILE_ARCHIVE_CATEGORIES.length,page:Math.max(1,Number(m.page)||1),totalInserted:Number(m.totalInserted)||0,totalAttempts:Number(m.totalAttempts)||0,updatedAt:m.updatedAt||null};
+}
+async function saveOfficialFallbackProgress(env,state){
+  await logEvent(env,"official_fallback_progress",{endpoint:"scheduled",metadata:state});
+  return state;
+}
+async function runGoodSmileFallbackSweep(env,scheduledTime=Date.now(),maxAttempts=OFFICIAL_FALLBACK_ARCHIVE_ATTEMPTS){
+  let st=await officialFallbackProgress(env),categoryIndex=st.categoryIndex,page=st.page,totalInserted=st.totalInserted,totalAttempts=st.totalAttempts;
+  if(totalAttempts>=100&&totalInserted===0&&st.updatedAt&&hoursSince(st.updatedAt)<24)return {source:"goodsmile_archive_sweep",inserted:0,attempts:0,status:"cooldown_exhausted",reason:"100_plus_attempts_zero_insertions_recheck_daily",next_category:GOODSMILE_ARCHIVE_CATEGORIES[categoryIndex]?.slug||null,next_page:page,progress:st,results:[]};
+  const attempts=[];let inserted=0;
+  for(let n=0;n<Math.max(1,Math.min(6,Number(maxAttempts)||OFFICIAL_FALLBACK_ARCHIVE_ATTEMPTS));n++){
+    const category=GOODSMILE_ARCHIVE_CATEGORIES[categoryIndex%GOODSMILE_ARCHIVE_CATEGORIES.length];
+    let r;
+    try{r=await archiveDiscoverGoodSmile(env,category.id,page,PIPELINE.archiveSeedsCron);}
+    catch(e){r={category:category.slug,category_id:category.id,page,inserted:0,discovered:0,selected:0,exhausted:false,errors:[{error:safeError(e)}]};}
+    attempts.push(r);inserted+=Number(r?.inserted||0);totalInserted+=Number(r?.inserted||0);totalAttempts++;
+    if(r?.exhausted||Number(r?.discovered||0)===0){categoryIndex=(categoryIndex+1)%GOODSMILE_ARCHIVE_CATEGORIES.length;page=1;}
+    else page=Math.min(999,page+1);
+    if(Number(r?.inserted||0)>0)break;
+    await new Promise(x=>setTimeout(x,250));
+  }
+  const state={version:OFFICIAL_FALLBACK_PROGRESS_VERSION,categoryIndex,page,totalInserted,totalAttempts,updatedAt:new Date().toISOString()};
+  await saveOfficialFallbackProgress(env,state);
+  return {source:"goodsmile_archive_sweep",inserted,attempts:attempts.length,next_category:GOODSMILE_ARCHIVE_CATEGORIES[categoryIndex]?.slug||null,next_page:page,progress:state,results:attempts};
+}
+async function runOfficialFallbackGrowth(env,scheduledTime=Date.now()){
+  const attempts=[];
+  try{
+    const gs=await runGoodSmileFallbackSweep(env,scheduledTime,OFFICIAL_FALLBACK_ARCHIVE_ATTEMPTS);
+    attempts.push(gs);
+    if(Number(gs.inserted||0)>0)return {active:true,status:"inserted",source:gs.source,inserted:Number(gs.inserted||0),attempts};
+
+    const mass=await patrolOfficialMassFeeds(env,PIPELINE.officialMassFeedCron,{timeMs:scheduledTime});
+    const massInserted=Number(mass?.inserted||0);attempts.push({source:"official_mass_feed",inserted:massInserted,result:mass});
+    if(massInserted>0)return {active:true,status:"inserted",source:"official_mass_feed",inserted:massInserted,attempts};
+
+    const detail=await refreshOfficialBatch(env,Math.max(1,PIPELINE.officialDetailCron||2),{timeMs:scheduledTime});
+    const detailInserted=Array.isArray(detail)?detail.filter(x=>x?.status==="inserted").length:0;attempts.push({source:"official_detail",inserted:detailInserted,result:detail});
+    return {active:true,status:detailInserted>0?"inserted":"no_new_products",source:detailInserted>0?"official_detail":"official_fallback_exhausted_for_run",inserted:detailInserted,attempts};
+  }catch(e){return {active:true,status:"error",source:"official_fallback",inserted:0,attempts,error:safeError(e)};}
+}
+
+
+/* =========================================================
+   SELF DISCOVERY
+========================================================= */
+
+function chooseSelfDiscoveryYahooHit(query,hits=[]){
+  const q=String(query||"").trim(),directJan=cleanJan(q);if(directJan){const exact=hits.find(h=>cleanJan(h.janCode)===directJan);return exact?{hit:exact,jan:directJan,confidence:.94,basis:"query_exact_jan"}:null;}
+  const grouped=new Map();for(const hit of hits){const jan=cleanJan(hit.janCode);if(!jan)continue;const similarity=labelSimilarityScore(q,hit.name||"");if(similarity<45)continue;if(!grouped.has(jan))grouped.set(jan,[]);grouped.get(jan).push({hit,similarity});}
+  const ranked=[...grouped.entries()].map(([jan,xs])=>({jan,hits:xs,count:xs.length,best:Math.max(...xs.map(x=>x.similarity))})).sort((a,b)=>b.count-a.count||b.best-a.best);const best=ranked[0];if(best&&best.count>=2&&best.best>=55){const winner=best.hits.sort((a,b)=>b.similarity-a.similarity)[0];return {hit:winner.hit,jan:best.jan,confidence:.80,basis:"multi_listing_same_jan"};}
+  if(!PIPELINE.selfDiscoveryNoJanEnabled)return null;
+  // Specialist no-JAN fallback for lottery prizes, acrylic goods, badges, apparel, sneakers and cards.
+  // Require a strong textual match and a clear margin over the runner-up to avoid auto-creating ambiguity.
+  const noJan=hits.map(hit=>{const accepted=collectibleCatalogHitAccepted(hit);if(!accepted||accepted.jan)return null;const similarity=labelSimilarityScore(q,accepted.name);const sp=specialistProfile(accepted.name,accepted.classification.type),richness=Object.values(sp||{}).filter(v=>v!==null&&v!==false&&v!=="").length;return {hit,accepted,similarity,richness,score:similarity+Math.min(12,richness*3)};}).filter(Boolean).sort((a,b)=>b.score-a.score);
+  const first=noJan[0],second=noJan[1];if(!first||first.similarity<72||first.richness<1)return null;if(second&&first.score-second.score<8)return null;
+  return {hit:first.hit,jan:null,accepted:first.accepted,confidence:Math.min(.86,.70+first.similarity/500+first.richness*.015),basis:"strong_unique_no_jan_specialist"};
+}
+
+async function selfDiscoverProduct(env,query){
+  if(!PIPELINE.selfDiscoveryEnabled||!env.YAHOO_CLIENT_ID)return null;const q=String(query||"").trim();if(!q)return null;let result;
+  try{const jan=cleanJan(q);result=await yahooRequest(env,jan?{jan_code:jan}:{query:q},PIPELINE.selfDiscoveryYahooHits);}catch(e){console.warn("self discovery Yahoo failed",safeError(e));return null;}
+  const selected=chooseSelfDiscoveryYahooHit(q,result.hits||[]);if(!selected)return null;
+  if(selected.jan){const existing=await loadProductsByJans(env,[selected.jan]);if(existing.length)return existing[0];}
+  const now=new Date().toISOString(),hit=selected.hit,name=cleanOfficialTitle(hit.name||q)||q,c=selected.accepted?.classification||classifyProduct(name),sp=specialistProfile(name,c.type),ident=selected.accepted?{source_key:selected.accepted.source_key,identity:selected.accepted.canonical_identity,fingerprint:selected.accepted.canonical_fingerprint,identity_method:selected.accepted.jan?"jan":"canonical_fingerprint"}:collectibleIdentityKey(name,c.type,selected.jan);
+  if(!selected.jan){const existing=await loadProductsBySourceKeys(env,[ident.source_key]);if(existing.length)return existing[0];}
+  const yahoo=await ensureYahooSource(env),sourceKey=selected.jan?`self:yahoo:jan:${selected.jan}`:`self:yahoo:${ident.source_key}`;
+  const payload={canonical_name_ja:name,canonical_name_en:null,manufacturer:null,brand:sp.brand||null,series:sp.set_code||sp.lottery_series||null,franchise:sp.card_game||sp.collaboration||null,character_names:[],jan_code:selected.jan||null,model_number:sp.style_code||sp.card_number||null,product_type:c.type,scale:sp.scale||null,edition:sp.edition||sp.rarity||null,limited_type:(sp.limited||sp.event_limited)?"limited":null,msrp_jpy:null,original_release_date:null,official_url:null,official_image_url:hit.exImage?.url||hit.image?.medium||hit.image?.small||null,image_source_url:hit.url||null,image_status:(hit.exImage?.url||hit.image?.medium||hit.image?.small)?"found":"pending",source_id:yahoo.source_id||null,source_product_key:sourceKey,product_status:"active",identification_confidence:selected.confidence,source_last_checked_at:now,metadata:{connector:"self_discovery",self_discovered:true,self_discovered_no_jan:!selected.jan,specialist_intelligence:true,specialist:sp,discovery_query:q,discovery_basis:selected.basis,discovery_source:"yahoo_shopping",canonical_identity_method:ident.identity_method||null,canonical_identity:ident.identity||null,canonical_fingerprint:ident.fingerprint||null,classification:{...c,version:VERSION},field_provenance:{jan_code:selected.jan?sourceEvidence("yahoo_self_discovery",now):null,canonical_name_ja:sourceEvidence("yahoo_self_discovery",now)},quality_version:VERSION,ingestion_version:VERSION}};
+  try{const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(payload)});const product=rows?.[0]||null;if(product)await logEvent(env,"product_self_discovered",{product_id:product.id,metadata:{query:q,jan:selected.jan||null,basis:selected.basis,no_jan:!selected.jan}});return product;}catch{try{return selected.jan?(await loadProductsByJans(env,[selected.jan]))[0]||null:(await loadProductsBySourceKeys(env,[sourceKey]))[0]||null;}catch{return null;}}

@@ -1,0 +1,300 @@
+  const union=new Set([...A,...B]).size;
+  return Math.round(clamp((match/Math.max(A.length,1))*70+(match/Math.max(union,1))*30));
+}
+
+function sourceEvidence(source,observedAt=new Date().toISOString(),extra={}){
+  return {source,observed_at:observedAt,...extra};
+}
+
+function latestObservationMap(rows=[]){
+  const m=new Map();
+  for(const o of rows){
+    const k=o.external_listing_id||`${o.source_id}:${o.listing_url||o.id}`;
+    const prev=m.get(k);
+    if(!prev||Date.parse(o.observed_at||"")>Date.parse(prev.observed_at||""))m.set(k,o);
+  }
+  return m;
+}
+
+/* =========================================================
+   LANGUAGE
+========================================================= */
+
+const LANGS=["ja","en","zh","ko","es","fr","de","it","pt","id","th","ru","ar","hi","vi","tr","nl","pl"];
+
+function detectLanguage(query="",explicit="",accept=""){
+  const e=String(explicit||"").toLowerCase().slice(0,2);
+  if(LANGS.includes(e))return e;
+  const a=String(accept||"").toLowerCase();
+  const found=LANGS.find(x=>a.startsWith(x)||a.includes(`,${x}`)||a.includes(`;${x}`));
+  if(found)return found;
+  const q=String(query||"");
+  if(/[\uac00-\ud7af]/.test(q))return "ko";
+  if(/[\u3041-\u3093\u30a1-\u30f6]/.test(q))return "ja";
+  if(/[\u0e00-\u0e7f]/.test(q))return "th";
+  if(/[\u0600-\u06ff]/.test(q))return "ar";
+  if(/[\u0900-\u097f]/.test(q))return "hi";
+  if(/[\u0400-\u04ff]/.test(q))return "ru";
+  if(/[\u4e00-\u9fff\u3400-\u4dbf]/.test(q))return "zh";
+  return "en";
+}
+
+function foldLatinForSearch(v=""){
+  return String(v||"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+}
+
+function detectSearchLanguage(query="",explicit="",accept=""){
+  const e=String(explicit||"").toLowerCase().slice(0,2);
+  if(LANGS.includes(e))return e;
+  const q=String(query||"");
+  if(/[\uac00-\ud7af]/.test(q))return "ko";
+  if(/[\u3041-\u3093\u30a1-\u30f6]/.test(q))return "ja";
+  if(/[\u0e00-\u0e7f]/.test(q))return "th";
+  if(/[\u0600-\u06ff]/.test(q))return "ar";
+  if(/[\u0900-\u097f]/.test(q))return "hi";
+  if(/[\u0400-\u04ff]/.test(q))return "ru";
+  if(/[\u4e00-\u9fff\u3400-\u4dbf]/.test(q))return "zh";
+  const n=foldLatinForSearch(q);
+  const lexical=[
+    ["fr",/(?:\bfigurines?\b|\bproduits?\b|\bobjets?\b|\bacheter\b|\btrouver\b|\bdoudou\b|\bcollectionner\b|\bcollectionnable\b)/],
+    ["es",/(?:\bfiguras?\b|\bproductos?\b|\bcomprar\b|\bmunecos?\b|\bjuguetes?\b)/],
+    ["de",/(?:\bfigur(?:en)?\b|\bplusch(?:tier|e|en)?\b|\bartikel\b|\bkaufen\b|\bsammel)/],
+    ["it",/(?:\bprodotti?\b|\bcomprare\b|\bmorbido\b|\bpupazzo\b|\bgiocattolo\b)/],
+    ["pt",/(?:\bprodutos?\b|\bpelucia\b|\bcomprar\b|\bboneco\b)/],
+    ["id",/(?:\bboneka\b|\bbarang\b|\bmerch anime indonesia\b)/],
+    ["vi",/(?:\bdo choi\b|\bmo hinh\b|\bgau bong\b|\bthu bong\b)/],
+    ["tr",/(?:\burunleri\b|\bfiguru\b|\bpelus\b|\boyuncak\b)/],
+    ["nl",/(?:\bknuffel\b|\bverzamel\b|\banime merch nederland\b|\bpluche\b)/],
+    ["pl",/(?:\bgadzet\b|\bfigurki?\b|\bpluszak\b|\bzabawka\b)/]
+  ];
+  for(const [lang,re] of lexical)if(re.test(n))return lang;
+  // A Latin-script product query such as "One Piece figure" should not inherit
+  // the browser UI language (e.g. Japanese Safari). If no non-English lexical
+  // language matched above, treat ordinary Latin search text as English.
+  if(/[A-Za-z]/.test(q))return "en";
+  const a=String(accept||"").toLowerCase();
+  const found=LANGS.find(x=>a.startsWith(x)||a.includes(`,${x}`)||a.includes(`;${x}`));
+  return found||"en";
+}
+
+const MESSAGES={
+  en:{
+    avoid:"Authenticity/listing risk is too high.",
+    noMarket:"Not enough fresh market evidence. Keep watching.",
+    nearMsrp:"Preorder or current price is near MSRP.",
+    belowMsrp:"Current best offer is materially below MSRP.",
+    belowMedian:"Current best offer is materially below the market median.",
+    scarce:"Supply is scarce enough that waiting may increase acquisition risk.",
+    watch:"No strong BUY signal yet. Continue watching current offers."
+  },
+  ja:{
+    avoid:"\u771f\u6b63\u6027\u30fb\u51fa\u54c1\u30ea\u30b9\u30af\u304c\u9ad8\u3044\u305f\u3081\u56de\u907f\u5224\u5b9a\u3067\u3059\u3002",
+    noMarket:"\u65b0\u9bae\u306a\u5e02\u5834\u30c7\u30fc\u30bf\u304c\u4e0d\u8db3\u3057\u3066\u3044\u308b\u305f\u3081\u76e3\u8996\u7d99\u7d9a\u3067\u3059\u3002",
+    nearMsrp:"\u4e88\u7d04\u30fb\u73fe\u5728\u4fa1\u683c\u304c\u5b9a\u4fa1\u8fd1\u8fba\u3067\u3059\u3002",
+    belowMsrp:"\u73fe\u5728\u306e\u6700\u5b89\u5024\u304c\u5b9a\u4fa1\u3092\u660e\u78ba\u306b\u4e0b\u56de\u3063\u3066\u3044\u307e\u3059\u3002",
+    belowMedian:"\u73fe\u5728\u306e\u6700\u5b89\u5024\u304c\u5e02\u5834\u4e2d\u592e\u5024\u3092\u660e\u78ba\u306b\u4e0b\u56de\u3063\u3066\u3044\u307e\u3059\u3002",
+    scarce:"\u4f9b\u7d66\u304c\u5c11\u306a\u304f\u3001\u5f85\u3064\u3053\u3068\u3067\u5165\u624b\u6a5f\u4f1a\u304c\u60aa\u5316\u3057\u3084\u3059\u3044\u72b6\u614b\u3067\u3059\u3002",
+    watch:"\u5f37\u3044BUY\u6761\u4ef6\u306b\u306f\u672a\u9054\u3067\u3059\u3002\u73fe\u5728\u306e\u51fa\u54c1\u3092\u76e3\u8996\u3057\u307e\u3059\u3002"
+  }
+};
+
+function msg(lang,key){
+  return (MESSAGES[lang]||MESSAGES.en)[key]||MESSAGES.en[key]||key;
+}
+
+/* =========================================================
+   SUPABASE
+========================================================= */
+
+function sbBase(env){
+  if(!env.SUPABASE_URL)throw new Error("SUPABASE_URL is missing");
+  return String(env.SUPABASE_URL).replace(/\/$/,"")+"/rest/v1";
+}
+
+function sbHeaders(env,extra={}){
+  if(!env.SUPABASE_SECRET_KEY)throw new Error("SUPABASE_SECRET_KEY is missing");
+  return {
+    apikey:env.SUPABASE_SECRET_KEY,
+    authorization:`Bearer ${env.SUPABASE_SECRET_KEY}`,
+    "content-type":"application/json",
+    ...extra
+  };
+}
+
+async function sb(env,path,options={}){
+  const r=await fetch(sbBase(env)+path,{
+    method:options.method||"GET",
+    headers:sbHeaders(env,options.headers||{}),
+    body:options.body
+  });
+  const raw=await r.text();
+  let data=null;
+  try{data=raw?JSON.parse(raw):null;}catch{data={raw};}
+  if(!r.ok)throw new Error(`Supabase ${r.status}: ${raw.slice(0,1200)}`);
+  return data;
+}
+
+async function sbOptional(env,path,options={}){
+  try{return await sb(env,path,options);}catch(e){console.warn("Supabase optional",safeError(e));return null;}
+}
+
+async function sbCount(env,filters="",options={}){
+  const url=sbBase(env)+`/products?select=id${filters?`&${filters}`:""}`;
+  const mode=String(options.mode||"planned");
+  const prefer=mode==="exact"?"count=exact":"count=planned";
+  const r=await fetch(url,{headers:sbHeaders(env,{Prefer:prefer,Range:"0-0"})});
+  if(!r.ok){
+    const raw=await r.text().catch(()=>"");
+    const detail=raw?`: ${raw.slice(0,600)}`:"";
+    throw new Error(`Supabase count ${r.status}${detail}`);
+  }
+  const cr=r.headers.get("content-range")||"";
+  const m=cr.match(/\/(\d+)$/);
+  if(!m)throw new Error(`Supabase count missing content-range: ${cr||"<empty>"}`);
+  return Number(m[1]);
+}
+
+async function loadProductCandidates(env,limit=500){
+  const rows=await sbOptional(env,`/products?select=*&order=source_last_checked_at.asc.nullsfirst&limit=${Math.max(1,Math.min(1000,limit))}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+async function loadBackfillCandidates(env,limit=500){
+  const rows=await sbOptional(env,`/products?select=*&jan_code=not.is.null&order=source_last_checked_at.asc.nullsfirst&limit=${Math.max(1,Math.min(1000,limit))}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+async function loadProductsByJans(env,jans=[]){
+  const clean=[...new Set(jans.map(cleanJan).filter(Boolean))];
+  if(!clean.length)return [];
+  const rows=await sbOptional(env,`/products?select=*&jan_code=in.(${clean.join(",")})&limit=${clean.length*2}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+async function loadProductsBySourceKeys(env,keys=[]){
+  const clean=[...new Set(keys.map(x=>String(x||"").trim()).filter(Boolean))];
+  if(!clean.length)return [];
+  // v3.0.11: one PostgREST IN query instead of one subrequest per key.
+  // This is critical for no-JAN categories such as lottery prizes.
+  const quoted=clean.map(x=>`"${x.replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`).join(",");
+  const rows=await sbOptional(env,`/products?select=*&source_product_key=in.(${encodeURIComponent(quoted)})&limit=${Math.max(2,clean.length*2)}`);
+  return Array.isArray(rows)?rows:[];
+}
+
+function stableHash32(v=""){
+  let h=2166136261;
+  for(const ch of String(v)){h^=ch.codePointAt(0);h=Math.imul(h,16777619)>>>0;}
+  return h.toString(16).padStart(8,"0");
+}
+
+function canonicalCollectibleIdentity(name="",productType="other_collectible"){
+  const cleaned=normalize(cleanOfficialTitle(name))
+    .replace(/^(?:\u9001\u6599\u7121\u6599|\u9001\u6599\u8fbc|\u65b0\u54c1|\u4e2d\u53e4|\u4e88\u7d04|\u5373\u7d0d)\s*/g,"")
+    .replace(/(?:\u767a\u58f2\u6e08|\u5728\u5eab\u54c1|\u4e88\u7d04\u53d7\u4ed8\u4e2d|\u4e88\u7d04\u5546\u54c1|\u4e88\u7d04|\u518d\u8ca9|\u65b0\u54c1|\u4e2d\u53e4|\u672a\u958b\u5c01)/g," ")
+    .replace(/(?:20\d{2}[\/.-]\d{1,2}(?:[\/.-]\d{1,2})?\u767a\u58f2?)/g," ")
+    .replace(/\s+/g," ").trim();
+  return `${productType}|${cleaned}`;
+}
+
+function apparelBrand(name=""){
+  const raw=String(name||"");
+  const up=raw.toUpperCase();
+  const brands=[
+    [["NEW ERA","NEWERA","\u30cb\u30e5\u30fc\u30a8\u30e9"],"NEW ERA"],
+    [["NORTON","\u30ce\u30fc\u30c8\u30f3"],"NORTON"],
+    [["HUF","\u30cf\u30d5"],"HUF"],
+    [["UNIQLO","\u30e6\u30cb\u30af\u30ed"],"UNIQLO"],
+    [["GU","\u30b8\u30fc\u30e6\u30fc"],"GU"],
+    [["GRANIPH","\u30b0\u30e9\u30cb\u30d5"],"GRANIPH"],
+    [["COSPA","\u30b3\u30b9\u30d1"],"COSPA"],
+    [["AVIREX","\u30a2\u30f4\u30a3\u30ec\u30c3\u30af\u30b9"],"AVIREX"]
+  ];
+  for(const [tokens,label] of brands)for(const token of tokens)if(token.charCodeAt(0)>127?raw.includes(token):up.includes(token))return label;
+  return null;
+}
+function apparelCollaboration(name=""){
+  const raw=String(name||"");
+  const compact=raw.normalize("NFKC").toUpperCase().replace(/[\s\u30fb_\-\/]+/g,"");
+  const rules=[
+    [/(?:DORAEMON|\u30c9\u30e9\u3048\u3082\u3093|\u30a2\u30a4\u30e0\u30c9\u30e9\u3048\u3082\u3093)/,"DORAEMON"],
+    [/(?:TOKYOREVENGERS|\u6771\u4eac\u30ea\u30d9\u30f3\u30b8\u30e3\u30fc\u30ba|\u6771\u4eac\u5350\u6703)/,"TOKYO REVENGERS"],
+    [/(?:NARUTO(?:SHIPPUDEN)?|\u30ca\u30eb\u30c8(?:\u75be\u98a8\u4f1d|\u30b7\u30c3\u30d7\u30a6\u30c7\u30f3)?)/,"NARUTO SHIPPUDEN"],
+    [/(?:EVANGELION|\u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3|\u30a8\u30f4\u30a1)/,"EVANGELION"],
+    [/(?:ONEPIECE|\u30ef\u30f3\u30d4\u30fc\u30b9)/,"ONE PIECE"],
+    [/(?:POKEMON|\u30dd\u30b1\u30e2\u30f3)/,"POKEMON"],
+    [/(?:HATSUNEMIKU|\u521d\u97f3\u30df\u30af)/,"HATSUNE MIKU"],
+    [/(?:AVENGERS|\u30a2\u30d9\u30f3\u30b8\u30e3\u30fc\u30ba)/,"AVENGERS"],
+    [/(?:BATMAN|\u30d0\u30c3\u30c8\u30de\u30f3)/,"BATMAN"],
+    [/(?:DEMONSLAYER|\u9b3c\u6ec5\u306e\u5203)/,"DEMON SLAYER"],
+    [/(?:MYHEROACADEMIA|\u50d5\u306e\u30d2\u30fc\u30ed\u30fc\u30a2\u30ab\u30c7\u30df\u30a2|\u30d2\u30ed\u30a2\u30ab)/,"MY HERO ACADEMIA"],
+    [/(?:JUJUTSUKAISEN|\u546a\u8853\u5efb\u6226)/,"JUJUTSU KAISEN"],
+    [/(?:DRAGONBALL|\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb)/,"DRAGON BALL"],
+    [/(?:SANRIO|\u30b5\u30f3\u30ea\u30aa)/,"SANRIO"],
+    [/(?:MICKEY|\u30df\u30c3\u30ad\u30fc)/,"MICKEY"],
+    [/(?:HELLOKITTY|\u30ad\u30c6\u30a3)/,"HELLO KITTY"]
+  ];
+  for(const [re,label] of rules)if(re.test(compact))return label;
+  return null;
+}
+function apparelItemType(name=""){
+  const n=String(name||"").normalize("NFKC");
+  const rules=[
+    [/(?:59FIFTY|\u30ad\u30e3\u30c3\u30d7|\u5e3d\u5b50|\u30d9\u30fc\u30b9\u30dc\u30fc\u30eb\u30ad\u30e3\u30c3\u30d7)/i,"cap"],
+    [/(?:T[\s-]?\u30b7\u30e3\u30c4|\u30c6\u30a3\u30fc\u30b7\u30e3\u30c4|\bTEE\b)/i,"t_shirt"],
+    [/(?:\u30cb\u30c3\u30c8\u30b7\u30e3\u30c4|\u9577\u8896\u30b7\u30e3\u30c4|\u30b7\u30e3\u30c4)/i,"shirt"],
+    [/(?:\u30d1\u30fc\u30ab\u30fc|\u30d5\u30fc\u30c7\u30a3|\bHOODIE\b)/i,"hoodie"],
+    [/(?:\u30b9\u30a6\u30a7\u30c3\u30c8|\u30c8\u30ec\u30fc\u30ca\u30fc)/i,"sweatshirt"],
+    [/(?:\u30b8\u30e3\u30b1\u30c3\u30c8|\u30d6\u30eb\u30be\u30f3|\u30b3\u30fc\u30c8)/i,"outerwear"],
+    [/(?:\u30c4\u30a4\u30eb\u30d1\u30f3\u30c4|\u30ab\u30fc\u30b4\u30d1\u30f3\u30c4|\u30d1\u30f3\u30c4|\u30ba\u30dc\u30f3|\u30b7\u30e7\u30fc\u30c4)/i,"pants"],
+    [/(?:\u30cb\u30c3\u30c8|\u30bb\u30fc\u30bf\u30fc|\u30ab\u30fc\u30c7\u30a3\u30ac\u30f3)/i,"knitwear"],
+    [/(?:\u30ef\u30f3\u30d4\u30fc\u30b9|\u30b9\u30ab\u30fc\u30c8)/i,"dress_skirt"]
+  ];
+  for(const [re,label] of rules)if(re.test(n))return label;
+  return null;
+}
+function apparelStyleCode(name=""){
+  const raw=String(name||"").normalize("NFKC");
+  // Numeric merchandise codes are useful when 7-10 digits, but reject common model/series names.
+  const pureNums=[...raw.matchAll(/(?:^|[^\d])(\d{7,10})(?=$|[^\d])/g)].map(m=>m[1]);
+  for(const n of pureNums){
+    if(/^20\d{6}$/.test(n))continue;
+    return n;
+  }
+  const tokens=raw.match(/\b[A-Z0-9][A-Z0-9_-]{5,15}\b/gi)||[];
+  const deny=new Set(["59FIFTY","9FIFTY","39THIRTY","9FORTY"]);
+  for(const t0 of tokens){
+    const t=t0.toUpperCase().replace(/_/g,"-");
+    if(deny.has(t))continue;
+    if(!/[A-Z]/.test(t)||!/\d/.test(t))continue;
+    if(/^(?:IPHONE|ANDROID)/.test(t))continue;
+    return t;
+  }
+  return null;
+}
+function apparelObservedSize(name=""){
+  let raw=String(name||"").normalize("NFKC").toUpperCase();
+  raw=raw.replace(/\bS\/S\b/g," ").replace(/\bL\/S\b/g," ");
+  const m=raw.match(/(?:^|[\s\/,(])((?:XXS|XS|S|M|L|XL|XXL|XXXL|3L|4L|5L))(?:$|[\s\/,).])/);
+  return m?m[1]:null;
+}
+function normalizeApparelCanonicalName(name=""){
+  return normalize(cleanOfficialTitle(name))
+    .replace(/(?:\u7206\u8cb7|\u9001\u6599\u7121\u6599|\u9001\u6599\u8fbc|\u65b0\u54c1|\u4e2d\u53e4|\u672a\u4f7f\u7528|\u6b63\u898f\u53d6\u6271\u5e97|\u6b63\u898f\u54c1|\u4e88\u7d04|\u5373\u7d0d|\u5728\u5eab\u54c1)/g," ")
+    .replace(/(?:20\d{2}|\d{2})(?:\u5e74)?(?:\u6625\u590f|\u79cb\u51ac|\u6625|\u590f|\u79cb|\u51ac)(?:\u65b0\u4f5c)?/g," ")
+    .replace(/\b(?:SS|AW|FW)\s*2?\d{2}\b/gi," ")
+    .replace(/\bS\/S\b/gi," ")
+    .replace(/\bL\/S\b/gi," ")
+    .replace(/(?:^|[\s\/,(])(?:XXS|XS|S|M|L|XL|XXL|XXXL|3L|4L|5L)(?=$|[\s\/,).])/gi," ")
+    .replace(/\s+/g," ").trim();
+}
+function apparelHasCollabSignal(name=""){
+  const raw=String(name||"");
+  const collab=apparelCollaboration(raw);
+  if(collab)return true;
+  if(/(?:\u30b3\u30e9\u30dc|\u30b3\u30e9\u30dc\u30ec\u30fc\u30b7\u30e7\u30f3|\u30a2\u30cb\u30e1\u30ad\u30e3\u30e9\u30af\u30bf\u30fc|\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba|\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30a2\u30d1\u30ec\u30eb|\u30a2\u30cb\u30e1\u30b3\u30e9\u30dc)/i.test(raw))return true;
+  return false;
+}
+function apparelIdentity(name=""){
+  const brand=apparelBrand(name);
+  const collaboration=apparelCollaboration(name);
+  const item_type=apparelItemType(name);

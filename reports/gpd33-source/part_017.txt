@@ -1,0 +1,300 @@
+    }
+    if(m){
+      const safeM=m.replace(/[%*,()]/g," ").replace(/\s+/g," ").trim().slice(0,100);
+      terms.push(`manufacturer.ilike.*${safeM}*`);
+      terms.push(`brand.ilike.*${safeM}*`);
+    }
+    if(terms.length){
+      const found=await sbOptional(env,`/parts_catalog?select=*&or=${encodeURIComponent(`(${terms.join(",")})`)}&limit=${Math.max(lim,50)}`);
+      if(Array.isArray(found))rows.push(...found);
+    }
+  }
+
+  const uniq=new Map();
+  for(const r of rows)if(r?.id&&!uniq.has(String(r.id)))uniq.set(String(r.id),r);
+  const ranked=[...uniq.values()].map(r=>({row:r,score:partSearchScore(r,q,pn,m)})).sort((a,b)=>b.score-a.score);
+  return ranked.slice(0,lim).map(x=>({...partRowShape(x.row),match_score:x.score}));
+}
+
+async function getPartRelations(env,partId){
+  const rows=await sbOptional(env,`/parts_relations?select=*&source_part_id=eq.${encodeURIComponent(String(partId))}&order=confidence.desc.nullslast&limit=100`);
+  if(!Array.isArray(rows)||!rows.length)return [];
+  const ids=[...new Set(rows.map(r=>String(r.target_part_id||"")).filter(Boolean))];
+  let targets=[];
+  if(ids.length){
+    const quoted=ids.map(x=>`"${x.replace(/"/g,'\\"')}"`).join(",");
+    const found=await sbOptional(env,`/parts_catalog?select=*&id=in.(${encodeURIComponent(quoted)})&limit=${ids.length}`);
+    targets=Array.isArray(found)?found:[];
+  }
+  const byId=new Map(targets.map(x=>[String(x.id),x]));
+  return rows.map(r=>({
+    relation_type:r.relation_type,
+    target_part:partRowShape(byId.get(String(r.target_part_id)))||{id:r.target_part_id},
+    confidence:Number(r.confidence??0),
+    verified:!!r.verified,
+    evidence_count:Number(r.evidence_count??0),
+    evidence_note:r.evidence_note||null,
+    source_url:r.source_url||null,
+    checked_at:r.checked_at||null
+  }));
+}
+
+async function getPartRelationCandidates(env,part){
+  const manufacturer=String(part?.manufacturer||"").trim();
+  const pn=normalizePartNumber(part?.part_number||part?.normalized_part_number||"");
+  if(!manufacturer||!pn)return [];
+  const rows=await sbOptional(env,`/parts_relation_candidates?select=*&manufacturer=eq.${encodeURIComponent(manufacturer)}&part_number=eq.${encodeURIComponent(pn)}&order=parser_confidence.desc.nullslast,observed_at.desc&limit=50`);
+  if(!Array.isArray(rows))return [];
+  return rows.map(r=>({
+    source_part_number:r.source_part_number||r.part_number||pn,
+    target_part_number:r.target_part_number||null,
+    relation_hint:r.relation_hint||null,
+    relation_type_candidate:r.relation_type_candidate||null,
+    verified:false,
+    parser_confidence:r.parser_confidence!=null?Number(r.parser_confidence):null,
+    compatibility_warning:!!r.compatibility_warning,
+    incompatibility_notes:Array.isArray(r.incompatibility_notes)?r.incompatibility_notes:[],
+    evidence_type:r.evidence_type||null,
+    evidence_excerpt:r.evidence_excerpt||null,
+    source_title:r.source_title||null,
+    source_url:r.source_url||null,
+    observed_at:r.observed_at||null
+  }));
+}
+
+async function getPartDocuments(env,partId){
+  const rows=await sbOptional(env,`/parts_documents?select=*&part_id=eq.${encodeURIComponent(String(partId))}&order=published_at.desc.nullslast&limit=50`);
+  if(!Array.isArray(rows))return [];
+  return rows.map(r=>({
+    document_type:r.document_type||"reference",
+    title:r.title||null,
+    url:r.url||null,
+    source_domain:r.source_domain||null,
+    official:!!r.official,
+    published_at:r.published_at||null,
+    checked_at:r.checked_at||null,
+    evidence_scope:r.evidence_scope||null
+  }));
+}
+
+async function getPartLocalOffers(env,partId){
+  const rows=await sbOptional(env,`/parts_offers?select=*&part_id=eq.${encodeURIComponent(String(partId))}&order=observed_at.desc&limit=100`);
+  if(!Array.isArray(rows))return [];
+  const latestByMerchant=new Map();
+  for(const r of rows){
+    const key=String(r.merchant||r.source||r.url||crypto.randomUUID());
+    if(!latestByMerchant.has(key))latestByMerchant.set(key,r);
+  }
+  return [...latestByMerchant.values()].map(r=>({
+    source:r.source||null,
+    merchant:r.merchant||null,
+    price:r.price!=null?Number(r.price):null,
+    currency:r.currency||null,
+    condition:r.condition||null,
+    stock_status:r.stock_status||null,
+    url:r.url||null,
+    observed_at:r.observed_at||null
+  }));
+}
+
+async function optionalPartMarketSearch(env,part){
+  const q=[part?.manufacturer,part?.part_number,part?.name].filter(Boolean).join(" ").trim();
+  if(!q)return {offers:[],provider_errors:[]};
+  const out=await genericCommerceSearch(env,{
+    domain:"mro_and_industrial_components",
+    query:q,
+    mpn:part?.part_number||"",
+    limit:12
+  });
+  if(!out?.ok)return {offers:[],provider_errors:out?.provider_errors||[]};
+  return {offers:Array.isArray(out.offers)?out.offers:[],provider_errors:out.provider_errors||[]};
+}
+
+function relationBuckets(relations=[]){
+  const keep=(t)=>relations.filter(r=>String(r.relation_type||"").toLowerCase()===t);
+  return {
+    successors:keep("successor"),
+    verified_substitutes:relations.filter(r=>["substitute","compatible"].includes(String(r.relation_type||"").toLowerCase())&&r.verified&&Number(r.confidence)>=0.8),
+    unverified_candidates:relations.filter(r=>["substitute","compatible"].includes(String(r.relation_type||"").toLowerCase())&&(!r.verified||Number(r.confidence)<0.8)),
+    incompatible:keep("incompatible"),
+    used_in:keep("used_in")
+  };
+}
+
+function partDecision(part,buckets){
+  const lifecycle=String(part?.lifecycle_status||"unknown").toLowerCase();
+  if(buckets.successors.length)return {
+    action:"CHECK_SUCCESSOR",
+    reason:lifecycle==="discontinued"?"Original part is discontinued and a successor is recorded.":"A successor relationship is recorded.",
+    target:buckets.successors[0].target_part
+  };
+  if(buckets.verified_substitutes.length)return {
+    action:"VERIFIED_SUBSTITUTE_AVAILABLE",
+    reason:"A verified substitute/compatibility relationship exists in the evidence table.",
+    target:buckets.verified_substitutes[0].target_part
+  };
+  if(lifecycle==="discontinued")return {
+    action:"SOURCE_ORIGINAL_OR_VERIFY_SUBSTITUTE",
+    reason:"Part is marked discontinued and no verified successor/substitute is recorded.",
+    target:null
+  };
+  return {
+    action:"BUY_EXACT_OR_VERIFY_BEFORE_SUBSTITUTION",
+    reason:"No verified compatibility relationship is recorded; title or dimensional similarity is not treated as compatibility proof.",
+    target:null
+  };
+}
+
+async function resolvePart(env,{query="",part_number="",manufacturer=""}={}){
+  const results=await searchPartsCatalog(env,{query,part_number,manufacturer,limit:12});
+  if(!results.length)return {ok:false,status:404,error:"part_not_found",results:[]};
+  const first=results[0],second=results[1];
+  const exact=part_number&&normalizePartNumber(first.part_number)===normalizePartNumber(part_number);
+  const clearLead=!second||Number(first.match_score||0)-Number(second.match_score||0)>=15;
+  if(!exact&&!clearLead){
+    return {ok:false,status:409,error:"part_disambiguation_required",results:results.slice(0,8)};
+  }
+  return {ok:true,part:first,alternatives:results.slice(1,6),resolution:exact?"exact_part_number":"ranked_match"};
+}
+
+async function buildPartsIntelligence(env,part){
+  const relations=await getPartRelations(env,part.id);
+  const relationCandidates=await getPartRelationCandidates(env,part);
+  const documents=await getPartDocuments(env,part.id);
+  const localOffers=await getPartLocalOffers(env,part.id);
+  const market=await optionalPartMarketSearch(env,part);
+  const merchantMarket=await searchMerchantOffers(env,{part_number:part.part_number||part.normalized_part_number||"",manufacturer:part.manufacturer||"",limit:20});
+  const buckets=relationBuckets(relations);
+  const decision=partDecision(part,buckets);
+
+  return {
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    part,
+    lifecycle:{
+      status:part.lifecycle_status||"unknown",
+      discontinued_at:part.discontinued_at||null,
+      successor_part_number:part.successor_part_number||null
+    },
+    compatibility_policy:{
+      inferred_from_title_similarity:false,
+      inferred_from_dimension_similarity:false,
+      verified_relation_required_for_substitute_recommendation:true
+    },
+    relations:buckets,
+    evidence_gated_relation_candidates:{
+      policy:"unverified_candidates_are_evidence_only_and_must_not_be_treated_as_verified_compatibility",
+      count:relationCandidates.length,
+      items:relationCandidates
+    },
+    official_documents:documents,
+    market:{
+      local_observations:localOffers,
+      optional_live_market_offers:market.offers,
+      provider_errors:market.provider_errors,
+      agent_ready_merchant_market:merchantMarket?.ok?merchantMarket:{ok:false,error:merchantMarket?.error||"merchant_market_unavailable"}
+    },
+    decision,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function partsSearchApi(env,url){
+  const query=url.searchParams.get("query")||"";
+  const part_number=url.searchParams.get("part_number")||url.searchParams.get("mpn")||"";
+  const manufacturer=url.searchParams.get("manufacturer")||"";
+  const limit=url.searchParams.get("limit")||20;
+  const results=await searchPartsCatalog(env,{query,part_number,manufacturer,limit});
+  return {
+    service:"PARTS INTELLIGENCE",
+    version:VERSION,
+    count:results.length,
+    results,
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function partsIntelligenceApi(request,env,url,ctx=null){
+  const query=url.searchParams.get("query")||"";
+  const part_number=url.searchParams.get("part_number")||url.searchParams.get("mpn")||"";
+  const manufacturer=url.searchParams.get("manufacturer")||"";
+  if(!String(query||part_number).trim())return json({service:"PARTS INTELLIGENCE",version:VERSION,error:"query_or_part_number_required",charged:false},400);
+  const resolved=await resolvePart(env,{query,part_number,manufacturer});
+  if(!resolved.ok)return json({service:"PARTS INTELLIGENCE",version:VERSION,charged:false,...resolved},resolved.status||400);
+  const part=resolved.part;
+  return x402Gate(request,env,PRICES.partsIntelligence,"PARTS INTELLIGENCE full part lifecycle compatibility replacement and sourcing intelligence",async()=>{
+    const out=await buildPartsIntelligence(env,part);
+    deferTelemetry(ctx,logRequestStage(env,request,"parts_intelligence_served",{product_id:part.id,metadata:{part_number:part.part_number||null,manufacturer:part.manufacturer||null,resolution:resolved.resolution}}));
+    return {...out,resolution:resolved.resolution,alternatives:resolved.alternatives};
+  },ctx);
+}
+
+async function upsertPartAdmin(env,body){
+  const row={
+    id:body.id||crypto.randomUUID(),
+    manufacturer:String(body.manufacturer||"").trim()||null,
+    brand:String(body.brand||"").trim()||null,
+    part_number:String(body.part_number||"").trim()||null,
+    normalized_part_number:normalizePartNumber(body.part_number||body.normalized_part_number||""),
+    name:String(body.name||"").trim()||null,
+    category:String(body.category||"").trim()||null,
+    lifecycle_status:String(body.lifecycle_status||"unknown").trim().toLowerCase(),
+    discontinued_at:body.discontinued_at||null,
+    successor_part_number:String(body.successor_part_number||"").trim()||null,
+    aliases_text:Array.isArray(body.aliases)?body.aliases.join(" | "):(body.aliases_text||null),
+    specifications:body.specifications||{},
+    dimensions:body.dimensions||{},
+    electrical:body.electrical||{},
+    mechanical:body.mechanical||{},
+    notes:body.notes||null,
+    official_url:body.official_url||null,
+    source_confidence:Number(body.source_confidence??0.5),
+    source_last_checked_at:new Date().toISOString(),
+    updated_at:new Date().toISOString()
+  };
+  if(!row.part_number&&!row.name)throw new Error("part_number_or_name_required");
+  await sb(env,"/parts_catalog?on_conflict=manufacturer,normalized_part_number",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=representation"},body:JSON.stringify(row)});
+  return {ok:true,service:"PARTS INTELLIGENCE",version:VERSION,part:row};
+}
+
+
+/* =========================================================
+   MERCHANT INTELLIGENCE v1.0.0
+   Seller-side agent commerce layer for PARTS INTELLIGENCE.
+   - Merchants publish exact MPN inventory, fulfillment and trust evidence.
+   - Ranking is evidence-based; paid placement is not part of the score.
+   - Merchant write access uses per-merchant API keys hashed in Supabase.
+========================================================= */
+
+async function sha256HexText(v=""){
+  const data=new TextEncoder().encode(String(v||""));
+  const digest=await crypto.subtle.digest("SHA-256",data);
+  return [...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+function clamp100(v){return Math.max(0,Math.min(100,Math.round(Number(v)||0)));}
+function merchantPublicShape(m){
+  if(!m)return null;
+  return {id:m.id,slug:m.slug,name:m.name,website_url:m.website_url||null,country_code:m.country_code||null,status:m.status||"active",verified:!!m.verified,agent_description:m.agent_description||null,capabilities:m.capabilities||{},last_feed_at:m.last_feed_at||null,updated_at:m.updated_at||null};
+}
+function merchantOfferShape(o){
+  if(!o)return null;
+  const meta=o.metadata&&typeof o.metadata==="object"&&!Array.isArray(o.metadata)?o.metadata:{};
+  return {id:o.id,merchant_id:o.merchant_id,merchant_sku:o.merchant_sku,part_id:o.part_id||null,manufacturer:o.manufacturer||null,part_number:o.part_number||null,normalized_part_number:o.normalized_part_number||normalizePartNumber(o.part_number||""),title:o.title||null,mpn:o.mpn||o.part_number||null,gtin:o.gtin||null,condition:o.condition||"new",price:o.price!=null?Number(o.price):null,currency:o.currency||null,stock_quantity:o.stock_quantity!=null?Number(o.stock_quantity):null,stock_status:o.stock_status||"unknown",lead_time_days:o.lead_time_days!=null?Number(o.lead_time_days):null,ships_to:Array.isArray(o.ships_to)?o.ships_to:[],shipping_cost:o.shipping_cost!=null?Number(o.shipping_cost):null,product_url:o.product_url||null,checkout_url:o.checkout_url||null,datasheet_url:o.datasheet_url||null,return_policy_url:o.return_policy_url||null,authorized_distributor:!!o.authorized_distributor,authenticity_evidence_url:o.authenticity_evidence_url||null,compatibility_claim:o.compatibility_claim||null,compatibility_evidence_url:o.compatibility_evidence_url||null,active:o.active!==false,source_updated_at:o.source_updated_at||null,observed_at:o.observed_at||null,updated_at:o.updated_at||null,global_fulfillment:{ships_from_country:String(meta.ships_from_country||"").toUpperCase()||null,tax_included:meta.tax_included===true?true:meta.tax_included===false?false:null,duty_included:meta.duty_included===true?true:meta.duty_included===false?false:null,minimum_order_quantity:Number.isFinite(Number(meta.minimum_order_quantity))?Number(meta.minimum_order_quantity):null,price_valid_until:meta.price_valid_until||null,fulfillment_evidence_url:meta.fulfillment_evidence_url||null,last_verified_at:meta.last_verified_at||o.source_updated_at||o.observed_at||null},commercial_terms:{warranty_url:meta.warranty_url||null,return_window_days:Number.isFinite(Number(meta.return_window_days))?Number(meta.return_window_days):null},metadata:meta};
+}
+function merchantOfferScore(offer,merchant,buyerCountry=""){
+  const o=merchantOfferShape(offer),m=merchantPublicShape(merchant)||{};
+  let discover=0,trust=0,ready=0,compat=0,fulfill=0;
+  const issues=[],improvements=[];
+  if(o.manufacturer)discover+=15; else {issues.push("manufacturer_missing");improvements.push("Add the exact manufacturer name.");}
+  if(o.part_number&&o.normalized_part_number)discover+=25; else {issues.push("mpn_missing");improvements.push("Add the exact manufacturer part number (MPN).");}
+  if(o.merchant_sku)discover+=10;
+  if(o.title)discover+=10; else improvements.push("Add a human-readable product title.");
+  if(o.product_url)discover+=15; else {issues.push("product_url_missing");improvements.push("Add a stable product URL that an agent can hand off to.");}
+  if(o.gtin)discover+=10; else improvements.push("Add GTIN/JAN/EAN when available.");
+  if(o.datasheet_url)discover+=15; else improvements.push("Link the official datasheet or manufacturer document.");
+
+  if(m.verified)trust+=30; else {issues.push("merchant_not_verified");improvements.push("Complete merchant verification.");}
+  if(o.authorized_distributor){
+    if(m.verified||o.authenticity_evidence_url)trust+=25;
+    else {trust+=5;issues.push("authorized_status_unsubstantiated");improvements.push("Substantiate authorized-distributor status with merchant verification or supply-chain evidence.");}
+  }else improvements.push("Declare authorized-distributor status only when it can be substantiated.");

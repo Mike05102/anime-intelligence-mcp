@@ -1,0 +1,300 @@
+    }
+  }
+  offers.sort((a,b)=>(a.total_price??Number.MAX_SAFE_INTEGER)-(b.total_price??Number.MAX_SAFE_INTEGER));
+  return {ok:true,service:"AI PURCHASE INTELLIGENCE",version:VERSION,domain:"travel",vertical:"accommodation",provider:"expedia_rapid",count:offers.length,recommended_offer:offers[0]||null,offers:offers.slice(0,30),generated_at:new Date().toISOString()};
+}
+
+function travelProviderRegistry(env){
+  return {
+    strategy:"multi_provider_by_vertical_with_fallback_slots",
+    providers:[
+      {
+        id:"booking",
+        name:"Booking.com Demand API",
+        configured:bookingDemandConfigured(env),
+        implementation:"active",
+        verticals:["accommodation","car","attraction","transfer"],
+        role:"primary_accommodation_and_ground_inventory"
+      },
+      {
+        id:"duffel",
+        name:"Duffel",
+        configured:duffelConfigured(env),
+        implementation:"active",
+        verticals:["flight"],
+        role:"primary_flight_inventory"
+      },
+      {
+        id:"expedia_rapid",
+        name:"Expedia Rapid",
+        configured:expediaRapidConfigured(env),
+        implementation:"active_property_id_availability",
+        verticals:["accommodation"],
+        role:"secondary_accommodation_provider"
+      },
+      {
+        id:"amadeus",
+        name:"Amadeus",
+        configured:amadeusConfigured(env),
+        implementation:"adapter_slot",
+        verticals:["flight","accommodation","car","transfer"],
+        role:"secondary_global_travel_provider"
+      }
+    ]
+  };
+}
+
+function duffelHeaders(env){
+  return {
+    authorization:"Bearer "+String(env.DUFFEL_ACCESS_TOKEN||"").trim(),
+    "duffel-version":"v2",
+    accept:"application/json",
+    "content-type":"application/json",
+    "accept-encoding":"gzip"
+  };
+}
+
+async function duffelRequest(env,path,{method="GET",body=null}={}){
+  if(!duffelConfigured(env)){
+    const e=new Error("duffel_not_configured");
+    e.code="DUFFEL_NOT_CONFIGURED";
+    throw e;
+  }
+  const r=await fetch(DUFFEL_API_BASE+path,{
+    method,
+    headers:duffelHeaders(env),
+    body:body==null?undefined:JSON.stringify(body)
+  });
+  const raw=await r.text();
+  let data=null;
+  try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,8000)};}
+  if(!r.ok){
+    const e=new Error("Duffel "+r.status+": "+raw.slice(0,2000));
+    e.status=r.status;
+    e.body=data;
+    throw e;
+  }
+  return data;
+}
+
+function normalizeDuffelFlightOffer(o,index=0){
+  const amount=Number(o?.total_amount);
+  const slices=Array.isArray(o?.slices)?o.slices:[];
+  const segments=slices.flatMap(x=>Array.isArray(x?.segments)?x.segments:[]);
+  const carriers=[...new Set(segments.map(x=>x?.operating_carrier?.name||x?.marketing_carrier?.name).filter(Boolean))];
+  const stops=Math.max(0,segments.length-slices.length);
+  return {
+    rank:index+1,
+    provider:"duffel",
+    id:String(o?.id||"").trim()||null,
+    total_price:Number.isFinite(amount)?amount:null,
+    currency:String(o?.total_currency||"").toUpperCase()||null,
+    total_duration:String(o?.total_duration||"").trim()||null,
+    stops,
+    carriers,
+    expires_at:o?.expires_at||null,
+    passenger_identity_documents_required:!!o?.passenger_identity_documents_required,
+    raw:o
+  };
+}
+
+function scoreFlightOffer(o){
+  let score=0;
+  if(o.total_price!=null)score+=Math.max(0,65-Math.log10(Math.max(1,o.total_price))*9);
+  if(Number.isFinite(o.stops))score+=Math.max(0,20-o.stops*7);
+  if(o.expires_at)score+=5;
+  if(o.carriers?.length)score+=5;
+  if(o.id)score+=5;
+  return Number(score.toFixed(4));
+}
+
+function validateFlightSearch(body){
+  const origin=String(body?.origin||body?.origin_iata||"").trim().toUpperCase();
+  const destination=String(body?.destination||body?.destination_iata||"").trim().toUpperCase();
+  const departureDate=String(body?.departure_date||"").trim();
+  const returnDate=String(body?.return_date||"").trim();
+  if(!/^[A-Z]{3}$/.test(origin))return {ok:false,error:"origin_iata_required"};
+  if(!/^[A-Z]{3}$/.test(destination))return {ok:false,error:"destination_iata_required"};
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(departureDate))return {ok:false,error:"departure_date_required_yyyy_mm_dd"};
+  if(returnDate&&!/^\d{4}-\d{2}-\d{2}$/.test(returnDate))return {ok:false,error:"return_date_must_be_yyyy_mm_dd"};
+  return {ok:true,origin,destination,departureDate,returnDate};
+}
+
+async function duffelFlightSearch(env,body){
+  const v=validateFlightSearch(body);
+  if(!v.ok)return {ok:false,status:400,error:v.error,charged:false};
+  if(!duffelConfigured(env)){
+    return {ok:false,status:503,charged:false,error:"flight_provider_not_configured",required:["DUFFEL_ACCESS_TOKEN"],provider:"duffel",version:VERSION};
+  }
+
+  const slices=[{origin:v.origin,destination:v.destination,departure_date:v.departureDate}];
+  if(v.returnDate)slices.push({origin:v.destination,destination:v.origin,departure_date:v.returnDate});
+
+  const adults=Math.max(1,Math.min(9,Number(body?.adults||1)||1));
+  const children=Math.max(0,Math.min(9,Number(body?.children||0)||0));
+  const passengers=[
+    ...Array.from({length:adults},()=>({type:"adult"})),
+    ...Array.from({length:children},()=>({age:Math.max(2,Math.min(17,Number(body?.child_age||10)||10))}))
+  ];
+  const cabinRaw=String(body?.cabin_class||"economy").toLowerCase();
+  const cabin=["first","business","premium_economy","economy"].includes(cabinRaw)?cabinRaw:"economy";
+  const maxConnections=body?.max_connections==null?1:Math.max(0,Math.min(3,Number(body.max_connections)||0));
+
+  const payload=await duffelRequest(env,"/air/offer_requests?return_offers=true&supplier_timeout=10000",{
+    method:"POST",
+    body:{data:{slices,passengers,cabin_class:cabin,max_connections:maxConnections}}
+  });
+  const root=payload?.data||payload;
+  const offers=Array.isArray(root?.offers)?root.offers:[];
+  const ranked=offers
+    .map((o,i)=>normalizeDuffelFlightOffer(o,i))
+    .map(x=>({...x,optimization_score:scoreFlightOffer(x)}))
+    .sort((a,b)=>b.optimization_score-a.optimization_score)
+    .slice(0,Math.max(1,Math.min(30,Number(body?.limit||10)||10)))
+    .map((x,i)=>({...x,rank:i+1}));
+
+  return {
+    ok:true,
+    service:"AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    domain:"travel",
+    vertical:"flight",
+    provider:"duffel",
+    provider_version:"v2",
+    request:{
+      origin:v.origin,destination:v.destination,departure_date:v.departureDate,
+      return_date:v.returnDate||null,adults,children,cabin_class:cabin,max_connections:maxConnections
+    },
+    count:ranked.length,
+    recommended_offer:ranked[0]||null,
+    offers:ranked,
+    offer_request_id:root?.id||null,
+    generated_at:new Date().toISOString()
+  };
+}
+
+function providerConcentrationWarning(env,vertical){
+  const v=String(vertical||"").toLowerCase();
+  if(v==="flight"||v==="flights"){
+    return duffelConfigured(env)&&!amadeusConfigured(env)?"single_live_flight_provider":null;
+  }
+  if(["accommodation","hotel","hotels"].includes(v)){
+    return bookingDemandConfigured(env)&&!expediaRapidConfigured(env)&&!amadeusConfigured(env)?"single_live_accommodation_provider":null;
+  }
+  return null;
+}
+
+function bookingDemandConfigured(env){
+  return !!String(env.BOOKING_DEMAND_TOKEN||"").trim()&&!!String(env.BOOKING_AFFILIATE_ID||"").trim();
+}
+
+function bookingDemandBase(env){
+  return String(env.BOOKING_DEMAND_SANDBOX||"").trim()==="1"
+    ?BOOKING_DEMAND_SANDBOX_BASE
+    :BOOKING_DEMAND_PROD_BASE;
+}
+
+function bookingDemandHeaders(env){
+  return {
+    authorization:"Bearer "+String(env.BOOKING_DEMAND_TOKEN||"").trim(),
+    "x-affiliate-id":String(env.BOOKING_AFFILIATE_ID||"").trim(),
+    "content-type":"application/json",
+    accept:"application/json"
+  };
+}
+
+async function bookingDemandPost(env,path,body,{beta=false}={}){
+  if(!bookingDemandConfigured(env)){
+    const e=new Error("booking_demand_not_configured");
+    e.code="BOOKING_DEMAND_NOT_CONFIGURED";
+    throw e;
+  }
+  const base=beta?BOOKING_DEMAND_BETA_BASE:bookingDemandBase(env);
+  const r=await fetch(base+path,{
+    method:"POST",
+    headers:bookingDemandHeaders(env),
+    body:JSON.stringify(body||{})
+  });
+  const raw=await r.text();
+  let data=null;
+  try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,8000)};}
+  if(!r.ok){
+    const e=new Error("Booking Demand "+r.status+": "+raw.slice(0,2000));
+    e.status=r.status;
+    e.body=data;
+    throw e;
+  }
+  return data;
+}
+
+function travelArray(payload){
+  if(Array.isArray(payload))return payload;
+  if(Array.isArray(payload?.data))return payload.data;
+  if(Array.isArray(payload?.results))return payload.results;
+  if(Array.isArray(payload?.data?.results))return payload.data.results;
+  return [];
+}
+
+function travelPriceCandidates(x){
+  const out=[];
+  const walk=(v,depth=0)=>{
+    if(depth>4||v==null)return;
+    if(Array.isArray(v)){for(const y of v.slice(0,20))walk(y,depth+1);return;}
+    if(typeof v!=="object")return;
+    for(const [k,val] of Object.entries(v)){
+      const key=String(k).toLowerCase();
+      if(typeof val==="number"&&Number.isFinite(val)&&val>=0&&/(price|amount|total|display|book|value)/.test(key)){
+        out.push(val);
+      }else if(val&&typeof val==="object"){
+        walk(val,depth+1);
+      }
+    }
+  };
+  walk(x);
+  return out.filter(n=>n>0);
+}
+
+function travelCurrency(x){
+  const seen=[];
+  const walk=(v,depth=0)=>{
+    if(depth>4||v==null||seen.length)return;
+    if(Array.isArray(v)){for(const y of v.slice(0,20))walk(y,depth+1);return;}
+    if(typeof v!=="object")return;
+    for(const [k,val] of Object.entries(v)){
+      if(seen.length)break;
+      const key=String(k).toLowerCase();
+      if(typeof val==="string"&&/(currency)/.test(key)&&/^[A-Z]{3}$/.test(val.toUpperCase()))seen.push(val.toUpperCase());
+      else if(val&&typeof val==="object")walk(val,depth+1);
+    }
+  };
+  walk(x);
+  return seen[0]||null;
+}
+
+function travelUrl(x){
+  const candidates=[
+    x?.url,x?.web_url,x?.deep_link,x?.deeplink,x?.booking_url,x?.redirect_url,
+    x?.links?.web,x?.links?.booking,x?.links?.redirect,
+    x?.products?.[0]?.url,x?.products?.[0]?.deep_link
+  ].filter(Boolean);
+  return candidates.find(v=>/^https?:\/\//i.test(String(v)))||null;
+}
+
+function travelReviewScore(x){
+  const vals=[
+    x?.review_score,x?.reviewScore,x?.rating,x?.score,
+    x?.reviews?.score,x?.review?.score,x?.rating?.score
+  ];
+  for(const v of vals){
+    const n=Number(v);
+    if(Number.isFinite(n)&&n>=0)return n;
+  }
+  return null;
+}
+
+function travelName(x){
+  return String(
+    x?.name||x?.title||x?.accommodation?.name||x?.property?.name||
+    x?.vehicle?.name||x?.attraction?.name||x?.supplier?.name||x?.id||""
+  ).trim()||null;
+}

@@ -1,0 +1,300 @@
+  const enqueued=await enqueueLinks(env,source,children,Number(item.depth||0)+1);
+  return {status:"done",url:item.url,official_url:page.official_url||page.url,transport:page.transport||"direct",direct_error:page.direct_error||null,is_pdf:!!page.isPdf,pointer_only:!!page.pointer_only,body_fetched:page.body_fetched!==false,title,lifecycle,models:models.length,upserted,documents:docs,relation_hints:relationHints,strong_relation_pairs:strongPairs.length,table_relation_pairs:tablePairs.length,engineering_metrics_found:catalogMetrics.length,engineering_metrics_saved:catalogMetrics.length&&models.length<=2?catalogMetrics.length:0,enqueued,pdf_relation_parse_attempted:pdfRelationParseAttempted,pdf_relation_parse_ok:pdfRelationParseOk,pdf_relation_parse_error:pdfRelationParseError};
+}
+
+async function markDone(env,item,result){
+  return sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(item.id)}`,{method:"PATCH",body:JSON.stringify({status:"done",processed_at:new Date().toISOString(),last_error:null,metadata:result,updated_at:new Date().toISOString()})});
+}
+async function markFailure(env,item,e){
+  const attempts=Number(item.attempts||0)+1;
+  const error=safeError(e);
+  const policy=retryPolicy(error,attempts);
+  const next=new Date(Date.now()+policy.delay_hours*3600000).toISOString();
+  return sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(item.id)}`,{method:"PATCH",body:JSON.stringify({status:policy.status,attempts,next_attempt_at:next,last_error:`${policy.reason}:${error}`,updated_at:new Date().toISOString()})});
+}
+
+async function bootstrapDeepWatchWindow(env,window){
+  const now=new Date().toISOString();
+  for(const source of (window||[]).slice(0,Math.max(1,DEEP_BOOTSTRAP_PER_RUN))){
+    const seed=(source.seeds||[])[0];
+    if(!seed)continue;
+    const got=await sbOptional(env,`/parts_collector_queue?select=*&source_slug=eq.${encodeURIComponent(source.slug)}&url=eq.${encodeURIComponent(seed)}&limit=1`);
+    const existing=Array.isArray(got)&&got.length?got[0]:null;
+    if(existing){
+      if(isDeepWatchDepth(existing.depth))continue;
+      const row={...existing,status:"pending",depth:-1,attempts:0,next_attempt_at:now,last_error:null,updated_at:now};
+      await sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(existing.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({status:"pending",depth:-1,attempts:0,next_attempt_at:now,last_error:null,updated_at:now})});
+      return {used:true,source_slug:source.slug,url:seed,row};
+    }
+    const row={id:crypto.randomUUID(),source_slug:source.slug,url:seed,status:"pending",depth:-1,attempts:0,next_attempt_at:now,created_at:now,updated_at:now};
+    await sbOptional(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(row)});
+    return {used:true,source_slug:source.slug,url:seed,row};
+  }
+  return {used:false};
+}
+
+async function refreshStaleWatchRows(env){
+  const enabled=OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false);
+  if(!enabled.length)return 0;
+  const slugs=enabled.map(x=>x.slug).join(",");
+  const cutoff=new Date(Date.now()-7*86400000).toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id,source_slug,status,processed_at&source_slug=in.(${encodeURIComponent(slugs)})&status=eq.done&processed_at=lt.${encodeURIComponent(cutoff)}&order=processed_at.asc&limit=8`);
+  let n=0;
+  for(const r of Array.isArray(rows)?rows:[]){await sbOptional(env,`/parts_collector_queue?id=eq.${encodeURIComponent(r.id)}`,{method:"PATCH",body:JSON.stringify({status:"pending",next_attempt_at:new Date().toISOString(),updated_at:new Date().toISOString()})});n++;}
+  return n;
+}
+
+async function runCollector(env,limit=MAX_PAGES_PER_RUN){
+  const nowIso=new Date().toISOString();
+  const preflight=await collectorDbPreflight(env);
+  if(!preflight.ok){
+    return {ok:false,service:SERVICE,version:VERSION,build_id:BUILD_ID,trigger:"collector_run",started_at:nowIso,finished_at:new Date().toISOString(),mode:"database_unavailable",selected_rows:0,processed:[],errors:[{stage:"db_preflight",error:preflight.error}],database_preflight:preflight};
+  }
+  const tick=Math.floor(Date.now()/600000);
+  const merchantBacklogAtStart=await activeMerchantQueueBacklog(env,MERCHANT_QUEUE_BUDGET+1);
+  // v7: saturated Merchant queue becomes a bounded drain priority instead of a permanent seeding pause.
+  const forceMerchantDrain=merchantBacklogAtStart!=null&&merchantBacklogAtStart>=MERCHANT_QUEUE_BUDGET;
+  const mode=forceMerchantDrain?"offer":((tick%6===0||tick%6===3)?"offer":((tick%6===2||tick%6===5)?"manufacturer_watch":"catalog"));
+  const offerSlot=mode==="offer",watchSlot=mode==="manufacturer_watch";
+  const requested=Math.max(1,Math.min(2,Number(limit)||MAX_PAGES_PER_RUN));
+  const dailySeed=tick%144===0;
+  const seedReport=dailySeed?await seedQueue(env):{ok:true,seeded:0,skipped:true,reason:"daily_seed_not_due"};
+  let rows=[];let dynamicMerchantSeed={parts_sampled:0,queries_seeded:0,paused:false};let selectedWindow=[];let watchDeepBootstrap={used:false};
+
+  if(offerSlot){
+    const disabledQueueCleanup=await quarantineDisabledMerchantQueue(env);
+    const enabled=OFFER_SOURCES.filter(x=>x.collection_enabled!==false).sort((a,b)=>a.slug.localeCompare(b.slug));
+    const window=rotateWindow(enabled,Math.floor(tick/3),OFFER_WINDOW_SIZE);selectedWindow=window.map(x=>x.slug);
+    dynamicMerchantSeed=await seedDynamicMerchantQueries(env,[...new Set(window.map(x=>x.manufacturer))]);
+    dynamicMerchantSeed={...dynamicMerchantSeed,disabled_queue_cleanup:disabledQueueCleanup};
+    const seededSlugs=Array.isArray(dynamicMerchantSeed.seeded_source_slugs)?dynamicMerchantSeed.seeded_source_slugs:[];
+    const querySources=[...window,...seededSlugs.map(slug=>OFFER_SOURCES.find(x=>x.slug===slug)).filter(Boolean)];
+    const uniqueQuerySources=[...new Map(querySources.map(x=>[x.slug,x])).values()];
+    if(uniqueQuerySources.length){
+      const path=`/parts_collector_queue?select=*&source_slug=in.(${encodeURIComponent(sourceInFilter(uniqueQuerySources))})&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,created_at.asc&limit=${MAX_OFFER_ITEMS_PER_RUN}`;
+      const got=await sbOptional(env,path);rows=Array.isArray(got)?got:[];
+    }
+    // Deadlock prevention: if the rotating window has no due rows, drain the oldest
+    // due Merchant queue rows globally instead of leaving backlog stranded outside
+    // the current window. New seeding may remain paused while this backlog drains.
+    if(rows.length===0){
+      const omronSlugs=OFFER_SOURCES.filter(x=>x.manufacturer==="OMRON").map(x=>x.slug);
+      const omit=omronSlugs.length?`&source_slug=not.in.(${encodeURIComponent(omronSlugs.map(x=>`"${x}"`).join(","))})`:"";
+      const nonOmronPath=`/parts_collector_queue?select=*&source_slug=like.offer-*${omit}&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,next_attempt_at.asc,created_at.asc&limit=${MERCHANT_GLOBAL_DRAIN_LIMIT}`;
+      const first=await sbOptional(env,nonOmronPath);rows=Array.isArray(first)?first:[];
+      if(rows.length===0){const drainPath=`/parts_collector_queue?select=*&source_slug=like.offer-*&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,next_attempt_at.asc,created_at.asc&limit=${MERCHANT_GLOBAL_DRAIN_LIMIT}`;const drained=await sbOptional(env,drainPath);rows=Array.isArray(drained)?drained:[];}
+      if(rows.length)dynamicMerchantSeed={...dynamicMerchantSeed,global_drain_used:true,global_drain_rows:rows.length,global_drain_non_omron_first:true};
+    }
+  }else if(watchSlot){
+    await refreshStaleWatchRows(env);
+    const enabled=OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).sort((a,b)=>a.slug.localeCompare(b.slug));
+    const window=rotateWindow(enabled,Math.floor(tick/3),WATCH_WINDOW_SIZE);selectedWindow=window.map(x=>x.slug);
+    if(window.length){
+      const deepPath=`/parts_collector_queue?select=*&source_slug=like.watch-*&status=in.(pending,retry)&depth=lt.0&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=depth.asc,created_at.asc&limit=${DEEP_WATCH_PRIORITY_LIMIT}`;
+      const deepGot=await sbOptional(env,deepPath);const deepRows=Array.isArray(deepGot)?deepGot:[];
+      const normalLimit=Math.max(0,MAX_WATCH_ITEMS_PER_RUN-deepRows.length);
+      let normalRows=[];if(normalLimit>0){const path=`/parts_collector_queue?select=*&source_slug=in.(${encodeURIComponent(sourceInFilter(window))})&status=in.(pending,retry)&depth=gte.0&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=created_at.asc&limit=${normalLimit}`;const got=await sbOptional(env,path);normalRows=Array.isArray(got)?got:[];}
+      rows=[...deepRows,...normalRows];
+      if(rows.length===0){
+        watchDeepBootstrap=await bootstrapDeepWatchWindow(env,window);
+        if(watchDeepBootstrap.used&&watchDeepBootstrap.row)rows=[watchDeepBootstrap.row];
+      }
+    }
+  }else{
+    const enabled=SOURCES.filter(x=>x.collection_enabled!==false).sort((a,b)=>a.slug.localeCompare(b.slug));
+    const window=rotateWindow(enabled,Math.floor(tick/3),Math.min(5,enabled.length));selectedWindow=window.map(x=>x.slug);
+    if(window.length){
+      const path=`/parts_collector_queue?select=*&source_slug=in.(${encodeURIComponent(sourceInFilter(window))})&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(nowIso)}&order=created_at.asc&limit=${MAX_CATALOG_ITEMS_PER_RUN}`;
+      const got=await sbOptional(env,path);rows=Array.isArray(got)?got:[];
+    }
+  }
+
+  const report={service:SERVICE,version:VERSION,build_id:BUILD_ID,trigger:"collector_run",started_at:new Date().toISOString(),selected_rows:rows.length,mode,offer_slot:offerSlot,watch_slot:watchSlot,force_merchant_drain:forceMerchantDrain,merchant_backlog_at_start:merchantBacklogAtStart,selected_source_window:selectedWindow,seed_report:seedReport,dynamic_merchant_seed:dynamicMerchantSeed,processed:[],errors:[]};
+  for(const item of rows){
+    try{const result=await processItem(env,item);await markDone(env,item,result);report.processed.push(result);}
+    catch(e){await markFailure(env,item,e);report.errors.push({source_slug:item.source_slug,url:item.url,error:safeError(e)});}
+  }
+  report.finished_at=new Date().toISOString();report.ok=report.errors.length===0;
+  await sbOptional(env,"/parts_ingest_runs",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({started_at:report.started_at,finished_at:report.finished_at,version:`collector-${VERSION}`,pages_processed:report.processed.length,candidates_inserted:report.processed.reduce((a,x)=>a+Number(x.upserted||0)+Number(x.canonical_parts_upserted||0),0),documents_linked:report.processed.reduce((a,x)=>a+Number(x.documents||0),0),errors:report.errors,metadata:{collector:true,hardening:true,build_id:BUILD_ID,mode,offer_slot:offerSlot,watch_slot:watchSlot,selected_source_window:selectedWindow,selected_rows:rows.length,seed_report:seedReport,dynamic_merchant_seed:dynamicMerchantSeed,watch_deep_bootstrap:watchDeepBootstrap,canonical_exact_found:report.processed.reduce((a,x)=>a+Number(x.canonical_exact_found||0),0),canonical_catalog_found:report.processed.reduce((a,x)=>a+Number(x.canonical_catalog_found||0),0),canonical_candidates_skipped:report.processed.reduce((a,x)=>a+Number(x.canonical_candidates_skipped||0),0),canonical_parts_upserted:report.processed.reduce((a,x)=>a+Number(x.canonical_parts_upserted||0),0),engineering_metrics_found:report.processed.reduce((a,x)=>a+Number(x.engineering_metrics_found||0),0),engineering_metrics_saved:report.processed.reduce((a,x)=>a+Number(x.engineering_metrics_saved||0),0),deep_links_enqueued:report.processed.reduce((a,x)=>a+Number(x.deep_links_enqueued||0),0),merchant_detail_links_promoted:report.processed.reduce((a,x)=>a+Number(x.merchant_detail_links_promoted||0),0),relation_hints_saved:report.processed.reduce((a,x)=>a+Number(x.relation_hints||0),0),merchant_offers_upserted:report.processed.reduce((a,x)=>a+Number(x.offers_upserted||0),0),merchant_offers_found:report.processed.reduce((a,x)=>a+Number(x.offers_found||0),0),merchant_offers_rejected:report.processed.reduce((a,x)=>a+Number(x.offers_rejected_by_evidence_gate||0),0),processed_sources:[...new Set(report.processed.map(x=>x.source_slug).filter(Boolean))],processed_transports:[...new Set(report.processed.map(x=>x.transport).filter(Boolean))],processed_detail:report.processed.slice(0,4).map(x=>({source_slug:x.source_slug||null,url:x.url||null,evidence_url:x.evidence_url||null,transport:x.transport||null,body_chars:x.body_chars??null,offers_found:x.offers_found??null,offers_rejected_by_evidence_gate:x.offers_rejected_by_evidence_gate??null,offers_with_price:x.offers_with_price??null,offers_upserted:x.offers_upserted??null,discovery_links_found:x.discovery_links_found??null,parsed_part_numbers:x.parsed_part_numbers||null,parsed_active:x.parsed_active||null,parsed_stock_status:x.parsed_stock_status||null,status_evidence:x.status_evidence||null,identity_evidence:x.identity_evidence||null,content_fallback_error:x.content_fallback_error||null,decoded_charset:x.decoded_charset||null,canonical_models_found:x.canonical_models_found??null,canonical_exact_found:x.canonical_exact_found??null,canonical_catalog_found:x.canonical_catalog_found??null,canonical_candidates_skipped:x.canonical_candidates_skipped??null,canonical_parts_upserted:x.canonical_parts_upserted??null,engineering_metrics_found:x.engineering_metrics_found??null,engineering_metrics_saved:x.engineering_metrics_saved??null,deep_links_enqueued:x.deep_links_enqueued??null,merchant_detail_links_promoted:x.merchant_detail_links_promoted??null,pdf_relation_parse_attempted:x.pdf_relation_parse_attempted??null,pdf_relation_parse_ok:x.pdf_relation_parse_ok??null,pdf_relation_parse_error:x.pdf_relation_parse_error??null,relation_hints:x.relation_hints??null,discovery_links_enqueued:x.discovery_links_enqueued??null,discovery_queue_guard:x.discovery_queue_guard??null,application_evidence_level:x.application_evidence_level||null}))}})});
+  return report;
+}
+
+const RELATION_STATUS_DIAGNOSTIC_PATH="/parts_relation_candidates?select=id,verified,source_part_number,target_part_number,compatibility_warning,parser_confidence,observed_at&limit=60";
+
+async function diagnosticQuery(env,name,path,timeoutMs=SUPABASE_TIMEOUT_MS,fallbackPath=null){
+  try{
+    const data=await sb(env,path,{timeout_ms:timeoutMs,retry_get:false});
+    return {name,ok:true,sample_ok:true,data,error:null,fallback_used:false};
+  }catch(e){
+    const primaryError=safeError(e);
+    if(fallbackPath){
+      try{
+        const fallback=await sb(env,fallbackPath,{timeout_ms:STATUS_FALLBACK_TIMEOUT_MS,retry_get:false});
+        return {name,ok:true,sample_ok:false,data:null,error:primaryError,fallback_used:true,fallback_data:fallback};
+      }catch(fe){
+        return {name,ok:false,sample_ok:false,data:null,error:primaryError,fallback_used:true,fallback_error:safeError(fe)};
+      }
+    }
+    return {name,ok:false,sample_ok:false,data:null,error:primaryError,fallback_used:false};
+  }
+}
+async function statusDbProbe(env){
+  const path="/parts_ingest_runs?select=version,finished_at&limit=1";
+  let first=await diagnosticQuery(env,"probe",path,STATUS_PROBE_TIMEOUT_MS,"/parts_ingest_runs?select=version&limit=1");
+  if(first.ok&&first.sample_ok)return {...first,retried:false};
+  await new Promise(r=>setTimeout(r,250));
+  const second=await diagnosticQuery(env,"probe",path,STATUS_RETRY_TIMEOUT_MS,"/parts_ingest_runs?select=version&limit=1");
+  return {...second,retried:true,first_error:first.error||null};
+}
+async function runDiagnosticBatches(env,specs){
+  const out=[];
+  for(let i=0;i<specs.length;i+=STATUS_DIAGNOSTIC_BATCH_SIZE){
+    const batch=specs.slice(i,i+STATUS_DIAGNOSTIC_BATCH_SIZE);
+    const rows=await Promise.all(batch.map(x=>diagnosticQuery(env,x.name,x.path,x.timeout_ms||SUPABASE_TIMEOUT_MS,x.fallback_path||null)));
+    out.push(...rows);
+  }
+  return out;
+}
+
+async function status(env){
+  const probe=await statusDbProbe(env);
+  // Status must never run expensive ordered scans on large operational tables.
+  // Detailed enrichment outcomes come from the compact run metadata, not by pulling JSONB specifications from parts_catalog.
+  const runCutoff=new Date(Date.now()-STATUS_RUN_LOOKBACK_HOURS*3600000).toISOString();
+  const specs=[
+    {name:"queue",path:`/parts_collector_queue?select=status,source_slug&limit=${STATUS_SAMPLE_LIMIT}`,fallback_path:"/parts_collector_queue?select=id&limit=1"},
+    {name:"parts",path:`/parts_catalog?select=id,manufacturer,lifecycle_status,source_confidence&limit=${STATUS_PARTS_SAMPLE_LIMIT}`,fallback_path:"/parts_catalog?select=id&limit=1"},
+    {name:"relation_candidates",path:`/parts_relation_candidates?select=id,verified,source_part_number,target_part_number,compatibility_warning,parser_confidence,observed_at&limit=${STATUS_RELATION_SAMPLE_LIMIT}`,fallback_path:"/parts_relation_candidates?select=id&limit=1"},
+    {name:"merchant_offers",path:`/merchant_offers?select=id,merchant_id,manufacturer,stock_status,source_updated_at,active&limit=${STATUS_OFFER_SAMPLE_LIMIT}`,fallback_path:"/merchant_offers?select=id&limit=1"},
+    {name:"merchants",path:`/merchants?select=id,slug,verified,status&limit=${STATUS_MERCHANT_SAMPLE_LIMIT}`,fallback_path:"/merchants?select=id&limit=1"},
+    {name:"runs",path:`/parts_ingest_runs?select=started_at,finished_at,version,pages_processed,errors,metadata&finished_at=gte.${encodeURIComponent(runCutoff)}&limit=${STATUS_RUN_SAMPLE_LIMIT}`,fallback_path:"/parts_ingest_runs?select=version,finished_at&limit=1",timeout_ms:STATUS_RETRY_TIMEOUT_MS}
+  ];
+  const checks=probe.ok?await runDiagnosticBatches(env,specs):specs.map(x=>({name:x.name,ok:false,sample_ok:false,data:null,error:"skipped_after_probe_failure",fallback_used:false}));
+  const byName=Object.fromEntries(checks.map(x=>[x.name,x]));
+  const queue=byName.queue.data,parts=byName.parts.data,hints=byName.relation_candidates.data,merchantOffers=byName.merchant_offers.data,merchants=byName.merchants.data;
+  const runsRaw=byName.runs.data;
+  const runs=Array.isArray(runsRaw)?[...runsRaw].sort((a,b)=>new Date(b?.finished_at||b?.started_at||0).getTime()-new Date(a?.finished_at||a?.started_at||0).getTime()):runsRaw;
+  const qc={};for(const r of Array.isArray(queue)?queue:[])qc[r.status]=(qc[r.status]||0)+1;
+  const byManufacturer={},lifecycleCounts={};let lowConfidenceCount=0;
+  for(const r of Array.isArray(parts)?parts:[]){byManufacturer[r.manufacturer]=(byManufacturer[r.manufacturer]||0)+1;const lc=String(r.lifecycle_status||"unknown");lifecycleCounts[lc]=(lifecycleCounts[lc]||0)+1;if(Number(r.source_confidence||0)<0.6)lowConfidenceCount++;}
+  const latestRun=(Array.isArray(runs)&&runs.length?runs[0]:null)||(Array.isArray(probe.data)&&probe.data.length?probe.data[0]:null);const latestTs=latestRun?.finished_at||latestRun?.started_at||null;const latestAgeMinutes=latestTs?Math.max(0,Math.round((Date.now()-new Date(latestTs).getTime())/60000)):null;
+  const recent=Array.isArray(runs)?runs:[];const recentVersion=recent.filter(x=>x.version===`collector-${VERSION}`);
+  const modeLast={};for(const r of recentVersion){const m=r?.metadata?.mode;if(m&&!modeLast[m]){const errs=Array.isArray(r.errors)?r.errors:[];const external_errors=errs.filter(x=>isExpectedExternalSourceError(x?.error)).length;const internal_errors=errs.length-external_errors;modeLast[m]={finished_at:r.finished_at||null,errors:errs.length,external_source_errors:external_errors,internal_errors,pages_processed:r.pages_processed||0,selected_rows:Number(r?.metadata?.selected_rows||0),watch_deep_bootstrap:r?.metadata?.watch_deep_bootstrap||null};}}
+  const diagnosticsReachable=checks.every(x=>x.ok),samplesComplete=checks.every(x=>x.sample_ok),dbReachable=probe.ok,selftest=collectorSelfTest();
+  const activeOffers=Array.isArray(merchantOffers)?merchantOffers.filter(x=>x.active===true):[];
+  const nonOmronActive=activeOffers.filter(x=>x.manufacturer&&x.manufacturer!=="OMRON");
+  const recentTotals=recentVersion.reduce((a,r)=>{const m=r?.metadata||{};for(const k of ["canonical_exact_found","canonical_catalog_found","canonical_candidates_skipped","canonical_parts_upserted","engineering_metrics_found","engineering_metrics_saved","deep_links_enqueued","merchant_detail_links_promoted","relation_hints_saved","merchant_offers_upserted"])a[k]+=Number(m[k]||0);return a;},{canonical_exact_found:0,canonical_catalog_found:0,canonical_candidates_skipped:0,canonical_parts_upserted:0,engineering_metrics_found:0,engineering_metrics_saved:0,deep_links_enqueued:0,merchant_detail_links_promoted:0,relation_hints_saved:0,merchant_offers_upserted:0});
+  const verifiedRelations=Array.isArray(hints)?hints.filter(x=>x.verified===true).length:0;
+  const queueSampleAvailable=Array.isArray(queue);
+  const acceptance={worker_version_match:!latestRun?.version||latestRun.version===`collector-${VERSION}`,supabase_reachable:dbReachable,supabase_diagnostics_reachable:diagnosticsReachable,status_samples_complete:samplesComplete,selftest_ok:selftest.ok,catalog_recent_ok:!!modeLast.catalog&&modeLast.catalog.internal_errors===0&&modeLast.catalog.pages_processed>0,watch_recent_ok:!!modeLast.manufacturer_watch&&modeLast.manufacturer_watch.internal_errors===0&&(modeLast.manufacturer_watch.pages_processed>0||modeLast.manufacturer_watch.selected_rows===0),offer_recent_ok:!!modeLast.offer&&modeLast.offer.internal_errors===0&&modeLast.offer.pages_processed>0,deep_enrichment_observed:recentTotals.deep_links_enqueued>0||recentTotals.engineering_metrics_saved>0||recentVersion.some(r=>r?.metadata?.watch_deep_bootstrap?.used===true),engineering_metrics_observed:recentTotals.engineering_metrics_saved>0,relation_evidence_observed:recentTotals.relation_hints_saved>0||verifiedRelations>0,merchant_detail_promotion_observed:recentTotals.merchant_detail_links_promoted>0,non_omron_active_offer_seen_in_sample:nonOmronActive.length>0,queue_budget_sample_not_saturated:!queueSampleAvailable||((qc.pending||0)+(qc.retry||0))<STATUS_SAMPLE_LIMIT};
+  return {
+    ok:dbReachable&&selftest.ok,service:SERVICE,version:VERSION,build_id:BUILD_ID,
+    selftest:{ok:selftest.ok,checks:selftest.checks},
+    supabase:{ok:dbReachable,diagnostics_reachable:diagnosticsReachable,samples_complete:samplesComplete,diagnostics_degraded:dbReachable&&(!diagnosticsReachable||!samplesComplete),probe:{ok:probe.ok,retried:probe.retried===true,error:probe.error||null,first_error:probe.first_error||null},checks:checks.map(x=>({name:x.name,ok:x.ok,sample_ok:x.sample_ok,fallback_used:x.fallback_used===true,error:x.error||null,fallback_error:x.fallback_error||null}))},
+    cron_health:{expected_interval_minutes:10,latest_run_at:latestTs,latest_run_age_minutes:latestAgeMinutes,status:!dbReachable?"database_error":latestAgeMinutes==null?"never_seen":latestAgeMinutes>30?"stale":"healthy",latest_run_version:latestRun?.version||null,current_worker_version:`collector-${VERSION}`,version_match:acceptance.worker_version_match},
+    hardening:{supabase_timeout_ms:SUPABASE_TIMEOUT_MS,supabase_get_retry_count:SUPABASE_GET_RETRY_COUNT,supabase_get_retry_delay_ms:SUPABASE_GET_RETRY_DELAY_MS,collector_db_preflight_timeout_ms:COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS,status_probe_timeout_ms:STATUS_PROBE_TIMEOUT_MS,status_retry_timeout_ms:STATUS_RETRY_TIMEOUT_MS,status_fallback_timeout_ms:STATUS_FALLBACK_TIMEOUT_MS,status_diagnostic_batch_size:STATUS_DIAGNOSTIC_BATCH_SIZE,status_unordered_large_table_sampling:true,status_jsonb_parts_scan_disabled:true,status_table_fallback_probe_enabled:true,queue_active_budget:QUEUE_ACTIVE_BUDGET,daily_seed_pause_threshold:DAILY_SEED_PAUSE_THRESHOLD,merchant_queue_budget:MERCHANT_QUEUE_BUDGET,merchant_queue_hard_ceiling:MERCHANT_QUEUE_HARD_CEILING,merchant_trickle_seed_max_rows:MERCHANT_TRICKLE_SEED_MAX_ROWS,hard_queue_ceiling:HARD_QUEUE_CEILING,merchant_global_drain_limit:MERCHANT_GLOBAL_DRAIN_LIMIT,status_sample_limit:STATUS_SAMPLE_LIMIT,offer_window_size:OFFER_WINDOW_SIZE,watch_window_size:WATCH_WINDOW_SIZE,max_offer_items_per_run:MAX_OFFER_ITEMS_PER_RUN,daily_seed_only:true,generated_adapter_brand_gate:true,generated_adapter_detail_page_gate:true,merchant_lifecycle_overwrite_disabled:true,blocked_source_backoff:true,external_source_failures_are_nonfatal_for_mode_acceptance:true,mode_last_success:modeLast,production_acceptance:acceptance},
+    queue_sample:qc,queue_sample_count:Array.isArray(queue)?queue.length:null,queue_sample_is_bounded:true,
+    parts_sample_count:Array.isArray(parts)?parts.length:null,parts_by_manufacturer_sample:byManufacturer,
+    physical_ai_universe:{manufacturers_total:MANUFACTURER_UNIVERSE.length,official_watch_sources_enabled:OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).length,official_catalog_sources_enabled:SOURCES.length,merchant_sources_enabled:OFFER_SOURCES.filter(x=>x.collection_enabled!==false).length,merchant_adapter_manufacturers:new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&["monotaro-japan","misumi-japan","digikey-japan","mouser"].includes(x.merchant_slug)).map(x=>x.manufacturer)).size,official_watch_manufacturers:new Set(OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).map(x=>x.manufacturer)).size,applications:Object.keys(APPLICATION_TAXONOMY),policy:"Manufacturer official evidence is authoritative for identity/spec/lifecycle. Official watch pages can now enrich canonical MPNs, engineering metrics and explicit replacement evidence under bounded extraction. Merchant evidence cannot overwrite manufacturer lifecycle. Generated merchant adapters require exact detail-page plus manufacturer corroboration before offer storage."},
+    merchant_offer_collection:{offers_sample_count:Array.isArray(merchantOffers)?merchantOffers.length:null,active_offers_sample:activeOffers.length,non_omron_active_offers_sample:nonOmronActive.length,active_merchants_seen:Array.isArray(merchants)?merchants.filter(x=>x.status==="active").length:null,verified_merchants_seen:Array.isArray(merchants)?merchants.filter(x=>x.verified).length:null,source_paused:OFFER_SOURCES.filter(x=>x.collection_enabled===false).map(x=>x.slug),policy:"Exact detail evidence only for generated adapters. Price, stock, lead time, shipping, authorization and compatibility remain unknown unless explicitly evidenced."},
+    data_quality:{sample_size:Array.isArray(parts)?parts.length:null,lifecycle_counts:lifecycleCounts,low_confidence_count:lowConfidenceCount,canonical_quality_from_recent_runs:{manufacturer_exact_found:recentTotals.canonical_exact_found,manufacturer_catalog_found:recentTotals.canonical_catalog_found,candidates_skipped:recentTotals.canonical_candidates_skipped},engineering_metrics_from_recent_runs:{found:recentTotals.engineering_metrics_found,saved:recentTotals.engineering_metrics_saved},policy:"Merchant observations do not overwrite manufacturer lifecycle; replacement relations remain unverified until evidence review."},
+    relation_candidate_sample_count:Array.isArray(hints)?hints.length:null,verified_relation_sample_count:verifiedRelations,recent_enrichment_totals:recentTotals,recent_runs:recent,
+    next_action:(()=>{
+      if(!dbReachable)return "Supabase probe is down; inspect the Supabase project resource/API health.";
+      if(!diagnosticsReachable)return "One or more tables failed even the tiny fallback probe; inspect only the named table/API path.";
+      if(!samplesComplete)return "Core tables are reachable; one or more optional status samples fell back to tiny probes. Judge Collector operation from cron_health and recent_runs.";
+      if(!acceptance.worker_version_match)return `Wait for one collector-${VERSION} run and recheck status.`;
+      if(!acceptance.catalog_recent_ok||!acceptance.watch_recent_ok||!acceptance.offer_recent_ok)return "Recent evidence for all three rotating modes is not yet visible in the bounded run window.";
+      if(!acceptance.deep_enrichment_observed)return "Deep enrichment has not produced evidence yet; inspect watch_deep_bootstrap and deep_links_enqueued in recent_runs.";
+      if(!acceptance.non_omron_active_offer_seen_in_sample)return "Core production is healthy; the remaining business milestone is a non-OMRON exact active merchant offer.";
+      return "Production acceptance conditions visible in /status are satisfied.";
+    })()
+  };
+}
+
+function authorized(request,env){
+  const key=request.headers.get("x-collector-key")||new URL(request.url).searchParams.get("key");
+  return !!env.COLLECTOR_ADMIN_KEY && key===env.COLLECTOR_ADMIN_KEY;
+}
+
+return {
+  async fetch(request,env,ctx){
+    const url=new URL(request.url);
+    if(request.method==="OPTIONS")return new Response(null,{status:204,headers:{"access-control-allow-origin":"*","access-control-allow-methods":"GET,POST,OPTIONS","access-control-allow-headers":"content-type,x-collector-key"}});
+    if(url.pathname==="/")return json({ok:true,service:SERVICE,version:VERSION,build_id:BUILD_ID,description:"Consolidated production collector for PARTS INTELLIGENCE with canonical quality tiers, deep enrichment bootstrap, conservative merchant evidence gates, lifecycle protection, lightweight nonblocking observability and resilient idempotent Supabase reads",sources:ALL_SOURCES.map(s=>({kind:s.kind||"catalog",manufacturer:s.manufacturer,merchant:s.merchant_name||null,seeds:s.seeds})),admin:["/status","/selftest","/universe","/run","/seed"]});
+    if(url.pathname==="/status"||url.pathname==="/health")return json(await status(env),200,{"cache-control":"no-store"});
+    if(url.pathname==="/selftest")return json({service:SERVICE,version:VERSION,build_id:BUILD_ID,...collectorSelfTest()},200,{"cache-control":"no-store"});
+    if(url.pathname==="/universe")return json({service:SERVICE,version:VERSION,build_id:BUILD_ID,taxonomy:APPLICATION_TAXONOMY,coverage:{manufacturers_total:MANUFACTURER_UNIVERSE.length,official_watch_manufacturers:new Set(OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).map(x=>x.manufacturer)).size,official_watch_sources:OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).length,merchant_adapter_manufacturers:new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&["monotaro-japan","misumi-japan","digikey-japan","mouser"].includes(x.merchant_slug)).map(x=>x.manufacturer)).size,merchant_adapters_enabled:OFFER_SOURCES.filter(x=>x.collection_enabled!==false).length,merchant_channels:["monotaro-japan","misumi-japan","digikey-japan","mouser"],enrichment:{official_watch_canonical_mpn:true,engineering_specs:true,explicit_relation_verification:true,application_evidence_level:true,non_omron_merchant_priority:true,canonical_quality_tiers:true,reserved_deep_enrichment:true,deep_bootstrap_fallback:true,replacement_pdf_parse:true,merchant_exact_detail_promotion:true,resilient_supabase_reads:true,bounded_status_diagnostics:true}},manufacturers:MANUFACTURER_UNIVERSE,official_watch_sources:OFFICIAL_WATCH_SOURCES.map(s=>({slug:s.slug,manufacturer:s.manufacturer,seeds:s.seeds,applications:s.applications,domains:s.domains,source_tier:s.source_tier,collection_enabled:s.collection_enabled!==false,fallback_root_watch:s.fallback_root_watch===true})),merchant_sources:OFFER_SOURCES.map(s=>({slug:s.slug,merchant:s.merchant_name,manufacturer:s.manufacturer,collection_enabled:s.collection_enabled!==false,generated_adapter:s.generated_adapter===true,disabled_reason:s.disabled_reason||null}))},200,{"cache-control":"no-store"});
+    if(url.pathname==="/seed"&&request.method==="POST"){
+      if(!authorized(request,env))return json({error:"unauthorized"},401);
+      return json(await seedQueue(env));
+    }
+    if(url.pathname==="/run"&&request.method==="POST"){
+      if(!authorized(request,env))return json({error:"unauthorized"},401);
+      let body={};try{body=await request.json();}catch{}
+      return json(await runCollector(env,body.limit||MAX_PAGES_PER_RUN));
+    }
+    return json({error:"not_found"},404);
+  },
+  async scheduled(event,env,ctx){
+    ctx.waitUntil((async()=>{
+      const startedAt=new Date().toISOString();
+      try{
+        const report=await runCollector(env,MAX_PAGES_PER_RUN);
+        console.log(SERVICE,report.ok?"scheduled_ok":"scheduled_degraded",JSON.stringify(report));
+      }catch(e){
+        const error=safeError(e);
+        console.log(SERVICE,"scheduled_error",error);
+        await sbOptional(env,"/parts_ingest_runs",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({started_at:startedAt,finished_at:new Date().toISOString(),version:`collector-${VERSION}`,pages_processed:0,candidates_inserted:0,documents_linked:0,errors:[{stage:"scheduled",error}],metadata:{collector:true,scheduled:true,fatal:true}})});
+      }
+    })());
+  }
+};
+
+})();
+
+
+async function embeddedPartsCollectorNeedsRun(env,nowMs=Date.now()){
+  if(!env?.SUPABASE_URL||!env?.SUPABASE_SECRET_KEY)return false;
+  try{
+    // v7 ownership rule: only a recent embedded v3 run owns the lease.
+    // Legacy collector-2.x heartbeats must never suppress the authoritative embedded collector.
+    const since=new Date(nowMs-8*60*1000).toISOString();
+    const rows=await sb(env,`/parts_ingest_runs?select=finished_at,version&finished_at=gte.${encodeURIComponent(since)}&version=eq.collector-3.0.0&limit=2`);
+    return !(Array.isArray(rows)&&rows.some(r=>String(r?.version||"")==="collector-3.0.0"));
+  }catch{return true;}
+}
+async function runEmbeddedPartsCollectorFailover(event,env){
+  const pending=[];
+  const fakeCtx={waitUntil(p){pending.push(Promise.resolve(p));}};
+  await EMBEDDED_PARTS_COLLECTOR.scheduled(event,env,fakeCtx);
+  const settled=await Promise.allSettled(pending);
+  const rejected=settled.filter(x=>x.status==="rejected").map(x=>safeError(x.reason));
+  return {ok:rejected.length===0,mode:"embedded_failover",tasks:pending.length,rejected};
+}
+async function embeddedCollectorFetch(request,env,ctx){
+  const u=new URL(request.url);
+  u.pathname=u.pathname.replace(/^\/collector/,"")||"/";
+  const req=new Request(u.toString(),request);
+  return EMBEDDED_PARTS_COLLECTOR.fetch(req,env,ctx);
+}
+
+// v7.1 deterministic cron contract. Works with either */1 or */10 Cloudflare triggers.
+// Only UTC minutes divisible by 10 perform network-heavy scheduled work.
+// 00/20/40 = embedded Parts Collector v3; 10 = universal rotation;
+// 30 = catalog enrichment; 50 = universal demand refresh.
+function scheduledTaskForTime(timeMs){
+  // All ten-minute slots are productive. This avoids relying on :40/:50 cron configuration.
+  const d=new Date(Number(timeMs||Date.now()));
+  const m=d.getUTCMinutes();
+  if(m%10!==0)return "discovery_recovery"; // also works with an unusual single-minute cron
+  if(m===0||m===20)return "parts_collector_v3";
+  if(m===10)return "rotation";
+  if(m===30)return "catalog_enrichment";
+  if(m===40)return "universal_discovery";
+  if(m===50)return "universal_discovery";
+  return "discovery_recovery";
+}
+
+async function universalDiscoveryLeaseStatus(env,nowMs=Date.now(),freshMinutes=55){
+  const now=Number(nowMs||Date.now());

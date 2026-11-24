@@ -1,0 +1,300 @@
+  const style_code=apparelStyleCode(name);
+  const observed_size=apparelObservedSize(name);
+  const normalized_name=normalizeApparelCanonicalName(name);
+  let identity,identity_method;
+  if(style_code){
+    identity=`apparel|${brand||"unknown"}|${style_code}|${collaboration||"unknown"}`;
+    identity_method="apparel_style_code";
+  }else if(brand&&collaboration&&item_type){
+    identity=`apparel|${brand}|${collaboration}|${item_type}|${normalized_name}`;
+    identity_method="apparel_brand_collab_type";
+  }else{
+    identity=`apparel|${brand||"unknown"}|${collaboration||"unknown"}|${item_type||"unknown"}|${normalized_name}`;
+    identity_method="apparel_canonical_name";
+  }
+  const fingerprint=stableHash32(identity);
+  return {brand,collaboration,item_type,style_code,observed_size,normalized_name,identity,identity_method,fingerprint,source_key:`catalog:apparel:v2:${fingerprint}`};
+}
+function apparelClassifierOverride(name="",classification=null){
+  const n=String(name||"");
+  // Never turn obvious non-wearable accessories/other goods into apparel.
+  if(/(?:\u30dd\u30fc\u30c1|\u30b9\u30de\u30db\u30b1\u30fc\u30b9|iPhone\s*\d*\s*(?:Pro|Plus|Max)?\s*\u30b1\u30fc\u30b9|\u30de\u30eb\u30c1\u30b1\u30fc\u30b9|\u30b3\u30b9\u30e1\u53ce\u7d0d|\u30b8\u30b0\u30bd\u30fc\u30d1\u30ba\u30eb|\u30d1\u30ba\u30eb)/i.test(n))return classification;
+  const item=apparelItemType(n);
+  if(!item)return classification;
+  if(!apparelHasCollabSignal(n))return classification;
+  return {type:"apparel",confidence:0.96,reason:`apparel_collab_item:${item}`};
+}
+
+function sneakerBrand(name=""){
+  const raw=String(name||"");
+  const n=raw.toUpperCase();
+  const brands=[
+    [["CONVERSE","\u30b3\u30f3\u30d0\u30fc\u30b9"],"CONVERSE"],
+    [["PUMA","\u30d7\u30fc\u30de"],"PUMA"],
+    [["SPINGLE","\u30b9\u30d4\u30f3\u30b0\u30eb"],"SPINGLE"],
+    [["NIKE","\u30ca\u30a4\u30ad"],"NIKE"],
+    [["ADIDAS","\u30a2\u30c7\u30a3\u30c0\u30b9"],"ADIDAS"],
+    [["VANS","\u30f4\u30a1\u30f3\u30ba","\u30d0\u30f3\u30ba"],"VANS"],
+    [["NEW BALANCE","\u30cb\u30e5\u30fc\u30d0\u30e9\u30f3\u30b9"],"NEW BALANCE"],
+    [["REEBOK","\u30ea\u30fc\u30dc\u30c3\u30af"],"REEBOK"],
+    [["ASICS","\u30a2\u30b7\u30c3\u30af\u30b9"],"ASICS"],
+    [["ONITSUKA TIGER","\u30aa\u30cb\u30c4\u30ab\u30bf\u30a4\u30ac\u30fc"],"ONITSUKA TIGER"]
+  ];
+  for(const [tokens,label] of brands)for(const token of tokens)if(token.charCodeAt(0)>127?raw.includes(token):n.includes(token))return label;
+  return null;
+}
+function sneakerStyleCode(name=""){
+  const raw=String(name||"");
+  const alpha=raw.match(/\b(?:[A-Z]{2,}[A-Z0-9]*[-_][A-Z0-9][A-Z0-9_-]{3,}|[A-Z]{1,5}\d{4,}[A-Z0-9_-]*)\b/i);
+  if(alpha)return alpha[0].toUpperCase().replace(/_/g,"-");
+  const nums=[...raw.matchAll(/(?:^|[^\d])(\d{8})(?=$|[^\d])/g)].map(m=>m[1]);
+  for(const x of nums){if(/^20\d{6}$/.test(x))continue;return x;}
+  return null;
+}
+function sneakerObservedSize(name=""){
+  const n=String(name||"");
+  let m=n.match(/(\d{2}(?:\.\d)?)-(\d{2}(?:\.\d)?)\s*cm\b/i);
+  if(m)return `${m[1]}-${m[2]}cm`;
+  m=n.match(/(?:^|[\s\/,(])(\d{2}(?:\.\d)?)\s*cm\b/i);
+  if(m)return `${m[1]}cm`;
+  m=n.match(/\b(?:US|UK)\s*(\d{1,2}(?:\.\d)?)\b/i);
+  return m?m[0].toUpperCase():null;
+}
+function sneakerCollaboration(name=""){
+  const raw=String(name||"");
+  const compact=raw.normalize("NFKC").toUpperCase().replace(/[\s\u30fb\u30fb_\-\/]+/g,"");
+  const rules=[
+    [/(?:NARUTOSHIPPUDEN|\u30ca\u30eb\u30c8(?:\u75be\u98a8\u4f1d|\u30b7\u30c3\u30d7\u30a6\u30c7\u30f3|\u30b7\u30c3\u30d7\u30a6\u30c7\u30f3)?)/,"NARUTO SHIPPUDEN"],
+    [/(?:GHOSTINTHESHELL|\u653b\u6bbb\u6a5f\u52d5\u968a)/,"GHOST IN THE SHELL"],
+    [/(?:PAWPATROL|\u30d1\u30a6\u30d1\u30c8\u30ed\u30fc\u30eb|\u30d1\u30a6\u30d1\u30c8)/,"PAW PATROL"],
+    [/(?:POWERPUFFGIRLS|\u30d1\u30ef\u30fc\u30d1\u30d5\u30ac\u30fc\u30eb\u30ba)/,"POWERPUFF GIRLS"],
+    [/(?:SPONGEBOB|\u30b9\u30dd\u30f3\u30b8\u30dc\u30d6)/,"SPONGEBOB"]
+  ];
+  for(const [re,label] of rules)if(re.test(compact))return label;
+  return null;
+}
+function sneakerModelFamily(name="",brand=null){
+  const raw=String(name||"").normalize("NFKC");
+  const compact=raw.toUpperCase().replace(/[\s\u30fb_\-\/]+/g,"");
+  if(brand==="CONVERSE"){
+    if(/(?:ALLSTAR|\u30aa\u30fc\u30eb\u30b9\u30bf\u30fc)/i.test(raw)){
+      if(/(?:\bOX\b|\u30ed\u30fc\u30ab\u30c3\u30c8)/i.test(raw))return "ALL STAR OX";
+      if(/(?:\bHI\b|\u30cf\u30a4\u30ab\u30c3\u30c8)/i.test(raw))return "ALL STAR HI";
+      if(/(?:CHUNKYLINE|\u30c1\u30e3\u30f3\u30ad\u30fc\u30e9\u30a4\u30f3)/i.test(compact))return "ALL STAR CHUNKYLINE";
+      return "ALL STAR";
+    }
+  }
+  if(brand==="ADIDAS"&&/(?:SUPERSTAR|\u30b9\u30fc\u30d1\u30fc\u30b9\u30bf\u30fc)/i.test(raw))return "SUPERSTAR";
+  return null;
+}
+function normalizeSneakerCanonicalName(name=""){
+  return normalize(cleanOfficialTitle(name))
+    .replace(/(?:\u9001\u6599\u7121\u6599|\u9001\u6599\u8fbc|\u65b0\u54c1|\u4e2d\u53e4|\u672a\u4f7f\u7528|\u6b63\u898f\u53d6\u6271\u5e97|\u6b63\u898f\u54c1|\u4e88\u7d04|\u5373\u7d0d|\u767a\u58f2\u6e08|\u5728\u5eab\u54c1)/g," ")
+    .replace(/(?:20\d{2}|\d{2})(?:\u5e74)?(?:\u6625\u590f|\u79cb\u51ac|\u6625|\u590f|\u79cb|\u51ac)(?:\u65b0\u4f5c)?/g," ")
+    .replace(/(?:\u6625\u590f|\u79cb\u51ac|\u6625|\u590f|\u79cb|\u51ac)(?:20\d{2}|\d{2})(?:\u65b0\u4f5c)?/g," ")
+    .replace(/\b(?:SS|AW|FW)\s*2?\d{2}\b/gi," ")
+    .replace(/(?:20\d{2}\u5e74)?\d{1,2}\u6708(?:\u4e0a\u65ec|\u4e2d\u65ec|\u4e0b\u65ec|\u672a\u5b9a)?(?:\u767a\u58f2|\u5165\u8377|\u767a\u9001)?(?:\u4e88\u5b9a)?/g," ")
+    .replace(/\b\d{2}(?:\.\d)?-\d{2}(?:\.\d)?\s*cm\b/gi," ")
+    .replace(/\b\d{2}(?:\.\d)?\s*cm\b/gi," ")
+    .replace(/\b(?:US|UK)\s*\d{1,2}(?:\.\d)?\b/gi," ")
+    .replace(/\s+/g," ").trim();
+}
+function sneakerIdentity(name=""){
+  const brand=sneakerBrand(name);
+  const style_code=sneakerStyleCode(name);
+  const collaboration=sneakerCollaboration(name);
+  const model=sneakerModelFamily(name,brand);
+  const observed_size=sneakerObservedSize(name);
+  const normalized_name=normalizeSneakerCanonicalName(name);
+  let identity;
+  let identity_method;
+  if(style_code){
+    identity=`sneaker|${brand||"unknown"}|${style_code}|${collaboration||"unknown"}`;
+    identity_method="sneaker_style_code";
+  }else if(brand&&collaboration&&model){
+    identity=`sneaker|${brand}|${collaboration}|${model}`;
+    identity_method="sneaker_brand_collab_model";
+  }else{
+    identity=`sneaker|${brand||"unknown"}|${collaboration||"unknown"}|${model||"unknown"}|${normalized_name}`;
+    identity_method="sneaker_canonical_name";
+  }
+  const fingerprint=stableHash32(identity);
+  return {brand,style_code,collaboration,model,observed_size,normalized_name,identity,identity_method,fingerprint,source_key:`catalog:sneaker:v3:${fingerprint}`};
+}
+
+/* =========================================================
+   SPECIALIST COLLECTIBLES INTELLIGENCE v3.1
+   Category-specific identity attributes are stored in metadata
+   and reused by market matching, rarity and paid responses.
+========================================================= */
+
+function firstMatch(v,re,group=1){const m=String(v||"").normalize("NFKC").match(re);return m?String(m[group]||m[0]).trim():null;}
+function upperOrNull(v){return v?String(v).trim().toUpperCase():null;}
+
+function tradingCardGame(name=""){
+  const n=String(name||"");
+  if(/\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9|pokemon\s*(?:card|tcg)/i.test(n))return "POKEMON";
+  if(/ONE\s*PIECE\s*(?:\u30ab\u30fc\u30c9|CARD)|\u30ef\u30f3\u30d4\u30fc\u30b9\u30ab\u30fc\u30c9/i.test(n))return "ONE PIECE CARD GAME";
+  if(/\u904a\u622f\u738b|YU-?GI-?OH/i.test(n))return "YU-GI-OH!";
+  if(/UNION\s*ARENA|\u30e6\u30cb\u30aa\u30f3\u30a2\u30ea\u30fc\u30ca/i.test(n))return "UNION ARENA";
+  if(/\u30f4\u30a1\u30a4\u30b9\u30b7\u30e5\u30f4\u30a1\u30eb\u30c4|WEISS\s*SCHWARZ/i.test(n))return "WEISS SCHWARZ";
+  if(/\u30c7\u30e5\u30a8\u30eb.?\u30de\u30b9\u30bf\u30fc\u30ba|DUEL\s*MASTERS/i.test(n))return "DUEL MASTERS";
+  if(/\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb.*(?:\u30ab\u30fc\u30c9|FUSION\s*WORLD)|FUSION\s*WORLD/i.test(n))return "DRAGON BALL SUPER CARD GAME";
+  return null;
+}
+function tradingCardSetCode(name=""){
+  return upperOrNull(firstMatch(name,/\b((?:OP|EB|ST|PRB|SV|S|SM|XY|BW|DP|PROMO|UA|EX|BT|FB|FS)[-_]?[A-Z0-9]{1,8})\b/i));
+}
+function tradingCardNumber(name=""){
+  const patterns=[
+    /\b((?:OP|EB|ST|P|PRB|UA|EX|BT|FB|FS)\d{1,3}[-_]\d{2,4})\b/i,
+    /\b(\d{1,3}\/\d{1,3})\b/,
+    /(?:\u30ab\u30fc\u30c9\u756a\u53f7|CARD\s*NO\.?)\s*[:\uff1a#]?\s*([A-Z0-9_-]{3,20})/i
+  ];
+  for(const re of patterns){const x=firstMatch(name,re);if(x)return upperOrNull(x);}
+  return null;
+}
+function tradingCardRarity(name=""){
+  const m=firstMatch(name,/(?:^|[\s\u3010[(])((?:SAR|SR|UR|AR|CHR|CSR|HR|RRR|RR|R|SEC|SP|SSP|L|C|UC|PR|P|\u30d1\u30e9\u30ec\u30eb|\u30b7\u30fc\u30af\u30ec\u30c3\u30c8))(?:[\s\u3011)\]]|$)/i);
+  return m?upperOrNull(m):null;
+}
+function tradingCardGrade(name=""){
+  const company=firstMatch(name,/(?:^|[^A-Z0-9])(PSA|BGS|CGC|ARS)(?=\s*\d|[^A-Z0-9]|$)/i);
+  const grade=firstMatch(name,/\b(?:PSA|BGS|CGC|ARS)\s*(10(?:\.0)?|9\.5|9|8\.5|8|7\.5|7)\b/i);
+  return {grading_company:upperOrNull(company),grade:grade?Number(grade):null};
+}
+function tradingCardLanguage(name=""){
+  const n=String(name||"");
+  if(/\u65e5\u672c\u8a9e\u7248|JAPANESE\b/i.test(n))return "ja";
+  if(/\u82f1\u8a9e\u7248|ENGLISH\b/i.test(n))return "en";
+  if(/\u4e2d\u56fd\u8a9e\u7248|CHINESE\b/i.test(n))return "zh";
+  if(/\u97d3\u56fd\u8a9e\u7248|KOREAN\b/i.test(n))return "ko";
+  return null;
+}
+function tradingCardCondition(name=""){
+  const n=String(name||"");
+  if(/\u672a\u958b\u5c01|SEALED/i.test(n))return "sealed";
+  if(/\u7f8e\u54c1|NEAR\s*MINT|\bNM\b/i.test(n))return "near_mint";
+  if(/\u65b0\u54c1|MINT\b/i.test(n))return "mint_or_new";
+  if(/\u4e2d\u53e4|USED|PLAYED/i.test(n))return "used";
+  return null;
+}
+function tradingCardProfile(name=""){
+  const grade=tradingCardGrade(name);
+  return {
+    card_game:tradingCardGame(name),
+    form:tradingCardForm(name),
+    set_code:tradingCardSetCode(name),
+    card_number:tradingCardNumber(name),
+    rarity:tradingCardRarity(name),
+    language:tradingCardLanguage(name),
+    foil_parallel:/\u30d1\u30e9\u30ec\u30eb|PARALLEL|FOIL|HOLO|\u30db\u30ed/i.test(String(name||""))?true:null,
+    condition:tradingCardCondition(name),
+    grading_company:grade.grading_company,
+    grade:grade.grade
+  };
+}
+function lotteryPrizeProfile(name=""){
+  // Keep Japanese matcher tokens ASCII-only in source so deployment/editor transcoding cannot corrupt them.
+  const rank=firstMatch(name,new RegExp("(?:^|[\\s\u3010[(])((?:\u30e9\u30b9\u30c8\u30ef\u30f3|LAST\\s*ONE|[A-H])\u8cde)(?:[\\s\u3011)\\]]|$)","i"));
+  const lotterySeries=firstMatch(name,new RegExp("(\u4e00\u756a\u304f\u3058[^\u3010\\[(]{0,80})","i"));
+  return {prize_rank:rank?upperOrNull(rank.replace(/\s+/g," ")):null,lottery_series:lotterySeries};
+}
+function modelKitProfile(name=""){
+  const n=String(name||"");
+  const grade=firstMatch(n,/\b(PG|MGEX|MGSD|MG|RG|HGUC|HG|EG|SDCS|SD|RE\/100)\b/i);
+  const scale=firstMatch(n,/\b(1\/(?:24|32|35|48|60|72|100|144|350))\b/i);
+  return {grade:upperOrNull(grade),scale:scale||null,limited:/\u9650\u5b9a|PREMIUM\s*BANDAI|\u30d7\u30ec\u30df\u30a2\u30e0\u30d0\u30f3\u30c0\u30a4|EXCLUSIVE/i.test(n)?true:null};
+}
+function plushProfile(name=""){
+  const size=firstMatch(name,/(\d{1,3}(?:\.\d+)?)\s*cm\b/i);
+  return {size_cm:size?Number(size):null,prize:/\u30d7\u30e9\u30a4\u30ba|\u666f\u54c1|AMUSEMENT|SEGA|TAITO|BANPRESTO/i.test(String(name||""))?true:null};
+}
+function acrylicProfile(name=""){
+  const size=firstMatch(name,/(\d{1,3}(?:\.\d+)?)\s*cm\b/i);
+  return {size_cm:size?Number(size):null,event_limited:/\u9650\u5b9a|\u4f1a\u5834|\u30a4\u30d9\u30f3\u30c8|\u30b3\u30df\u30b1|C\d{2,3}|EXCLUSIVE/i.test(String(name||""))?true:null};
+}
+function smallGoodsProfile(name=""){
+  const n=String(name||"");
+  return {event_limited:/\u9650\u5b9a|\u4f1a\u5834|\u30a4\u30d9\u30f3\u30c8|\u30b3\u30df\u30b1|EXCLUSIVE/i.test(n)?true:null,blind_random:/\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0|\u30e9\u30f3\u30c0\u30e0|BLIND|RANDOM/i.test(n)?true:null};
+}
+function figureProfile(name=""){
+  const n=String(name||"");
+  const scale=firstMatch(n,/\b(1\/(?:4|6|7|8|10|12))\b/i);
+  const edition=firstMatch(n,/(?:ver\.?|version|\u7248)\s*([A-Za-z0-9\u3041-\u3093\u30a1-\u30f6\u4e00-\u9fa0\u30fb _-]{1,40})/i);
+  return {scale:scale||null,edition:edition||null,rerelease:/\u518d\u8ca9|\u518d\u751f\u7523|RERELEASE|REISSUE/i.test(n)?true:null,limited:/\u9650\u5b9a|EXCLUSIVE/i.test(n)?true:null};
+}
+function apparelProfile(name=""){
+  const x=apparelIdentity(name);
+  const color=firstMatch(name,/(?:\u30ab\u30e9\u30fc|COLOR)\s*[:\uff1a]?\s*([A-Za-z\u3041-\u3093\u30a1-\u30f6\u4e00-\u9fa0]{2,20})/i);
+  return {brand:x.brand,item_type:x.item_type,style_code:x.style_code,collaboration:x.collaboration,size:x.observed_size,color:color||null};
+}
+function sneakerProfile(name=""){
+  const x=sneakerIdentity(name);
+  const colorway=firstMatch(name,/(?:COLORWAY|\u30ab\u30e9\u30fc)\s*[:\uff1a]?\s*([A-Za-z0-9\u3041-\u3093\u30a1-\u30f6\u4e00-\u9fa0 /_-]{2,50})/i);
+  return {brand:x.brand,model:x.model,style_code:x.style_code,collaboration:x.collaboration,size:x.observed_size,colorway:colorway||null};
+}
+function specialistProfile(name="",productType="other"){
+  const t=String(productType||"other");
+  if(t==="trading_card")return tradingCardProfile(name);
+  if(t==="sneaker")return sneakerProfile(name);
+  if(t==="apparel")return apparelProfile(name);
+  if(t==="lottery_prize")return lotteryPrizeProfile(name);
+  if(t==="model_kit")return modelKitProfile(name);
+  if(t==="plush")return plushProfile(name);
+  if(t==="acrylic_goods")return acrylicProfile(name);
+  if(t==="keychain"||t==="badge")return smallGoodsProfile(name);
+  if(t==="figure"||t==="nendoroid"||t==="figma")return figureProfile(name);
+  return {};
+}
+function productSpecialistProfile(product){
+  const stored=product?.metadata?.specialist||{};
+  const parsed=specialistProfile(`${product?.canonical_name_ja||""} ${product?.canonical_name_en||""}`,product?.product_type);
+  return {...parsed,...Object.fromEntries(Object.entries(stored).filter(([,v])=>v!==null&&v!==""&&v!==undefined))};
+}
+function specialistIdentityAnalysis(product,title=""){
+  const type=String(product?.product_type||"other"),expected=productSpecialistProfile(product),candidate=specialistProfile(title,type);
+  let score=0,conflict=false;const matched=[],conflicts=[];
+  const exact=(key,weight)=>{
+    const a=expected?.[key],b=candidate?.[key];
+    if(a==null||a===""||b==null||b==="")return;
+    if(String(a).toUpperCase()===String(b).toUpperCase()){score+=weight;matched.push(key);}
+    else{conflict=true;conflicts.push(key);}
+  };
+  if(type==="trading_card"){exact("card_game",12);exact("card_number",35);exact("set_code",18);exact("rarity",12);exact("grading_company",18);exact("grade",18);exact("language",8);exact("form",18);}
+  else if(type==="sneaker"){exact("brand",15);exact("style_code",35);exact("model",15);exact("collaboration",18);exact("size",12);}
+  else if(type==="apparel"){exact("brand",15);exact("style_code",35);exact("item_type",18);exact("collaboration",18);exact("size",10);}
+  else if(type==="lottery_prize"){exact("prize_rank",30);}
+  else if(type==="model_kit"){exact("grade",20);exact("scale",18);}
+  else if(type==="plush"||type==="acrylic_goods"){exact("size_cm",12);}
+  else if(type==="figure"||type==="nendoroid"||type==="figma"){exact("scale",18);exact("edition",18);}
+  return {score,conflict,matched,conflicts,expected,candidate};
+}
+function categoryMarketThreshold(product){
+  const t=String(product?.product_type||"");
+  if(["trading_card","sneaker","apparel","lottery_prize"].includes(t))return 34;
+  return 40;
+}
+
+
+function specialistIntelligenceSelfTest(){
+  const cases=[
+    {type:"trading_card",name:"\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 SV8a 205/187 SAR PSA10 \u65e5\u672c\u8a9e\u7248",expect:{card_game:"POKEMON",set_code:"SV8A",card_number:"205/187",rarity:"SAR",grading_company:"PSA",grade:10}},
+    {type:"sneaker",name:"CONVERSE NARUTO SHIPPUDEN 31317140 27.5cm",expect:{brand:"CONVERSE",style_code:"31317140",collaboration:"NARUTO SHIPPUDEN",size:"27.5cm"}},
+    {type:"apparel",name:"NEW ERA NARUTO 59FIFTY 14312345",expect:{brand:"NEW ERA",item_type:"cap",style_code:"14312345",collaboration:"NARUTO SHIPPUDEN"}},
+    {type:"lottery_prize",name:"\u4e00\u756a\u304f\u3058 ONE PIECE \u30e9\u30b9\u30c8\u30ef\u30f3\u8cde \u30eb\u30d5\u30a3",expect:{prize_rank:"\u30e9\u30b9\u30c8\u30ef\u30f3\u8cde"}},
+    {type:"model_kit",name:"MG 1/100 \u30ac\u30f3\u30c0\u30e0 \u9650\u5b9a",expect:{grade:"MG",scale:"1/100",limited:true}},
+    {type:"plush",name:"\u521d\u97f3\u30df\u30af \u306c\u3044\u3050\u308b\u307f 30cm",expect:{size_cm:30}},
+    {type:"acrylic_goods",name:"\u521d\u97f3\u30df\u30af \u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 15cm \u30a4\u30d9\u30f3\u30c8\u9650\u5b9a",expect:{size_cm:15,event_limited:true}},
+    {type:"keychain",name:"ONE PIECE \u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0 \u30ad\u30fc\u30db\u30eb\u30c0\u30fc",expect:{blind_random:true}},
+    {type:"figure",name:"\u521d\u97f3\u30df\u30af 1/7 \u30b9\u30b1\u30fc\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2 \u9650\u5b9a\u7248",expect:{scale:"1/7",limited:true}}
+  ];
+  const results=cases.map(c=>{const got=specialistProfile(c.name,c.type),ok=Object.entries(c.expect).every(([k,v])=>String(got?.[k])===String(v));return {...c,got,ok};});
+  return {ok:results.every(x=>x.ok),passed:results.filter(x=>x.ok).length,total:results.length,results};
+}
+function collectibleIdentityKey(name,productType,jan=null){
+  if(productType==="sneaker"){
+    const x=sneakerIdentity(name);
+    return x;
+  }
+  if(productType==="apparel"){

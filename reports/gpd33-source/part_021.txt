@@ -1,0 +1,300 @@
+        if(/^(?=.{4,64}$)(?=.*[0-9])[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(rawMpn)&&!/^(DOESNOTAPPLY|NOTAPPLICABLE|UNKNOWN|UNBRANDED)$/i.test(rawMpn.replace(/[^A-Za-z]/g,""))){
+          o.manufacturer_part_number=rawMpn;enrichmentDiagnostics.mpn_found++;
+          if(o._provisional_replay)o.evidence_score=offerEvidenceScore(o);
+        }
+        const brandAspect=aspects.find(a=>/^brand$/i.test(String(a?.name||"").trim()));
+        if(!o.brand)o.brand=String(detail?.brand||detail?.product?.brand||aspectValue(brandAspect)||"").trim()||null;
+      }catch(e){enrichmentDiagnostics.errors.push(safeError(e));}
+    }
+    // Keep unidentified offers as explicitly provisional discovery evidence,
+    // not canonical products. This prevents losing all 30 candidates per run.
+    const provisional=enrichedOffers.filter(o=>o?.title&&!validGtin(digitsOnly(o.gtin||o.jan_code||""))&&!(o.manufacturer_part_number||o.mpn)).slice(0,30);
+    enrichmentDiagnostics.unidentified_listings=provisional.length;
+    if(provisional.length){
+      const stage=await logEvent(env,"universal_provisional_catalog_batch",{endpoint:"autonomous_discovery",metadata:{domain,query,version:VERSION,observed_at:now,items:provisional.map(o=>({provider:o.provider||null,listing_id:o.id||null,title:String(o.title).slice(0,220),brand:o.brand||null,url:o.url||null,merchant:o.merchant||null,price:o.total_price??null,currency:o.currency||null,listing_fingerprint:universalObservationFingerprint(o),identity_status:"unverified_listing",canonical_product:false}))}});
+      enrichmentDiagnostics.stage_write_ok=!!stage;
+      enrichmentDiagnostics.staged=stage?provisional.length:0;
+    }
+    const explicitGtin=identifiers.gtin||((identifiers.isbn&&validGtin(identifiers.isbn))?identifiers.isbn:null);
+    const promotionMap=new Map();
+    const promotionDiagnostics={gtin_valid:0,structured_mpn_valid:0,missing_identity:0,quality_rejected:0,proposed:0,confirmed:0,write_errors:[],identity_detail_attempted:enrichmentDiagnostics.attempted,identity_detail_successful:enrichmentDiagnostics.successful,identity_detail_gtin_found:enrichmentDiagnostics.gtin_found,identity_detail_mpn_found:enrichmentDiagnostics.mpn_found,identity_detail_yield:enrichmentDiagnostics.attempted?Number(((enrichmentDiagnostics.gtin_found+enrichmentDiagnostics.mpn_found)/enrichmentDiagnostics.attempted).toFixed(3)):0,identity_detail_budget:5,provisional_listings_staged:enrichmentDiagnostics.staged,provisional_replay:replayDiagnostics};
+    for(const o of enrichedOffers){
+      if(!o?.title)continue;
+      const g=digitsOnly(o?.gtin||o?.jan_code||"");
+      const hasGtin=validGtin(g);
+      // Only a provider-supplied manufacturer part number is an alternative canonical key.
+      // Never treat marketplace listing IDs, seller SKUs, or a model guessed from a title as an MPN.
+      const rawMpn=String(o?.manufacturer_part_number||o?.mpn||o?.part_number||o?.product?.mpn||"").trim().toUpperCase();
+      const mpn=/^(?=.{4,64}$)(?=.*[0-9])[A-Z0-9][A-Z0-9._\/-]*$/.test(rawMpn)?rawMpn:null;
+      const brand=String(o?.manufacturer||o?.brand||"").trim();
+      const cleanBrand=brand.replace(/\s+/g," ").toUpperCase();
+      const brandValid=cleanBrand.length>=2&&cleanBrand.length<=90&&!/^(GENERIC|UNBRANDED|NO BRAND|UNKNOWN|OEM)$/i.test(cleanBrand);
+      if(hasGtin)promotionDiagnostics.gtin_valid++;
+      else if(mpn&&brandValid)promotionDiagnostics.structured_mpn_valid++;
+      else {promotionDiagnostics.missing_identity++;continue;}
+      const relevance=universalCandidateRelevance(query,o),isExplicit=!!(hasGtin&&explicitGtin&&g===explicitGtin);
+      if(!isExplicit&&(Number(o?.evidence_score??offerEvidenceScore(o))<55||relevance<UNIVERSAL_DISCOVERY_POLICY.canonical_relevance_floor)){promotionDiagnostics.quality_rejected++;continue;}
+      const sourceKey=hasGtin?`universal:gtin:${g}`:`universal:mpn:${encodeURIComponent(cleanBrand)}:${encodeURIComponent(mpn)}`;
+      const quality=hasGtin?(isExplicit?"exact_validated_gtin":"provisional_market_gtin"):"provider_structured_brand_mpn";
+      const confidence=hasGtin?(isExplicit?.90:(relevance>=55?.78:.72)):.72;
+      const row={canonical_name_ja:String(o.title).slice(0,500),canonical_name_en:String(o.title).slice(0,500),manufacturer:brand||manufacturer||null,jan_code:hasGtin&&g.length===13?g:null,model_number:hasGtin?null:mpn,official_url:null,official_image_url:null,image_source_url:null,image_status:"pending",source_product_key:sourceKey,product_type:domain,product_status:"active",identification_confidence:confidence,source_last_checked_at:now,metadata:{universal_commerce:true,domain,canonical_quality:quality,identity_key:hasGtin?`gtin:${g}`:`brand_mpn:${cleanBrand}:${mpn}`,identifiers:{...identifiers,...(hasGtin?{gtin:g}:{mpn})},provider:o.provider||null,provider_product_id:o.id||null,market_url:o.url||null,merchant:o.merchant||null,last_observed_price:o.total_price??null,last_observed_currency:o.currency||null,relevance_score:relevance,evidence_level:hasGtin?(isExplicit?"exact_gtin_market_observation":"checksum_valid_market_gtin_requires_future_corroboration"):"provider_structured_brand_mpn_requires_future_corroboration",ingestion_version:VERSION}};
+      const prev=promotionMap.get(sourceKey);if(!prev||Number(row.identification_confidence)>Number(prev.identification_confidence))promotionMap.set(sourceKey,row);
+      if(promotionMap.size>=UNIVERSAL_DISCOVERY_POLICY.canonical_gtin_promotions_per_query)break;
+    }
+    promotionDiagnostics.proposed=promotionMap.size;
+    /* old promotion loop removed */
+    const promotionRows=[...promotionMap.values()];let canonical_new=0,canonical_upserted=0,canonical_quarantined=0;const canonical_conflicts=[];
+    if(promotionRows.length){
+      const quoted=promotionRows.map(r=>`"${String(r.source_product_key).replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`).join(",");
+      const existing=await sbOptional(env,`/products?select=id,source_product_key,jan_code,canonical_name_ja,canonical_name_en,manufacturer,metadata&source_product_key=in.(${encodeURIComponent(quoted)})&limit=${promotionRows.length+5}`)||[];
+      const existingMap=new Map((Array.isArray(existing)?existing:[]).map(x=>[x?.source_product_key,x]).filter(x=>x[0]));const accepted=[];
+      for(const row of promotionRows){const prior=existingMap.get(row.source_product_key)||null,assessment=canonicalConflictAssessment(prior,row);if(assessment.conflict){canonical_quarantined++;canonical_conflicts.push({source_product_key:row.source_product_key,reasons:assessment.reasons,title_similarity:assessment.title_similarity,existing_manufacturer:assessment.existing_manufacturer,new_manufacturer:assessment.new_manufacturer});continue;}accepted.push(row);if(!prior)canonical_new++;}
+      if(accepted.length){
+        // source_product_key is not guaranteed to have a UNIQUE index in deployed databases.
+        // Never use PostgREST on_conflict here: it fails with PostgreSQL 42P10.
+        // Resolve each key explicitly, PATCH by the existing primary key, or POST a new row.
+        // Confirm each write by returned source_product_key; count only successful writes.
+        const confirmed=[];let insertedCount=0;
+        // Batch preflight: check all JAN owners in one read instead of one read
+        // per candidate. Never assume source_product_key has a unique index.
+        // Batch INSERT only fresh, unambiguous identities. Any batch failure
+        // falls back to the original individually verified write path.
+        const batchInserted=new Set();
+        const janCodes=[...new Set(accepted.map(r=>r.jan_code).filter(Boolean))];
+        const janOwnerMap=new Map();
+        let janPreflightOk=true;
+        if(janCodes.length){
+          try{
+            const janList=janCodes.map(v=>'"'+String(v).replace(/"/g,'\"')+'"').join(",");
+            const janRows=await sb(env,`/products?select=id,source_product_key,jan_code,canonical_name_ja,canonical_name_en,manufacturer,metadata&jan_code=in.(${encodeURIComponent(janList)})&limit=${janCodes.length*2+2}`);
+            if(!Array.isArray(janRows))throw new Error("batch_jan_lookup_not_array");
+            for(const j of janRows){
+              if(janOwnerMap.has(j.jan_code))throw new Error("duplicate_jan_in_database");
+              janOwnerMap.set(j.jan_code,j);
+            }
+          }catch(e){janPreflightOk=false;promotionDiagnostics.batch_preflight_error=safeError(e);}
+        }
+        const batchCandidates=[];
+        if(janPreflightOk){
+          const seenKeys=new Set(),seenJans=new Set();
+          for(const row of accepted){
+            if(existingMap.has(row.source_product_key))continue;
+            if(row.jan_code&&(janOwnerMap.has(row.jan_code)||seenJans.has(row.jan_code)))continue;
+            if(seenKeys.has(row.source_product_key))continue;
+            seenKeys.add(row.source_product_key);
+            if(row.jan_code)seenJans.add(row.jan_code);
+            batchCandidates.push(row);
+          }
+        }
+        promotionDiagnostics.batch_candidates=batchCandidates.length;
+        // Limit the atomic insert batch to bound memory and DB statement size.
+        // On a uniqueness race, Postgres rolls back the batch; individual
+        // conflict-aware fallback then resolves each identity safely.
+        for(let i=0;i<batchCandidates.length;i+=8){
+          const group=batchCandidates.slice(i,i+8);
+          try{
+            const inserted=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(group)});
+            if(!Array.isArray(inserted)||inserted.length!==group.length)throw new Error("batch_insert_not_confirmed");
+            const expected=new Set(group.map(x=>x.source_product_key));
+            if(inserted.some(x=>!expected.has(x.source_product_key))||new Set(inserted.map(x=>x.source_product_key)).size!==group.length)throw new Error("batch_insert_identity_mismatch");
+            for(const row of inserted){batchInserted.add(row.source_product_key);confirmed.push(row);}
+            insertedCount+=inserted.length;
+          }catch(e){
+            promotionDiagnostics.batch_insert_fallback=(promotionDiagnostics.batch_insert_fallback||0)+group.length;
+            promotionDiagnostics.batch_insert_error=safeError(e);
+            // A response validation error can occur after a committed insert.
+            // The per-item path always rechecks source key and JAN ownership.
+          }
+        }
+        promotionDiagnostics.batch_inserted=batchInserted.size;
+        for(const row of accepted){
+          if(batchInserted.has(row.source_product_key))continue;
+          try{
+            const key=String(row.source_product_key);
+            const matches=await sb(env,`/products?select=id,source_product_key,canonical_name_ja,canonical_name_en,manufacturer,metadata&source_product_key=eq.${encodeURIComponent(key)}&limit=2`);
+            if(!Array.isArray(matches))throw new Error("canonical_lookup_not_array");
+            if(matches.length>1){canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:["duplicate_source_key_in_database"]});continue;}
+            let prior=matches[0]||null;
+            // A GTIN/JAN can already belong to a product imported under a different source key.
+            // Resolve that unique owner BEFORE INSERT, otherwise PostgreSQL raises 23505/409.
+            // Never overwrite an existing product's source key or merge conflicting identities.
+            let matchedByJan=false;
+            if(row.jan_code){
+              const janMatches=await sb(env,`/products?select=id,source_product_key,jan_code,canonical_name_ja,canonical_name_en,manufacturer,metadata&jan_code=eq.${encodeURIComponent(row.jan_code)}&limit=2`);
+              if(!Array.isArray(janMatches))throw new Error("canonical_jan_lookup_not_array");
+              if(janMatches.length>1){canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:["duplicate_jan_in_database"]});continue;}
+              const janOwner=janMatches[0]||null;
+              if(janOwner){
+                if(prior&&String(prior.id)!==String(janOwner.id)){
+                  canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:["jan_and_source_key_resolve_to_different_products"]});continue;
+                }
+                if(!prior){prior=janOwner;matchedByJan=true;}
+              }
+            }
+            if(prior){
+              const assessment=canonicalConflictAssessment(prior,row);
+              if(assessment.conflict){canonical_quarantined++;canonical_conflicts.push({source_product_key:key,reasons:assessment.reasons});continue;}
+            }
+            const endpoint=prior?`/products?id=eq.${encodeURIComponent(prior.id)}`:"/products";
+            const payload=prior?{...row,metadata:{...(prior.metadata||{}),...(row.metadata||{})}}:row;
+            if(matchedByJan){
+              // Existing canonical identity owns this JAN; preserve its stable key.
+              payload.source_product_key=prior.source_product_key;
+              promotionDiagnostics.jan_existing_reused=(promotionDiagnostics.jan_existing_reused||0)+1;
+            }
+            const result=await sb(env,endpoint,{method:prior?"PATCH":"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(payload)});
+            const saved=Array.isArray(result)?result:[];
+            if(saved.length!==1||String(saved[0]?.source_product_key||"")!==String(payload.source_product_key||""))throw new Error("canonical_write_not_confirmed");
+            confirmed.push(saved[0]);
+            if(!prior)insertedCount++;
+          }catch(e){
+            const error=safeError(e);
+            promotionDiagnostics.write_errors.push(error);
+            await logEvent(env,"universal_discovery_persist_error",{endpoint:"autonomous_discovery",metadata:{domain,query,error,source_product_key:row.source_product_key,version:VERSION}});
+          }
+        }
+        canonical_upserted=confirmed.length;promotionDiagnostics.confirmed=confirmed.length;
+        canonical_new=insertedCount;
+        if(!confirmed.length)await logEvent(env,"universal_discovery_persist_error",{endpoint:"autonomous_discovery",metadata:{domain,query,error:"product_write_not_confirmed",attempted:accepted.length,version:VERSION}});
+      }
+      if(canonical_conflicts.length)await logEvent(env,"universal_canonical_quarantine",{endpoint:"autonomous_discovery",metadata:{domain,query_text:query,query_family:queryFamily,conflicts:canonical_conflicts.slice(0,12),count:canonical_conflicts.length,version:VERSION,observed_at:now}});
+    }
+    let canonicalOfferResolution={attempted:0,identities_with_offer:0,exact_links:0,provider_calls:0,detail_calls:0,offers:[],errors:[]};
+    if(promotionRows.length&&env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET){
+      try{
+        const keys=promotionRows.slice(0,UNIVERSAL_DISCOVERY_POLICY.canonical_offer_resolution_budget).map(r=>`"${String(r.source_product_key).replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`).join(",");
+        const canonicalProducts=keys?await sbOptional(env,`/products?select=id,source_product_key,canonical_name_ja,canonical_name_en,manufacturer,jan_code,model_number,product_type,metadata&source_product_key=in.(${encodeURIComponent(keys)})&limit=${UNIVERSAL_DISCOVERY_POLICY.canonical_offer_resolution_budget+2}`):[];
+        canonicalOfferResolution=await resolveCanonicalOffersForProducts(env,Array.isArray(canonicalProducts)?canonicalProducts:[],domain,query);
+        for(const linked of canonicalOfferResolution.offers)discovery.push(canonicalLinkedOfferRecord(domain,query,linked));
+      }catch(e){canonicalOfferResolution.errors.push({stage:"resolver_outer",error:safeError(e)});}
+    }
+
+    const frontierMap=new Map();
+    for(const o of discovery){
+      const g=digitsOnly(o.gtin||"");
+      if(validGtin(g)){const q=`GTIN ${g}`;frontierMap.set(universalQueryFamily(domain,q),{type:"gtin",value:g,query:q,brand:o.brand||null,identity_fingerprint:o.identity_fingerprint});}
+      if(o.brand&&o.title&&Number(o.relevance_score||0)>=UNIVERSAL_DISCOVERY_POLICY.canonical_relevance_floor){const q=String(o.title).slice(0,180);frontierMap.set(universalQueryFamily(domain,q),{type:"brand_product",value:q,query:q,brand:o.brand,identity_fingerprint:o.identity_fingerprint});}
+      if(frontierMap.size>=16)break;
+    }
+    const frontierCandidates=[...frontierMap.values()];
+    if(frontierCandidates.length)await logEvent(env,"universal_catalog_frontier",{endpoint:"autonomous_expansion",metadata:{domain,source_query:query,source_query_family:queryFamily,candidates:frontierCandidates,observed_at:now,version:VERSION}});
+
+    const identityFps=[...new Set(discovery.map(x=>x.identity_fingerprint).filter(Boolean))],known=body?._recent_discovery_fingerprints instanceof Set?body._recent_discovery_fingerprints:null;
+    const newIdentityFps=known?identityFps.filter(x=>!known.has(x)):identityFps;
+    const duplicateVsHistory=known?Math.max(0,identityFps.length-newIdentityFps.length):null;
+    const identifierNamespaces=[...new Set([identifiers.gtin&&"gtin",identifiers.isbn&&"isbn",identifiers.mpn&&"mpn",identifiers.oe_number&&"oe",identifiers.sku&&"sku",identifiers.asin&&"asin",discovery.some(x=>x.gtin)&&"gtin"].filter(Boolean))];
+    const merchantEvidenceCandidates=discovery.filter(x=>x.merchant_route_evidence_signal===true).length,merchantTrustCandidates=discovery.filter(x=>x.merchant_trust_signal===true).length,purchaseReadyCandidates=discovery.filter(x=>x.offer_ready_signal===true).length,decisionReadyCandidates=discovery.filter(x=>x.decision_ready_signal===true).length,canonicalDecisionReadyCandidates=discovery.filter(x=>x.canonical_decision_ready_signal===true).length,crossProviderCorroboratedCandidates=discovery.filter(x=>x.cross_provider_corroborated===true).length;const discoveryBatchLogged=await logEvent(env,"universal_discovery_batch",{endpoint:body?._decision_live?"purchase_decision_live":"autonomous_discovery",metadata:{domain,query_text:query,query_key:key,query_family:queryFamily,exploration_source:body?.source||null,exploration_score:body?._exploration_score??null,candidates:discovery,unique_candidate_fingerprints:identityFps.length,new_unique_candidates:newIdentityFps.length,duplicate_candidates_vs_history:duplicateVsHistory,gtin_candidates:discovery.filter(x=>x.gtin).length,canonical_new,canonical_upserted,canonical_quarantined,canonical_promoted:canonical_new,merchant_evidence_candidates:merchantEvidenceCandidates,merchant_trust_candidates:merchantTrustCandidates,purchase_ready_candidates:purchaseReadyCandidates,decision_ready_candidates:decisionReadyCandidates,canonical_decision_ready_candidates:canonicalDecisionReadyCandidates,cross_provider_corroborated_candidates:crossProviderCorroboratedCandidates,provider_role:body?._provider_role||"balanced",provider_calls_estimate:Number(result?.provider_calls_estimate||0)+Number(canonicalOfferResolution?.provider_calls||0),canonical_offer_resolution_attempted:Number(canonicalOfferResolution?.attempted||0),canonical_offer_exact_links:Number(canonicalOfferResolution?.exact_links||0),canonical_offer_identities_with_offer:Number(canonicalOfferResolution?.identities_with_offer||0),canonical_offer_resolver_calls:Number(canonicalOfferResolution?.provider_calls||0),search_elapsed_ms:Number(result?.search_elapsed_ms||0),provider_error_count:Array.isArray(result?.provider_errors)?result.provider_errors.length:0,filter_diagnostics:filterDiagnostics,promotion_diagnostics:promotionDiagnostics,enrichment_diagnostics:enrichmentDiagnostics,decision_action:result?.decision?.action||null,decision_can_purchase:result?.decision?.can_purchase===true,frontier_candidates:frontierCandidates.length,identifier_namespaces:identifierNamespaces,observed_at:now,version:VERSION}});
+    if(known)for(const fp of identityFps)known.add(fp);
+    return {snapshot_logged:!!snapshotLogged,discovery_batch_logged:!!discoveryBatchLogged,filter_diagnostics:filterDiagnostics,promotion_diagnostics:promotionDiagnostics,enrichment_diagnostics:enrichmentDiagnostics,discovery_candidates:discovery.length,unique_discovery_candidates:identityFps.length,new_unique_candidates:newIdentityFps.length,duplicate_candidates_vs_history:duplicateVsHistory,offers_observed:snapshot.length,source_diversity:[...new Set(snapshot.map(x=>x.provider).filter(Boolean))].length,canonical_promoted:canonical_new,canonical_new,canonical_upserted,canonical_quarantined,merchant_evidence_candidates:merchantEvidenceCandidates,merchant_trust_candidates:merchantTrustCandidates,purchase_ready_candidates:purchaseReadyCandidates,decision_ready_candidates:decisionReadyCandidates,canonical_decision_ready_candidates:canonicalDecisionReadyCandidates,cross_provider_corroborated_candidates:crossProviderCorroboratedCandidates,canonical_offer_resolution_attempted:Number(canonicalOfferResolution?.attempted||0),canonical_offer_exact_links:Number(canonicalOfferResolution?.exact_links||0),canonical_offer_identities_with_offer:Number(canonicalOfferResolution?.identities_with_offer||0),canonical_offer_resolver_calls:Number(canonicalOfferResolution?.provider_calls||0),provider_calls_total:Number(result?.provider_calls_estimate||0)+Number(canonicalOfferResolution?.provider_calls||0),frontier_candidates:frontierCandidates.length,identity_key:identityKey,identifiers,query_family:queryFamily,identifier_namespaces:identifierNamespaces};
+  }catch(e){const error=safeError(e);try{await logEvent(env,"universal_discovery_persist_error",{endpoint:"autonomous_discovery",metadata:{domain:String(body?.domain||"general_commerce"),query:String(body?.query||body?.need||"").slice(0,160),error,version:VERSION}});}catch{}return {snapshot_logged:false,discovery_batch_logged:false,discovery_candidates:0,offers_observed:0,canonical_promoted:0,canonical_new:0,canonical_upserted:0,error};}
+}
+function universalIdentityRoleScore(x={}){
+  const n=Math.max(0,Number(x.history_candidates||0)),runs=Math.max(0,Number(x.history_runs||0));
+  const gtins=Math.max(0,Number(x.history_gtin_candidates||0)),canonical=Math.max(0,Number(x.history_canonical_new_count||0));
+  const avg=Math.max(0,Number(x.history_avg_candidates_per_run||(runs?n/runs:0)));
+  const uy=Number(x.history_unique_yield??0.5),ce=Number(x.history_canonical_per_provider_call||0);
+  // Beta-style shrinkage prevents a 1/1 exact listing from outranking a broad query that yields many canonical identities.
+  const gy=(gtins+1.5)/(n+12.5),cy=(canonical+0.75)/(n+12.5);
+  const volume=Math.min(1,Math.log1p(avg)/Math.log(31));
+  const expectedCanonical=Math.min(1,(cy*Math.max(1,avg))/6);
+  const expectedGtin=Math.min(1,(gy*Math.max(1,avg))/10);
+  const breadth=identityQueryBreadthScore(x.query||"");
+  return 0.28*expectedGtin+0.34*expectedCanonical+0.18*volume+0.08*uy+0.07*Math.min(1,ce)+0.05*breadth+(runs===0?0.08:0);
+}
+function universalFulfillmentRoleScore(x={}){
+  const dy=Number(x.history_decision_ready_yield||0),mty=Number(x.history_merchant_trust_yield||0),py=Number(x.history_purchase_ready_yield||0),uy=Number(x.history_unique_yield??0.5),runs=Number(x.history_runs||0);
+  return UNIVERSAL_DISCOVERY_POLICY.fulfillment_role_decision_weight*dy+UNIVERSAL_DISCOVERY_POLICY.fulfillment_role_trust_weight*mty+UNIVERSAL_DISCOVERY_POLICY.fulfillment_role_purchase_weight*py+UNIVERSAL_DISCOVERY_POLICY.fulfillment_role_unique_weight*uy+(runs===0?0.05:0);
+}
+function universalCrossProviderRoleScore(x={}){return 0.65*universalIdentityRoleScore(x)+0.35*universalFulfillmentRoleScore(x);}
+function universalCanonicalDecisionReady(domain,o={},query=""){
+  const listing=universalDomainDecisionReadiness(domain,o,query),g=digitsOnly(o?.gtin||o?.jan_code||""),exact=validGtin(g)||!!String(o?.mpn||o?.oe_number||"").trim();
+  return {listing_decision_ready:listing.decision_ready,canonical_decision_ready:listing.decision_ready&&!!exact,exact_identity:!!exact,blockers:listing.blockers};
+}
+async function universalDemandRefresh(env,limit=6){
+  const now=Date.now(),since7=new Date(now-UNIVERSAL_DISCOVERY_POLICY.history_days*86400000).toISOString(),since14=new Date(now-14*86400000).toISOString();
+  const [demandRows,frontierRows,snapshotRows,discoveryRows,paidRows]=await Promise.all([
+    sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_product_demand&occurred_at=gte.${encodeURIComponent(since7)}&order=occurred_at.desc&limit=24`),
+    sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_catalog_frontier&occurred_at=gte.${encodeURIComponent(since14)}&order=occurred_at.desc&limit=24`),
+    sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_product_snapshot&occurred_at=gte.${encodeURIComponent(since7)}&order=occurred_at.desc&limit=24`),
+    sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_discovery_batch&occurred_at=gte.${encodeURIComponent(since7)}&order=occurred_at.desc&limit=48`),
+    sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.paid_call&occurred_at=gte.${encodeURIComponent(since7)}&order=occurred_at.desc&limit=24`)
+  ]);
+  const history=explorationHistoryFromRows(discoveryRows,now);history.paidFamilies=new Map();for(const r of (Array.isArray(paidRows)?paidRows:[])){const m=r?.metadata||{},f=String(m.query_family||m.purchase_attribution?.query_family||"");if(!f)continue;const test=String(m.test_mode||"");if(test)continue;history.paidFamilies.set(f,(history.paidFamilies.get(f)||0)+1);}
+  const budget=Math.max(1,Math.min(6,Number(limit)||6)),pool=[],seen=new Set();
+  const push=(x)=>{if(!x?.domain||!x?.query||["parts","anime_collectibles"].includes(x.domain))return;const q=String(x.query).trim();if(q.length<2)return;const family=universalQueryFamily(x.domain,q);if(seen.has(family))return;seen.add(family);pool.push({...x,query:q,family});};
+
+  const demandScore=new Map();
+  for(const r of (Array.isArray(demandRows)?demandRows:[])){const m=r?.metadata||{},domain=String(m.domain||"general_commerce"),query=String(m.query_text||"").trim();if(!query)continue;const k=universalQueryFamily(domain,query),age=Math.max(0,(now-Date.parse(r.occurred_at||0))/3600000),x=demandScore.get(k)||{domain,query,score:0,pre_payment:false};x.score+=1+Math.max(0,72-age)/72+(m.pre_payment?.2:0);x.pre_payment=x.pre_payment||!!m.pre_payment;demandScore.set(k,x);}
+  for(const x of [...demandScore.values()].sort((a,b)=>b.score-a.score).slice(0,8))push({...x,source:"demand"});
+
+  for(const r of (Array.isArray(frontierRows)?frontierRows:[]).slice(0,120)){const m=r?.metadata||{},domain=String(m.domain||"general_commerce");for(const c of (m.candidates||[])){const q=String(c.query||c.value||"").trim();push({domain,query:q,source:c?.brand?"long_tail":"frontier",brand:c?.brand||null,frontier_observed_at:r.occurred_at||m.observed_at||null});}}
+
+  const stale=[...(Array.isArray(snapshotRows)?snapshotRows:[])].sort((a,b)=>Date.parse(a.occurred_at||0)-Date.parse(b.occurred_at||0));
+  for(const r of stale.slice(0,80)){const m=r?.metadata||{},f=universalFreshness(m.domain,m.observed_at||r.occurred_at);if(f.stale)push({domain:String(m.domain||"general_commerce"),query:String(m.query_text||"").trim(),source:"stale_refresh"});}
+
+  const domainRank=[...UNIVERSAL_GENERIC_DOMAINS].sort((a,b)=>Number(history.domains.get(a)?.runs||0)-Number(history.domains.get(b)?.runs||0));
+  for(let di=0;di<domainRank.length;di++){const domain=domainRank[di],anchors=genericDomainProfile(domain).anchors||[];if(!anchors.length)continue;const ai=Math.floor(now/14400000+di)%anchors.length;push({domain,query:anchors[ai],source:di<4?"domain_gap":"exploration"});const ai2=(ai+2)%anchors.length;if(ai2!==ai)push({domain,query:anchors[ai2],source:"exploration"});}
+
+  for(const x of UNIVERSAL_PROACTIVE_SEEDS){if(pool.length>=96)break;push({...x,source:"exploration"});}
+
+  const scored=pool.map(x=>({...x,...adaptiveExplorationScore(x,history,now)})).sort((a,b)=>b.score-a.score);
+  const picked=[],pickedFamilies=new Set(),domainCounts=new Map(),roleCounts=new Map();
+  const eligible=(x)=>{if(pickedFamilies.has(x.family))return false;return (domainCounts.get(x.domain)||0)<UNIVERSAL_EXPANSION_POLICY.max_per_domain;};
+  const commit=(x,role)=>{picked.push({...x,provider_role:role});pickedFamilies.add(x.family);domainCounts.set(x.domain,(domainCounts.get(x.domain)||0)+1);roleCounts.set(role,(roleCounts.get(role)||0)+1);};
+  const takeRanked=(role,rows,n,scoreFn)=>{for(const x of [...rows].sort((a,b)=>scoreFn(b)-scoreFn(a))){if((roleCounts.get(role)||0)>=n||picked.length>=budget)break;if(eligible(x))commit(x,role);}};
+  // Free-tier fairness: one identity query per 10-minute Cron, cycling through all 24 generic domains.
+  // Avoid six parallel marketplace searches: this Worker previously exceeded Cloudflare free CPU limits.
+  // A stable 10-minute time slot makes retries idempotent and ensures all domains get a turn within 4 hours.
+  const rotationSlot=Math.floor(now/600000)%UNIVERSAL_GENERIC_DOMAINS.length;
+  const rotationDomain=UNIVERSAL_GENERIC_DOMAINS[rotationSlot];
+  const rotationCandidates=scored.filter(x=>x.domain===rotationDomain);
+  // Each domain is visited once every four hours. Rotate product families
+  // within that domain instead of repeatedly choosing the highest scoring
+  // query, which causes repeated marketplace listings and little new coverage.
+  // Rotate through all known anchor families before revisiting an anchor.
+  const rotationProfile=genericDomainProfile(rotationDomain);
+  const rotationAnchors=Array.isArray(rotationProfile.anchors)?rotationProfile.anchors:[];
+  const domainVisit=Math.floor(now/(600000*UNIVERSAL_GENERIC_DOMAINS.length));
+  const anchorQuery=rotationAnchors.length?rotationAnchors[domainVisit%rotationAnchors.length]:null;
+  const anchorFamily=anchorQuery?universalQueryFamily(rotationDomain,anchorQuery):null;
+  const anchorCandidate=anchorFamily?rotationCandidates.find(x=>x.family===anchorFamily):null;
+  if(anchorCandidate&&eligible(anchorCandidate))commit(anchorCandidate,"identity");
+  else if(rotationCandidates.length){
+    // Favor previously untried query families, then proven canonical yield.
+    const preferred=[...rotationCandidates].sort((a,b)=>{
+      const ar=Number(a.history_runs||0),br=Number(b.history_runs||0);
+      const rank=x=>universalIdentityRoleScore(x)+Math.min(4,Number(x.history_canonical_new_count||0)/Math.max(1,Number(x.history_runs||0)))-(Number(x.history_runs||0)>0&&Number(x.history_canonical_new_count||0)===0?3:0)-(x.last_run_age_hours!==null&&x.last_run_age_hours<4?4:0);
+      if(ar===0&&br!==0)return -1;
+      if(br===0&&ar!==0)return 1;
+      return rank(b)-rank(a);
+    })[0];
+    if(eligible(preferred))commit(preferred,"identity");
+  }
+  // Regression guard: identity capacity is protected and cannot be displaced by fulfillment/decision-ready scores.
+  const identityAcquisitionPool=scored.filter(x=>(Number(x.history_gtin_yield||0)>0||Number(x.history_canonical_yield||0)>0||["domain_gap","exploration","demand"].includes(x.source))&&identityQueryBreadthScore(x.query)>=0.35);
+  takeRanked("identity",identityAcquisitionPool,UNIVERSAL_EXPANSION_POLICY.identity_slots,universalIdentityRoleScore);
+  if((roleCounts.get("identity")||0)<UNIVERSAL_EXPANSION_POLICY.identity_slots)takeRanked("identity",scored,UNIVERSAL_EXPANSION_POLICY.identity_slots,universalIdentityRoleScore);
+  takeRanked("fulfillment",scored,UNIVERSAL_EXPANSION_POLICY.fulfillment_slots,universalFulfillmentRoleScore);
+  takeRanked("cross_provider",scored.filter(x=>Number(x.history_gtin_yield||0)>0||Number(x.history_canonical_yield||0)>0),UNIVERSAL_EXPANSION_POLICY.cross_provider_slots,universalCrossProviderRoleScore);
+  if((roleCounts.get("cross_provider")||0)<UNIVERSAL_EXPANSION_POLICY.cross_provider_slots)takeRanked("cross_provider",scored,UNIVERSAL_EXPANSION_POLICY.cross_provider_slots,universalCrossProviderRoleScore);
+  const utilityRows=scored.filter(x=>["demand","domain_gap","long_tail","stale_refresh","exploration","frontier"].includes(x.source));
+  takeRanked("balanced",utilityRows,UNIVERSAL_EXPANSION_POLICY.utility_slots,x=>x.score);
+  if(picked.length<budget)takeRanked("balanced",scored,budget,x=>x.score);
+
+  const refreshed=[];
+  for(const x of picked){try{const out=await genericCommerceSearch(env,{...x,query:x.query,limit:UNIVERSAL_DISCOVERY_POLICY.results_per_provider,_persist:true,_refresh:true,_discovery_mode:true,_provider_role:x.provider_role,_background_cross_provider:x.provider_role==="cross_provider",_exploration_score:x.score,_recent_discovery_fingerprints:history.recentFingerprints});const p=out?.persistence||{};refreshed.push({domain:x.domain,query:x.query,query_family:x.family,source:x.source,provider_role:x.provider_role,exploration_score:x.score,identity_role_score:universalIdentityRoleScore(x),fulfillment_role_score:universalFulfillmentRoleScore(x),history_unique_yield:x.history_unique_yield,history_duplicate_ratio:x.history_duplicate_ratio,history_gtin_yield:x.history_gtin_yield,history_canonical_yield:x.history_canonical_yield,history_merchant_evidence_yield:x.history_merchant_evidence_yield,history_purchase_ready_yield:x.history_purchase_ready_yield,history_decision_answerability_yield:x.history_decision_answerability_yield,count:out?.count||0,live_count:out?.live_count||0,memory_count:out?.memory_count||0,source_diversity:out?.source_diversity||0,filter_diagnostics:p.filter_diagnostics||null,promotion_diagnostics:p.promotion_diagnostics||null,discovery_candidates:p.discovery_candidates||0,unique_discovery_candidates:p.unique_discovery_candidates||0,new_unique_candidates:p.new_unique_candidates||0,duplicate_candidates_vs_history:p.duplicate_candidates_vs_history??null,canonical_new:p.canonical_new||0,canonical_upserted:p.canonical_upserted||0,canonical_quarantined:p.canonical_quarantined||0,merchant_evidence_candidates:p.merchant_evidence_candidates||0,merchant_trust_candidates:p.merchant_trust_candidates||0,purchase_ready_candidates:p.purchase_ready_candidates||0,decision_ready_candidates:p.decision_ready_candidates||0,canonical_decision_ready_candidates:p.canonical_decision_ready_candidates||0,cross_provider_corroborated_candidates:p.cross_provider_corroborated_candidates||0,provider_calls_estimate:out?.provider_calls_estimate||0,yahoo_blocked:out?.yahoo_blocked===true,ebay_fallback_enabled:out?.ebay_fallback_enabled===true,search_elapsed_ms:out?.search_elapsed_ms||0,gtin_namespaces:(p.identifier_namespaces||[]).includes("gtin"),frontier_candidates:p.frontier_candidates||0,errors:out?.provider_errors||[]});}catch(e){refreshed.push({domain:x.domain,query:x.query,query_family:x.family,source:x.source,provider_role:x.provider_role,exploration_score:x.score,error:safeError(e)});}}
+  const totalCandidates=refreshed.reduce((a,x)=>a+Number(x.discovery_candidates||0),0),newUnique=refreshed.reduce((a,x)=>a+Number(x.new_unique_candidates||0),0),canonicalNew=refreshed.reduce((a,x)=>a+Number(x.canonical_new||0),0),merchantEvidence=refreshed.reduce((a,x)=>a+Number(x.merchant_evidence_candidates||0),0),merchantTrust=refreshed.reduce((a,x)=>a+Number(x.merchant_trust_candidates||0),0),purchaseReady=refreshed.reduce((a,x)=>a+Number(x.purchase_ready_candidates||0),0),decisionReady=refreshed.reduce((a,x)=>a+Number(x.decision_ready_candidates||0),0),canonicalDecisionReady=refreshed.reduce((a,x)=>a+Number(x.canonical_decision_ready_candidates||0),0),crossProvider=refreshed.reduce((a,x)=>a+Number(x.cross_provider_corroborated_candidates||0),0),providerCalls=refreshed.reduce((a,x)=>a+Number(x.provider_calls_estimate||0),0);
+  const roleSummary=Object.fromEntries([...roleCounts.entries()]);
+  await logEvent(env,"universal_expansion_run",{endpoint:"cron",metadata:{generic_domain_target_per_category:UNIVERSAL_GENERIC_DOMAIN_TARGET,generic_domain_target_count:UNIVERSAL_GENERIC_DOMAINS.length,generic_domain_target_total:UNIVERSAL_GENERIC_DOMAIN_TARGET*UNIVERSAL_GENERIC_DOMAINS.length,rotation_domain:rotationDomain,rotation_anchor_query:anchorQuery,rotation_visit:domainVisit,budget,selected:picked.length,sources:picked.map(x=>x.source),provider_roles:picked.map(x=>x.provider_role),role_counts:roleSummary,domains:[...new Set(picked.map(x=>x.domain))],selection:picked.map(x=>({domain:x.domain,query:x.query,query_family:x.family,source:x.source,provider_role:x.provider_role,score:x.score,identity_role_score:universalIdentityRoleScore(x),fulfillment_role_score:universalFulfillmentRoleScore(x),history_runs:x.history_runs,history_unique_yield:x.history_unique_yield,history_duplicate_ratio:x.history_duplicate_ratio,history_gtin_yield:x.history_gtin_yield,history_canonical_yield:x.history_canonical_yield})),refreshed,run_efficiency:{discovery_candidates:totalCandidates,new_unique_candidates:newUnique,discovery_unique_yield:totalCandidates?newUnique/totalCandidates:null,canonical_new:canonicalNew,canonical_promotion_yield:totalCandidates?canonicalNew/totalCandidates:null,merchant_evidence_yield:totalCandidates?merchantEvidence/totalCandidates:null,merchant_trust_yield:totalCandidates?merchantTrust/totalCandidates:null,purchase_ready_yield:totalCandidates?purchaseReady/totalCandidates:null,decision_ready_yield:totalCandidates?decisionReady/totalCandidates:null,canonical_decision_ready_yield:totalCandidates?canonicalDecisionReady/totalCandidates:null,cross_provider_corroborated_candidates:crossProvider,canonical_per_provider_call:providerCalls?canonicalNew/providerCalls:null},policy:UNIVERSAL_EXPANSION_POLICY,discovery_policy:UNIVERSAL_DISCOVERY_POLICY,version:VERSION}});
+  return {ok:true,mode:"checkpointed_canonical_identity_offer_join",generic_domain_target_per_category:UNIVERSAL_GENERIC_DOMAIN_TARGET,generic_domain_target_count:UNIVERSAL_GENERIC_DOMAINS.length,generic_domain_target_total:UNIVERSAL_GENERIC_DOMAIN_TARGET*UNIVERSAL_GENERIC_DOMAINS.length,rotation_domain:rotationDomain,rotation_anchor_query:anchorQuery,budget,selected:picked.length,role_counts:roleSummary,demand_selected:picked.filter(x=>x.source==="demand").length,frontier_selected:picked.filter(x=>x.source==="frontier").length,long_tail_selected:picked.filter(x=>x.source==="long_tail").length,domain_gap_selected:picked.filter(x=>x.source==="domain_gap").length,stale_selected:picked.filter(x=>x.source==="stale_refresh").length,exploration_selected:picked.filter(x=>x.source==="exploration").length,run_efficiency:{discovery_candidates:totalCandidates,new_unique_candidates:newUnique,discovery_unique_yield:totalCandidates?Math.round(newUnique/totalCandidates*1000)/1000:null,canonical_new:canonicalNew,canonical_promotion_yield:totalCandidates?Math.round(canonicalNew/totalCandidates*1000)/1000:null,canonical_decision_ready_yield:totalCandidates?Math.round(canonicalDecisionReady/totalCandidates*1000)/1000:null,cross_provider_corroborated_candidates:crossProvider},refreshed,generated_at:new Date().toISOString()};
+}
+
+
+async function checkpointedUniversalDemandRefresh(env,limit=1,trigger="scheduled"){
+  const runId=`${VERSION}:${trigger}:${Date.now()}`;
+  const startedAt=new Date().toISOString();
+  // Persist intent before any marketplace/network-heavy work. A killed Worker therefore leaves evidence.
+  try{await logEvent(env,"universal_discovery_attempt",{endpoint:"cron",metadata:{run_id:runId,trigger,phase:"started",limit:Number(limit)||1,version:VERSION,started_at:startedAt}});}catch{}
+  try{
+    const out=await universalDemandRefresh(env,Math.max(1,Math.min(1,Number(limit)||1)));
+    try{await logEvent(env,"universal_discovery_attempt",{endpoint:"cron",metadata:{run_id:runId,trigger,phase:"completed",selected:Number(out?.selected||0),discovery_candidates:Number(out?.run_efficiency?.discovery_candidates||0),canonical_new:Number(out?.run_efficiency?.canonical_new||0),selected_queries:Number(out?.selected||0),refreshed:(out?.refreshed||[]).slice(0,2).map(x=>({domain:x.domain,query:x.query,discovery_candidates:x.discovery_candidates||0,offers_observed:x.offers_observed||0,snapshot_logged:x.snapshot_logged===true,discovery_batch_logged:x.discovery_batch_logged===true,error:x.error||null,provider_errors:x.provider_errors||null})),canonical_decision_ready_yield:out?.run_efficiency?.canonical_decision_ready_yield??null,cross_provider_corroborated_candidates:Number(out?.run_efficiency?.cross_provider_corroborated_candidates||0),version:VERSION,started_at:startedAt,finished_at:new Date().toISOString()}});}catch{}

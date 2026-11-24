@@ -1,0 +1,300 @@
+    "destination budget and deadline constraints",
+    "no paid-placement ranking",
+    "unknown-cost and compatibility fail-closed rules",
+    "self-growing demand and market-observation database"
+  ],
+  failure_policy:{unknown_identity:"ask_or_compare_without_claiming_exactness",unknown_shipping_tax_duty:"surface_unknown",unknown_compatibility:"do_not_infer",missing_provider:"return_provider_error_without_fabrication",purchase_execution:"require_confirmation"},
+  routing_rules:{
+    universal_purchase_decision:"Default for cross-domain product buying tasks.",
+    parts_intelligence:"Use for exact industrial MPN lifecycle, successor, substitute, documents and merchant evidence.",
+    anime_specialists:"Use legacy anime endpoints for collectible-specific identity, market, rarity, authenticity, buy/wait or seller-routing questions.",
+    generic_commerce:"Use the universal endpoint for consumer electronics, automotive parts, appliances, fashion, books/media, toys, beauty, home, office, medical supplies, grocery and other physical products."
+  },
+  safety_rules:{paid_placement:false,unknowns_not_fabricated:true,compatibility_requires_evidence:true,purchase_execution_requires_confirmation:true}
+};
+
+
+DISCOVERY_CONFIG["/v1/purchase-decision"]={
+  service_name:"AI PURCHASE INTELLIGENCE - Universal Purchase Decision",
+  intent:"Accept a natural-language or structured buying intent from any supported language, normalize it, resolve the product through the strongest available vertical, compare evidence-based offers and return the best known purchase route without fabricating missing cost or compatibility data.",
+  when_to_use:"Use when an AI agent is close to spending money and needs one decision across identity, merchant trust, stock, lead time, authenticity, compatibility, destination and known landed cost. For exact industrial parts this uses PARTS + MERCHANT INTELLIGENCE; for anime collectibles it uses the existing full shopping intelligence; other commerce domains use domain-specific evidence-gated purchase-decision profiles now, with unknown decision-critical facts surfaced as blockers rather than deferred to a future adapter.",
+  value:"global_multilingual_purchase_decision",
+  tags:["agent-commerce","purchase-decision","multilingual","merchant-evidence","shopping-agent"],
+  examples:["Find an authentic OMRON E2E-X5ME1 that can arrive in Tokyo tomorrow.","日本国内で明日までに届く正規品のOMRON E2E-X5ME1を1個買いたい。代替品は不可。","Find the best trustworthy ONE PIECE figure I can buy in the US under $100."],
+  output_fields:["normalized intent","resolved product","decision","best offer","candidate offers","known landed cost","merchant trust/evidence","compatibility policy","purchase handoff"],
+  why_pay:"Pay when the agent must convert shopping intent into a defensible purchase recommendation rather than merely retrieve search results.",
+  buyer_outcome:"A destination-aware, evidence-based purchase decision with explicit unknowns and a transaction-ready handoff.",
+  selection_triggers:["purchase decision","buy this for me","best offer","best merchant","arrive by","authorized seller","exact part","landed cost","agent checkout"],
+  prefer_over:["Use instead of generic web search when the answer will directly influence a purchase or supplier selection."],
+  description:"Universal multilingual purchase-decision endpoint for AI agents. Normalizes buying intent, routes to verified domain intelligence, compares evidence-based merchant offers, surfaces unknown costs and returns a best purchase route."
+};
+
+function agentSelectionMetadata(path){
+  const d=DISCOVERY_CONFIG[path]||{};
+  const price=endpointPriceUsd(path);
+  const key=path==="/v1/buy-wait"?"buy_wait":path==="/v1/best-place"?"best_place":path==="/v1/listing-match"?"listing_match":path==="/v1/landed-cost"?"landed_cost":path==="/v1/price-history"?"price_history":path==="/v1/full-intelligence"?"full_intelligence":path.replace("/v1/","");
+  return {
+    category:AGENT_SELECTION_POLICY.category,
+    task_intent:d.intent||null,
+    when_to_use:d.when_to_use||null,
+    why_pay:d.why_pay||AGENT_SELECTION_POLICY.why_pay,
+    buyer_outcome:d.buyer_outcome||d.value||null,
+    prefer_over_generic_web:d.prefer_over||AGENT_SELECTION_POLICY.prefer_over_generic_web,
+    do_not_use_for:d.do_not_use||AGENT_SELECTION_POLICY.do_not_use_for,
+    selection_triggers:d.selection_triggers||[],
+    price_usdc:price,
+    routing_rule:AGENT_SELECTION_POLICY.routing_rules[key]||null,
+    default_for_multi_signal:path==="/v1/full-intelligence",
+    multilingual_vague_query_support:true,
+    ambiguity_facets:AGENT_SELECTION_POLICY.ambiguity_facets||[],
+    selection_advantages:AGENT_SELECTION_POLICY.selection_advantages||[],
+    failure_policy:AGENT_SELECTION_POLICY.failure_policy||null,
+    examples:d.examples||[],
+    task_queries:discoveryTaskQueries(path),
+    discovery_keywords:[...new Set([...(d.tags||[]),...(d.selection_triggers||[]),...COMMERCIAL_DISCOVERY_KEYWORDS])].slice(0,80)
+  };
+}
+
+const DISCOVERY_LANGUAGES=["ja","en","zh","ko","es","fr","de"];
+const DISCOVERY_LOCALES=["ja","en","zh-CN","zh-TW","ko","es","fr","de"];
+const MULTILINGUAL_DISCOVERY_EXAMPLES={"en":["anime figure","Pokemon plush","ONE PIECE figure"],"ja":["\u30a2\u30cb\u30e1 \u30d5\u30a3\u30ae\u30e5\u30a2","\u30dd\u30b1\u30e2\u30f3 \u306c\u3044\u3050\u308b\u307f","\u30ef\u30f3\u30d4\u30fc\u30b9 \u30d5\u30a3\u30ae\u30e5\u30a2"],"fr":["figurine anime","peluche Pok\u00e9mon","figurine One Piece"],"es":["figura anime","peluche Pok\u00e9mon","figura One Piece"],"de":["Anime-Figur","Pok\u00e9mon-Pl\u00fcschtier","One Piece Figur"],"it":["figura anime","peluche Pok\u00e9mon","figura One Piece"],"pt":["figura de anime","pel\u00facia Pok\u00e9mon","figura One Piece"],"zh":["\u52a8\u6f2b\u624b\u529e","\u5b9d\u53ef\u68a6\u6bdb\u7ed2\u73a9\u5177","\u6d77\u8d3c\u738b\u624b\u529e"],"zh-TW":["\u52d5\u6f2b\u516c\u4ed4","\u5bf6\u53ef\u5922\u7d68\u6bdb\u73a9\u5177","\u822a\u6d77\u738b\u516c\u4ed4"],"ko":["\uc560\ub2c8 \ud53c\uaddc\uc5b4","\ud3ec\ucf13\ubaac \ubd09\uc81c\uc778\ud615","\uc6d0\ud53c\uc2a4 \ud53c\uaddc\uc5b4"],"ru":["\u0430\u043d\u0438\u043c\u0435 \u0444\u0438\u0433\u0443\u0440\u043a\u0430","\u043c\u044f\u0433\u043a\u0430\u044f \u0438\u0433\u0440\u0443\u0448\u043a\u0430 Pokemon","\u0444\u0438\u0433\u0443\u0440\u043a\u0430 One Piece"],"ar":["\u0645\u062c\u0633\u0645\u0627\u062a \u0627\u0646\u0645\u064a","\u062f\u0645\u064a\u0629 \u0628\u0648\u0643\u064a\u0645\u0648\u0646","\u0645\u062c\u0633\u0645 \u0648\u0646 \u0628\u064a\u0633"],"hi":["\u090f\u0928\u0940\u092e\u0947 \u092b\u093f\u0917\u0930","\u092a\u094b\u0915\u0947\u092e\u094b\u0928 \u092a\u094d\u0932\u0936","\u0935\u0928 \u092a\u0940\u0938 \u092b\u093f\u0917\u0930"],"id":["figure anime","boneka Pokemon","figure One Piece"],"th":["\u0e1f\u0e34\u0e01\u0e40\u0e01\u0e2d\u0e23\u0e4c\u0e2d\u0e19\u0e34\u0e40\u0e21\u0e30","\u0e15\u0e38\u0e4a\u0e01\u0e15\u0e32\u0e42\u0e1b\u0e40\u0e01\u0e21\u0e2d\u0e19","\u0e1f\u0e34\u0e01\u0e40\u0e01\u0e2d\u0e23\u0e4c\u0e27\u0e31\u0e19\u0e1e\u0e35\u0e0b"],"vi":["m\u00f4 h\u00ecnh anime","th\u00fa b\u00f4ng Pokemon","m\u00f4 h\u00ecnh One Piece"],"tr":["anime fig\u00fcr\u00fc","Pokemon pelu\u015f","One Piece fig\u00fcr\u00fc"],"nl":["anime figuur","Pokemon knuffel","One Piece figuur"],"pl":["figurka anime","pluszak Pokemon","figurka One Piece"]};
+const GLOBAL_DISCOVERY_KEYWORDS=["anime","anime figure","anime figures","anime collectible","anime collectibles","anime merch","anime merchandise","anime goods","anime stuff","anime toys","manga merch","manga figures","character goods","Japanese collectibles","Japanese anime goods","Pokemon","Pokemon plush","Pokemon plushie","Pokemon merch","Pokemon merchandise","Pokemon goods","Pokemon stuff","Pokemon toys","ONE PIECE","One Piece figure","One Piece figures","One Piece merch","One Piece goods","Nendoroid","anime Nendoroid","Gunpla","Gundam model kit","trading cards","anime cards","Ichiban Kuji","prize figure","acrylic stand","anime keychain","anime badge","anime apparel","anime sneakers","\u30a2\u30cb\u30e1","\u30a2\u30cb\u30e1 \u30b0\u30c3\u30ba","\u30a2\u30cb\u30e1 \u30d5\u30a3\u30ae\u30e5\u30a2","\u30dd\u30b1\u30e2\u30f3","\u30dd\u30b1\u30e2\u30f3 \u30b0\u30c3\u30ba","\u30dd\u30b1\u30e2\u30f3 \u306c\u3044\u3050\u308b\u307f","\u30ef\u30f3\u30d4\u30fc\u30b9 \u30b0\u30c3\u30ba","figurine anime","figurine manga","figurines manga","produits anime","merch anime","peluche Pokemon","peluches Pokemon","figura anime","figuras anime","merch de anime","productos anime","peluche Pokemon","Anime-Figur","Anime Figuren","Anime Merch","Pokemon Plueschtier","Pokemon Pluesch","prodotti anime","peluche Pokemon","produtos anime","pelucia Pokemon","\u52a8\u6f2b\u5468\u8fb9","\u52a8\u6f2b\u624b\u529e","\u5b9d\u53ef\u68a6\u5468\u8fb9","\u5b9d\u53ef\u68a6\u6bdb\u7ed2\u73a9\u5177","\u52d5\u6f2b\u5468\u908a","\u52d5\u6f2b\u516c\u4ed4","\u5bf6\u53ef\u5922\u5468\u908a","\u5bf6\u53ef\u5922\u7d68\u6bdb\u73a9\u5177","\uc560\ub2c8 \uad7f\uc988","\uc560\ub2c8 \ud53c\uaddc\uc5b4","\ud3ec\ucf13\ubaac \uad7f\uc988","\ud3ec\ucf13\ubaac \ubd09\uc81c\uc778\ud615","\u0430\u043d\u0438\u043c\u0435 \u043c\u0435\u0440\u0447","\u0430\u043d\u0438\u043c\u0435 \u0444\u0438\u0433\u0443\u0440\u043a\u0430","\u0645\u0646\u062a\u062c\u0627\u062a \u0627\u0644\u0623\u0646\u0645\u064a","\u0645\u062c\u0633\u0645\u0627\u062a \u0627\u0646\u0645\u064a","\u090f\u0928\u0940\u092e\u0947 \u092e\u0930\u094d\u091a","\u090f\u0928\u0940\u092e\u0947 \u092b\u093f\u0917\u0930","merch anime indonesia","merch anime thailand","\u0e1f\u0e34\u0e01\u0e40\u0e01\u0e2d\u0e23\u0e4c\u0e2d\u0e19\u0e34\u0e40\u0e21\u0e30","do choi anime","anime urunleri","anime merch nederland","gadzet anime"];
+
+// v3.7.28 — High-intent natural-language phrases used by autonomous shopping agents.
+// These are deliberately task-oriented rather than brand-oriented so semantic discovery
+// can match a buyer's job-to-be-done even when the buyer has never heard of ANIME INTELLIGENCE.
+const COMMERCIAL_DISCOVERY_KEYWORDS=[
+  "anime figure price checker","anime figure price guide","anime figure value","anime figure valuation","anime figure appraisal","anime collectible appraisal","collectible price comparison","Japanese collectible valuation","Japanese anime figure market value","how much is my anime figure worth","how much is this Nendoroid worth","current Nendoroid price","Pokemon collectible value","ONE PIECE figure value","anime resale value","figure resale value","Japan marketplace price","Yahoo Japan figure price","eBay anime figure price","identify anime figure","identify Nendoroid","identify Japanese collectible","find exact anime figure edition","JAN barcode anime figure","EAN anime collectible","figure model number lookup","anime figure rarity","is this anime figure rare","rerelease risk anime figure","anime figure restock risk","limited anime figure scarcity","is this Nendoroid fake","anime figure authenticity check","bootleg anime figure check","counterfeit Nendoroid check","fake anime figure detector","suspicious anime listing","should I buy this anime figure","buy or wait anime figure","should I buy this Nendoroid now","wait for Nendoroid rerelease","best place to buy anime figure","where to buy Nendoroid","where to buy Japanese anime figures","cheapest anime figure seller","compare anime figure sellers","best anime collectible deal","anime figure shopping assistant","anime collectible shopping agent","Japanese collectibles shopping API","anime figure API","collectible valuation API","collectible authenticity API","anime merchandise buying intelligence","anime figure landed cost","total cost Japan buyer","anime preorder deadline","anime lottery deadline","verify anime listing exact edition","anime figure price history","Nendoroid price history"
+];
+
+const DISCOVERY_TASK_QUERIES={
+  "/v1/identify":[
+    "I want a ONE PIECE figure. What should I buy?",
+    "find me a good Hatsune Miku figure under $100",
+    "I want a Naruto figure as a gift",
+    "recommend a Pokemon collectible",
+    "which exact Nendoroid is this Hatsune Miku release"
+  ],
+  "/v1/market":[
+    "how much is this anime figure worth","what is the current market value of this Nendoroid","compare Japan and global prices for this anime collectible","what is the resale value of this figure","find the current price of this exact Japanese collectible"
+  ],
+  "/v1/rarity":[
+    "is this anime figure rare","is this Nendoroid actually scarce","will this figure be rereleased","is the scarcity premium justified","check restock or rerelease risk for this collectible"
+  ],
+  "/v1/authenticity":[
+    "is this anime figure fake","is this Nendoroid a bootleg","check counterfeit risk before buying","does this listing match the official Japanese product","is this cheap anime figure listing suspicious"
+  ],
+  "/v1/buy-wait":[
+    "should I buy this anime figure now","buy or wait for this Nendoroid","should I wait for a rerelease","is now a good time to buy this collectible","BUY WAIT WATCH or AVOID this figure"
+  ],
+  "/v1/best-place":[
+    "where should I buy this anime figure","find the best place to buy this Nendoroid","compare sellers for this exact collectible","find the cheapest trustworthy current listing","best current purchase route for this Japanese collectible"
+  ],
+  "/v1/listing-match":[
+    "does this listing match the exact anime figure edition","verify this eBay listing is the correct Nendoroid","is this Yahoo listing the same Japanese collectible","check wrong version risk before I buy"
+  ],
+  "/v1/deadline":[
+    "when does preorder close for this anime figure","how long is left to enter this Japanese lottery sale","is the limited order window still open","purchase deadline for this collectible"
+  ],
+  "/v1/landed-cost":[
+    "total cost for a buyer in Japan","landed cost of this anime figure to the US","what will I actually pay including known shipping","compare Japan domestic and overseas purchase cost"
+  ],
+  "/v1/price-history":[
+    "90 day price history for this anime figure","is today's price high compared with the last 30 days","historical low for this Nendoroid","show price trend for this collectible"
+  ],
+  "/v1/full-intelligence":[
+    "should I buy this anime figure, what is it worth, is it real, and where should I buy it","give me a complete buying decision for this Nendoroid","evaluate this Japanese collectible before purchase","identify value authenticate and find the best seller for this figure","complete anime collectible purchase intelligence"
+  ]
+};
+
+DISCOVERY_TASK_QUERIES["/v1/purchase-decision"]=["buy this exact part from the best trustworthy seller","find an authorized seller that can deliver by tomorrow","choose the best offer including known shipping","make a purchase decision for this product","select a supplier for this exact MPN"];
+
+function discoveryTaskQueries(path){return DISCOVERY_TASK_QUERIES[path]||[];}
+function combinedDiscoveryKeywords(){return [...new Set([...GLOBAL_DISCOVERY_KEYWORDS,...COMMERCIAL_DISCOVERY_KEYWORDS])];}
+
+
+
+// v3.7.33 - Coinbase Bazaar / Agentic Market exposure hardening.
+// Follow the official Bazaar metadata limits: serviceName <= 32 printable ASCII
+// chars and no more than 5 short printable-ASCII tags. Use a canonical resource
+// URL without query parameters so different buyer queries do not fragment the
+// same endpoint into separate catalog identities.
+const BAZAAR_SERVICE_NAME="ANIME INTELLIGENCE";
+const BAZAAR_TAGS={
+  "/v1/identify":["anime","figures","recommend","shopping","japan"],
+  "/v1/market":["anime","collectibles","market-price","japan","shopping"],
+  "/v1/rarity":["anime","collectibles","rarity","rerelease","shopping"],
+  "/v1/authenticity":["anime","collectibles","authenticity","bootleg-risk","shopping"],
+  "/v1/buy-wait":["anime","collectibles","buy-or-wait","timing","shopping"],
+  "/v1/best-place":["anime","collectibles","where-to-buy","japan","shopping"],
+  "/v1/listing-match":["anime","collectibles","listing-match","edition","shopping"],
+  "/v1/deadline":["anime","collectibles","preorder","deadline","shopping"],
+  "/v1/landed-cost":["anime","collectibles","landed-cost","shipping","shopping"],
+  "/v1/price-history":["anime","collectibles","price-history","valuation","shopping"],
+  "/v1/full-intelligence":["anime","collectibles","purchase-decision","japan","shopping"],
+  "/v1/parts-intelligence":["parts","industrial","mro","replacement","sourcing"]
+};
+BAZAAR_TAGS["/v1/purchase-decision"]=["agent-commerce","purchase","multilingual","evidence","shopping"];
+function bazaarTags(path){
+  return (BAZAAR_TAGS[path]||["anime","collectibles","japan","shopping"]).slice(0,5);
+}
+function bazaarMethod(path){return path==="/v1/purchase-decision"?"POST":"GET";}
+function bazaarExampleBody(path){if(path!=="/v1/purchase-decision")return null;return {query:"Find an authentic OMRON E2E-X5ME1 that can arrive in Tokyo tomorrow.",product:{manufacturer:"OMRON",mpn:"E2E-X5ME1"},quantity:1,destination:{country:"JP"},requirements:{authenticity_required:true,substitutes_allowed:false,currency:"JPY"}};}
+function canonicalPaidResourceUrl(request,path){
+  const u=new URL(request.url);
+  return `${u.origin}${path}`;
+}
+function bazaarExampleQueryParams(path){
+  const d=DISCOVERY_CONFIG[path]||{};
+  if(path==="/v1/parts-intelligence")return {part_number:"E2E-X5ME1",manufacturer:"OMRON"};
+  if(path==="/v1/purchase-decision")return {};
+  const base={query:d.examples?.[0]||"Nendoroid Hatsune Miku",lang:"en"};
+  if(path==="/v1/landed-cost")return {...base,buyer_country:"JP"};
+  if(path==="/v1/listing-match")return {...base,listing_title:"Official Japanese listing title"};
+  return base;
+}
+
+const INDEX402_SERVICES=[
+  ["/v1/identify","ANIME INTELLIGENCE - Find Recommend or Identify Anime Collectibles",.005],
+  ["/v1/market","ANIME INTELLIGENCE - Anime Figure Market Value & Price Comparison",.01],
+  ["/v1/rarity","ANIME INTELLIGENCE - Collectible Rarity & Rerelease Risk",.01],
+  ["/v1/authenticity","ANIME INTELLIGENCE - Anime Figure Authenticity & Bootleg Risk",.02],
+  ["/v1/buy-wait","ANIME INTELLIGENCE - Buy or Wait Decision for Anime Collectibles",.02],
+  ["/v1/best-place","ANIME INTELLIGENCE - Best Place to Buy Anime Figure or Collectible",.03],
+  ["/v1/listing-match","ANIME INTELLIGENCE - Verify Listing Matches Exact Anime Collectible",.01],
+  ["/v1/deadline","ANIME INTELLIGENCE - Preorder Lottery and Purchase Deadline",.01],
+  ["/v1/landed-cost","ANIME INTELLIGENCE - Landed Cost for Japan or International Buyer",.02],
+  ["/v1/price-history","ANIME INTELLIGENCE - Anime Collectible Price History",.02],
+  ["/v1/full-intelligence","ANIME INTELLIGENCE - Complete Anime Collectible Purchase Intelligence",.05],
+  ["/v1/shopping-intelligence","ANIME INTELLIGENCE - Shopping Intelligence for AI Agents",.05],
+  ["/v1/parts-intelligence","PARTS INTELLIGENCE - Exact Part Lifecycle Compatibility and Sourcing",.05],
+  ["/v1/purchase-decision","AI PURCHASE INTELLIGENCE - Universal Purchase Decision",.10]
+].map(x=>({path:x[0],name:x[1],price_usd:x[2],description:DISCOVERY_CONFIG[x[0]].description}));
+
+function facilitatorUrl(env){return DEFAULT_X402_FACILITATOR.replace(/\/$/,"");}
+function isCdpFacilitator(env){return facilitatorUrl(env).includes("api.cdp.coinbase.com/platform/v2/x402");}
+function b64urlBytes(bytes){let bin="";for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");}
+function b64urlJson(obj){return b64urlBytes(new TextEncoder().encode(JSON.stringify(obj)));}
+function decodeBase64Bytes(value){const clean=String(value||"").trim().replace(/\s+/g,"");let bin;try{bin=atob(clean);}catch{throw new Error("CDP_API_KEY_SECRET is not valid base64");}const out=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);return out;}
+function randomNonce(){const b=new Uint8Array(16);crypto.getRandomValues(b);return Array.from(b,x=>x.toString(16).padStart(2,"0")).join("");}
+async function cdpJwt(env,method,path){if(!env.CDP_API_KEY_ID)throw new Error("CDP_API_KEY_ID is missing");if(!env.CDP_API_KEY_SECRET)throw new Error("CDP_API_KEY_SECRET is missing");const raw=decodeBase64Bytes(env.CDP_API_KEY_SECRET);if(raw.length!==64)throw new Error(`CDP Ed25519 secret must decode to 64 bytes; got ${raw.length}`);const seed=raw.slice(0,32),pub=raw.slice(32,64);const jwk={kty:"OKP",crv:"Ed25519",x:b64urlBytes(pub),d:b64urlBytes(seed),ext:true};const key=await crypto.subtle.importKey("jwk",jwk,{name:"Ed25519"},false,["sign"]);const now=Math.floor(Date.now()/1000),host="api.cdp.coinbase.com",requestPath=String(path).startsWith("/")?String(path):`/${path}`;const header={alg:"EdDSA",typ:"JWT",kid:String(env.CDP_API_KEY_ID),nonce:randomNonce()};const claims={sub:String(env.CDP_API_KEY_ID),iss:"cdp",aud:["cdp_service"],nbf:now,exp:now+120,uri:`${String(method).toUpperCase()} ${host}${requestPath}`};const unsigned=`${b64urlJson(header)}.${b64urlJson(claims)}`;const sig=new Uint8Array(await crypto.subtle.sign({name:"Ed25519"},key,new TextEncoder().encode(unsigned)));return `${unsigned}.${b64urlBytes(sig)}`;}
+async function facilitatorHeaders(env,method,path){const h={accept:"application/json"};if(isCdpFacilitator(env))h.authorization=`Bearer ${await cdpJwt(env,method,path)}`;return h;}
+async function facilitatorSupport(env){const base=facilitatorUrl(env),u=new URL(`${base}/supported`),path=u.pathname+u.search,h=await facilitatorHeaders(env,"GET",path);const r=await fetch(u.toString(),{headers:h});if(!r.ok){const raw=await r.text();throw new Error(`Facilitator /supported ${r.status}: ${raw.slice(0,500)}`);}return r.json();}
+function findSolanaMainnetKind(support){const kinds=Array.isArray(support?.kinds)?support.kinds:Array.isArray(support)?support:[];return kinds.find(k=>Number(k.x402Version||2)===2&&k.scheme==="exact"&&k.network===SOLANA_MAINNET)||null;}
+async function cdpDiscoveryGet(env,route,params={}){if(!isCdpFacilitator(env))throw new Error("Coinbase CDP facilitator is not active");const base=facilitatorUrl(env),u=new URL(`${base}${route}`);for(const [k,v] of Object.entries(params)){if(v==null||v==="")continue;if(Array.isArray(v)){for(const x of v)u.searchParams.append(k,String(x));}else u.searchParams.set(k,String(v));}const path=u.pathname+u.search,h=await facilitatorHeaders(env,"GET",path),r=await fetch(u.toString(),{headers:h,cache:"no-store"}),raw=await r.text();let body;try{body=raw?JSON.parse(raw):null;}catch{body={raw:raw.slice(0,4000)};}if(!r.ok)throw new Error(`CDP discovery ${route} ${r.status}: ${JSON.stringify(body).slice(0,1200)}`);return body;}
+async function cdpBazaarValidateResource(origin,path){
+  const resource=`${origin}${path}?query=${encodeURIComponent(DISCOVERY_CONFIG[path]?.examples?.[0]||"Nendoroid Hatsune Miku")}`;
+  const u="https://api.cdp.coinbase.com/platform/v2/x402/validate";
+  const r=await fetch(u,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({resource,method:"GET"})});
+  const raw=await r.text();let body;try{body=raw?JSON.parse(raw):null;}catch{body={raw:raw.slice(0,6000)};}
+  return {path,resource,http_status:r.status,ok:r.ok,valid:body?.valid??null,simulation_outcome:body?.simulation?.outcome??null,body};
+}
+async function bazaarComplianceAudit(origin,env){
+  // v3.7.11: Do not use Coinbase /validate as the primary readiness gate.
+  // That endpoint can return a uniform HTTP 429 because of Coinbase-side
+  // validation throttling even when our seven paid resources are healthy.
+  // Build the exact x402 v2 requirements locally from the same production
+  // paymentRequirement() path used by the paid endpoints. This requires only
+  // one facilitator /supported request for the entire seven-endpoint audit.
+  const preflight=await x402DiscoveryPreflight(origin,env);
+  const results=(preflight.results||[]).map(r=>({
+    path:r.path,
+    resource:`${origin}${r.path}`,
+    http_status:r.ok?402:null,
+    ok:!!r.ok,
+    payment_required_header:!!r.payment_required_header,
+    encoded_header_bytes:r.encoded_header_bytes??null,
+    amount:r.amount??null,
+    network:r.network??null,
+    fee_payer_present:!!r.fee_payer_present,
+    bazaar:!!r.bazaar,
+    error:r.error||null
+  }));
+  const accepted=results.filter(r=>r.ok&&r.http_status===402&&r.payment_required_header&&r.bazaar);
+  return {
+    service:"ANIME INTELLIGENCE",
+    version:VERSION,
+    checked_at:new Date().toISOString(),
+    audit_mode:"local_production_x402_requirement_preflight",
+    external_coinbase_validate_called:false,
+    external_validate_note:"Coinbase /validate is intentionally not used as the readiness gate because external validator throttling can return HTTP 429 independently of merchant endpoint health.",
+    expected_count:INDEX402_SERVICES.length,
+    accepted_count:accepted.length,
+    all_accepted:accepted.length===INDEX402_SERVICES.length,
+    required_failures:results.filter(r=>!r.ok).map(r=>({path:r.path,detail:r.error||"x402_requirement_preflight_failed"})),
+    facilitator_error:preflight.error||null,
+    results
+  };
+}
+async function bazaarMerchantAudit(env,origin){
+  if(!env.X402_WALLET_ADDRESS)throw new Error("X402_WALLET_ADDRESS is missing");
+  const body=await cdpDiscoveryGet(env,"/discovery/merchant",{payTo:String(env.X402_WALLET_ADDRESS),limit:20,offset:0});
+  const resources=Array.isArray(body?.resources)?body.resources:[];
+  const ours=resources.map(x=>compactBazaarResource(x,origin)).filter(x=>x.path);
+  const found=new Set(ours.map(x=>x.path));
+  return {service:"ANIME INTELLIGENCE",version:VERSION,checked_at:new Date().toISOString(),source:"Coinbase CDP Bazaar merchant discovery",listed:ours.length>0,indexed_count:found.size,expected_count:INDEX402_SERVICES.length,all_indexed:INDEX402_SERVICES.every(s=>found.has(s.path)),missing_paths:INDEX402_SERVICES.map(s=>s.path).filter(p=>!found.has(p)),resources:ours};
+}
+function containsMojibake(value){
+  const text=typeof value==="string"?value:JSON.stringify(value??"");
+  return /\uFFFD|Ã.|Â.|â(?:€|€™|€œ|€˜|€“|€”)|ã(?:€|ƒ|‚)|(?:縺|繧|蜿|譁|螟|荳){2,}/u.test(text);
+}
+function bazaarExpectedAtomic(path){const s=INDEX402_SERVICES.find(x=>x.path===path);return s?String(Math.round(Number(s.price_usd||0)*1000000)):null;}
+function bazaarMetadataQualityRow(x,origin,env){
+  const path=bazaarResourcePath(x?.resource,origin),accept=Array.isArray(x?.accepts)&&x.accepts.length?x.accepts[0]:null;
+  const bazaar=x?.extensions?.bazaar||null,example=bazaar?.info?.output?.example||null,tags=Array.isArray(x?.tags)?x.tags:[];
+  const issues=[],warnings=[];
+  if(!path)issues.push("unexpected_or_missing_resource_path");
+  if(Number(x?.x402Version)!==2)issues.push("x402_version_not_2");
+  if(String(x?.serviceName||"")!==BAZAAR_SERVICE_NAME)issues.push("service_name_mismatch");
+  if(!accept)issues.push("payment_accepts_missing");
+  if(accept&&String(accept.network||"")!==SOLANA_MAINNET)issues.push("network_mismatch");
+  if(accept&&String(accept.asset||"")!==SOLANA_USDC)issues.push("asset_mismatch");
+  if(accept&&String(accept.payTo||"")!==String(env.X402_WALLET_ADDRESS||""))issues.push("pay_to_mismatch");
+  if(path&&accept&&String(accept.amount||"")!==bazaarExpectedAtomic(path))issues.push("price_mismatch");
+  if(!bazaar)issues.push("bazaar_extension_missing");
+  if(!bazaar?.schema)issues.push("bazaar_schema_missing");
+  if(!example)issues.push("output_example_missing");
+  if(example&&String(example.version||"")!==VERSION)warnings.push(`stale_example_version:${String(example.version||"missing")}`);
+  if(example&&String(example.endpoint||"")!==String(path||""))issues.push("example_endpoint_mismatch");
+  if(tags.length>5)issues.push("too_many_tags");
+  if(containsMojibake({description:x?.description||"",tags,example}))issues.push("mojibake_detected");
+  return {path:path||null,resource:x?.resource||null,ok:issues.length===0,issues,warnings,x402_version:x?.x402Version??null,service_name:x?.serviceName||null,price_atomic:accept?.amount||null,expected_price_atomic:path?bazaarExpectedAtomic(path):null,network:accept?.network||null,asset:accept?.asset||null,pay_to_match:accept?String(accept.payTo||"")===String(env.X402_WALLET_ADDRESS||""):false,bazaar_extension:!!bazaar,schema_present:!!bazaar?.schema,example_version:example?.version||null,example_endpoint:example?.endpoint||null,tags_count:tags.length,mojibake:containsMojibake({description:x?.description||"",tags,example}),quality:x?.quality||null,last_updated:x?.lastUpdated||null};
+}
+async function bazaarFullQualityAudit(env,origin){
+  if(!env.X402_WALLET_ADDRESS)throw new Error("X402_WALLET_ADDRESS is missing");
+  const body=await cdpDiscoveryGet(env,"/discovery/merchant",{payTo:String(env.X402_WALLET_ADDRESS),limit:20,offset:0});
+  const resources=Array.isArray(body?.resources)?body.resources:[];
+  const rows=resources.map(x=>bazaarMetadataQualityRow(x,origin,env)).filter(x=>x.path);
+  const byPath=new Map(rows.map(x=>[x.path,x]));
+  const results=INDEX402_SERVICES.map(s=>byPath.get(s.path)||{path:s.path,resource:`${origin}${s.path}`,ok:false,issues:["not_indexed"],expected_price_atomic:bazaarExpectedAtomic(s.path)});
+  const failures=results.filter(x=>!x.ok);
+  const warnings=results.flatMap(x=>(x.warnings||[]).map(w=>({path:x.path,warning:w})));
+  return {service:BAZAAR_SERVICE_NAME,version:VERSION,checked_at:new Date().toISOString(),source:"Coinbase CDP Bazaar merchant discovery + local metadata policy",expected_count:INDEX402_SERVICES.length,indexed_count:results.filter(x=>!x.issues?.includes("not_indexed")).length,pass_count:results.filter(x=>x.ok).length,all_indexed:results.every(x=>!x.issues?.includes("not_indexed")),all_metadata_quality_pass:failures.length===0,warning_count:warnings.length,mojibake_count:results.filter(x=>x.mojibake).length,stale_version_paths:results.filter(x=>(x.warnings||[]).some(i=>String(i).startsWith("stale_example_version:"))).map(x=>x.path),failed_paths:failures.map(x=>x.path),warnings,policy_note:"A stale Bazaar output-example version is informational only. It does not invalidate listing, payment configuration, schema, pricing, payTo, network, asset, or mojibake quality checks.",results};
+}
+
+async function bazaarSemanticAudit(env,origin,query){
+  const q=String(query||"anime collectibles").slice(0,160);
+  const body=await cdpDiscoveryGet(env,"/discovery/search",{query:q,extensions:"bazaar",limit:20});
+  const resources=Array.isArray(body?.resources)?body.resources:[];
+  const compact=resources.map(x=>compactBazaarResource(x,origin));
+  const ours=compact.map((x,i)=>({...x,rank:i+1})).filter(x=>x.path);
+  return {service:"ANIME INTELLIGENCE",version:VERSION,checked_at:new Date().toISOString(),query:q,search_method:body?.searchMethod||null,listed_in_top20:ours.length>0,our_results:ours,total_returned:compact.length};
+}
+
+function bazaarResourcePath(resource,origin){try{const u=new URL(String(resource||""));if(u.origin!==origin)return null;return INDEX402_SERVICES.some(s=>s.path===u.pathname)?u.pathname:null;}catch{return null;}}
+function compactBazaarResource(x,origin){const path=bazaarResourcePath(x?.resource,origin),accept=Array.isArray(x?.accepts)&&x.accepts.length?x.accepts[0]:null;return {path,resource:x?.resource||null,service_name:x?.serviceName||null,description:x?.description||null,price_atomic:accept?.amount||null,network:accept?.network||null,pay_to:accept?.payTo||null,asset:accept?.asset||null,bazaar:!!x?.extensions?.bazaar,quality:x?.quality||null,tags:x?.tags||[]};}
+async function bazaarCheckOne(env,origin,path){
+  const service=INDEX402_SERVICES.find(s=>s.path===path);
+  if(!service)throw new Error(`Unknown Bazaar path: ${path}`);
+  const target=`${origin}${service.path}`;
+  let result=null,error=null;
+  try{
+    // Exactly ONE Coinbase Discovery request per Worker invocation.
+    // This is intentionally isolated so Cloudflare's per-invocation
+    // subrequest budget is reset for every API checked by the browser.
+    result=await cdpDiscoveryGet(env,"/discovery/search",{urlSubstring:target,extensions:"bazaar",limit:20});
+  }catch(e){error=safeError(e);}
+  const resources=Array.isArray(result?.resources)?result.resources:[];
+  const matches=resources.map(x=>compactBazaarResource(x,origin)).filter(x=>x.path===path);
+  return {
+    service:"ANIME INTELLIGENCE",version:VERSION,checked_at:new Date().toISOString(),

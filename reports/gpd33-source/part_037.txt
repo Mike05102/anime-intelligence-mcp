@@ -1,0 +1,300 @@
+    tax_included:false,
+    currency:"JPY",
+    ships_to:["JP"],
+    collection_enabled:true
+  },
+  {
+    kind:"merchant_offer",
+    slug:"offer-mouser-omron",
+    merchant_slug:"mouser",
+    merchant_name:"Mouser Electronics",
+    manufacturer:"OMRON",
+    root:"https://www.mouser.com",
+    website_url:"https://www.mouser.com/",
+    country_code:"US",
+    verified_merchant:false,
+    source_type:"electronic_distributor_public_catalog",
+    priority:96,
+    seeds:[
+      "https://www.mouser.com/ProductDetail/Omron-Automation-and-Safety/E2E-X2MC18-2M",
+      "https://www.mouser.com/c/?q=E2E-X2MC18%202M",
+      "https://www.mouser.com/c/?q=E2E-X5ME1"
+    ],
+    allowPrefixes:["https://www.mouser.com/ProductDetail/","https://www.mouser.com/c/"],
+    authenticity_evidence_url:null,
+    tax_included:false,
+    currency:"USD",
+    ships_to:null,
+    collection_enabled:true
+  }
+];
+
+function sourceKey(v=""){return String(v).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,64)||"manufacturer";}
+
+const MERCHANT_ADAPTER_TEMPLATES=[
+  {merchant_slug:"monotaro-japan",merchant_name:"MonotaRO",root:"https://www.monotaro.com",website_url:"https://www.monotaro.com/",country_code:"JP",source_type:"industrial_retailer_public_catalog",priority:90,allowPrefixes:["https://www.monotaro.com/s/","https://www.monotaro.com/g/","https://www.monotaro.com/p/"],currency:"JPY",ships_to:["JP"]},
+  {merchant_slug:"misumi-japan",merchant_name:"MISUMI Japan",root:"https://jp.misumi-ec.com",website_url:"https://jp.misumi-ec.com/",country_code:"JP",source_type:"industrial_distributor_public_catalog",priority:98,allowPrefixes:["https://jp.misumi-ec.com/vona2/detail/","https://jp.misumi-ec.com/vona2/result/"],currency:"JPY",ships_to:["JP"]},
+  {merchant_slug:"digikey-japan",merchant_name:"DigiKey Japan",root:"https://www.digikey.jp",website_url:"https://www.digikey.jp/",country_code:"JP",source_type:"electronic_distributor_public_catalog",priority:97,allowPrefixes:["https://www.digikey.jp/ja/products/detail/","https://www.digikey.jp/ja/products/result"],currency:"JPY",ships_to:["JP"]},
+  {merchant_slug:"mouser",merchant_name:"Mouser Electronics",root:"https://www.mouser.com",website_url:"https://www.mouser.com/",country_code:"US",source_type:"electronic_distributor_public_catalog",priority:96,allowPrefixes:["https://www.mouser.com/ProductDetail/","https://www.mouser.com/c/"],currency:"USD",ships_to:null}
+];
+
+const EXISTING_WATCH_MANUFACTURERS=new Set(OFFICIAL_WATCH_SOURCES_BASE.map(x=>x.manufacturer));
+const OFFICIAL_WATCH_SOURCES_FALLBACK=MANUFACTURER_UNIVERSE
+  .filter(m=>!EXISTING_WATCH_MANUFACTURERS.has(m.name))
+  .map(m=>({
+    kind:"manufacturer_watch",
+    slug:`watch-root-${sourceKey(m.name)}`,
+    manufacturer:m.name,
+    root:m.official_root,
+    seeds:[m.official_root],
+    allowPrefixes:[m.official_root],
+    priority:55,
+    source_tier:"D_root",
+    applications:m.applications,
+    domains:m.domains,
+    collection_enabled:true,
+    max_depth:0,
+    refresh_days:14,
+    watch_only:true,
+    fallback_root_watch:true
+  }));
+const OFFICIAL_WATCH_SOURCES=[...OFFICIAL_WATCH_SOURCES_BASE,...OFFICIAL_WATCH_SOURCES_FALLBACK];
+
+const BASE_OFFER_MANUFACTURERS=new Set(OFFER_SOURCES_BASE.filter(x=>x.collection_enabled!==false).map(x=>`${x.merchant_slug}|${x.manufacturer}`));
+const OFFER_SOURCES_EXPANDED=[];
+for(const m of MANUFACTURER_UNIVERSE){
+  for(const t of MERCHANT_ADAPTER_TEMPLATES){
+    if(BASE_OFFER_MANUFACTURERS.has(`${t.merchant_slug}|${m.name}`))continue;
+    OFFER_SOURCES_EXPANDED.push({
+      kind:"merchant_offer",
+      slug:`offer-${sourceKey(t.merchant_slug)}-${sourceKey(m.name)}`,
+      merchant_slug:t.merchant_slug,
+      merchant_name:t.merchant_name,
+      manufacturer:m.name,
+      root:t.root,
+      website_url:t.website_url,
+      country_code:t.country_code,
+      verified_merchant:false,
+      source_type:t.source_type,
+      priority:t.priority,
+      seeds:[],
+      bootstrapSeeds:[],
+      allowPrefixes:t.allowPrefixes,
+      authenticity_evidence_url:null,
+      tax_included:false,
+      currency:t.currency,
+      ships_to:t.ships_to,
+      collection_enabled:true,
+      generated_adapter:true
+    });
+  }
+}
+const OFFER_SOURCES=[...OFFER_SOURCES_BASE,...OFFER_SOURCES_EXPANDED];
+const ALL_SOURCES=[...SOURCES,...OFFICIAL_WATCH_SOURCES,...OFFER_SOURCES];
+
+function merchantSearchUrl(source,partNumber){
+  const q=encodeURIComponent(String(partNumber||"").trim());
+  if(!q)return null;
+  if(source.merchant_slug==="monotaro-japan")return `https://www.monotaro.com/s/q-${q}/`;
+  if(source.merchant_slug==="misumi-japan")return `https://jp.misumi-ec.com/vona2/result/?Keyword=${q}`;
+  if(source.merchant_slug==="digikey-japan")return `https://www.digikey.jp/ja/products/result?keywords=${q}`;
+  if(source.merchant_slug==="mouser")return `https://www.mouser.com/c/?q=${q}`;
+  return null;
+}
+
+
+const MAX_PAGES_PER_RUN=1;
+const MAX_LINKS_PER_PAGE=16;
+const MAX_MODELS_PER_PAGE=80;
+const MAX_BODY_CHARS=300000;
+const SUPABASE_TIMEOUT_MS=18000;
+const STATUS_PROBE_TIMEOUT_MS=10000;
+const STATUS_RETRY_TIMEOUT_MS=20000;
+const STATUS_DIAGNOSTIC_BATCH_SIZE=1;
+const SUPABASE_GET_RETRY_COUNT=1;
+const SUPABASE_GET_RETRY_DELAY_MS=250;
+const COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS=12000;
+const QUEUE_ACTIVE_BUDGET=500;
+const WATCH_ENRICHMENT_MAX_PARTS=24;
+const WATCH_DISCOVERY_LINK_LIMIT=4;
+const SPEC_METRIC_LIMIT=24;
+const NON_OMRON_MERCHANT_PRIORITY=["Renesas","ROHM","TDK","Murata","Infineon","STMicroelectronics","Texas Instruments","NXP","Analog Devices","onsemi","Microchip","TE Connectivity","Molex","Amphenol","Bosch Sensortec","Allegro MicroSystems","Melexis","THK","NSK","NTN","Nabtesco","Harmonic Drive Systems","Nidec","MinebeaMitsumi","maxon","FAULHABER","Yaskawa"];
+const DAILY_SEED_PAUSE_THRESHOLD=400;
+const MERCHANT_QUEUE_BUDGET=120; // soft budget: enter drain-priority + trickle-seed mode
+const MERCHANT_QUEUE_HARD_CEILING=180; // only here do we fully pause new Merchant seeding
+const HARD_QUEUE_CEILING=650;
+const MERCHANT_GLOBAL_DRAIN_LIMIT=4;
+const MERCHANT_TRICKLE_SEED_MAX_ROWS=1;
+const STATUS_SAMPLE_LIMIT=80;
+const STATUS_PARTS_SAMPLE_LIMIT=60;
+const STATUS_RELATION_SAMPLE_LIMIT=60;
+const STATUS_OFFER_SAMPLE_LIMIT=60;
+const STATUS_MERCHANT_SAMPLE_LIMIT=60;
+const STATUS_RUN_SAMPLE_LIMIT=18;
+const STATUS_RUN_LOOKBACK_HOURS=24;
+const STATUS_FALLBACK_TIMEOUT_MS=8000;
+const STATUS_SAMPLE_RETRY_DISABLED=true;
+const OFFER_WINDOW_SIZE=16;
+const WATCH_WINDOW_SIZE=12;
+const MAX_OFFER_ITEMS_PER_RUN=4;
+const MAX_CATALOG_ITEMS_PER_RUN=3;
+const MAX_WATCH_ITEMS_PER_RUN=3;
+const DEEP_WATCH_PRIORITY_LIMIT=1;
+const DEEP_BOOTSTRAP_PER_RUN=1;
+const DEEP_QUEUE_BUDGET=24;
+const MAX_DEEP_HOPS=2;
+const MERCHANT_DETAIL_PROMOTION_LIMIT=2;
+
+function safeError(e){return String(e?.message||e||"unknown_error").slice(0,1200);}
+function json(data,status=200,headers={}){return new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*",...headers}});}
+async function sha256HexText(v=""){
+  const b=new TextEncoder().encode(String(v));
+  const h=await crypto.subtle.digest("SHA-256",b);
+  return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+function normalizePartNumber(v=""){return String(v||"").normalize("NFKC").toUpperCase().replace(/\s+/g,"").replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g,"-").trim();}
+function stripHtml(html=""){
+  return String(html||"")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi," ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi," ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi," ")
+    .replace(/<[^>]+>/g," ")
+    .replace(/&nbsp;|&#160;/gi," ")
+    .replace(/&amp;/gi,"&")
+    .replace(/&quot;/gi,'"')
+    .replace(/&#39;|&apos;/gi,"'")
+    .replace(/&lt;/gi,"<")
+    .replace(/&gt;/gi,">")
+    .replace(/\s+/g," ")
+    .trim();
+}
+function titleOf(html=""){const m=String(html).match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);return m?stripHtml(m[1]).slice(0,400):null;}
+function absoluteUrl(base,href){try{return new URL(String(href||""),base).toString();}catch{return null;}}
+function linksOf(html="",base=""){
+  const out=[];
+  for(const m of String(html).matchAll(/<a\b[^>]*href\s*=\s*["']([^"'#]+)["'][^>]*>/gi)){
+    const u=absoluteUrl(base,m[1]);if(u)out.push(u);
+  }
+  return [...new Set(out)];
+}
+function pdfLinksOf(html="",base=""){return linksOf(html,base).filter(u=>/\.pdf(?:$|[?#])/i.test(u));}
+function hostAllowed(source,url){
+  try{
+    const h=new URL(url).hostname.replace(/^www\./,"");
+    const r=new URL(source.root).hostname.replace(/^www\./,"");
+    return h===r||h.endsWith("."+r)||source.allowPrefixes.some(p=>String(url).startsWith(p));
+  }catch{return false;}
+}
+function pageAllowed(source,url){
+  if(!hostAllowed(source,url))return false;
+  if(/\.(?:jpg|jpeg|png|gif|svg|webp|css|js|zip|exe)(?:$|[?#])/i.test(url))return false;
+  return source.allowPrefixes.some(p=>String(url).startsWith(p))||source.seeds.includes(url);
+}
+function crawlerHeaders(){return {
+  "user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 PARTS-INTELLIGENCE-COLLECTOR/2.1.2",
+  "accept":"text/html,application/xhtml+xml,application/xml,text/plain,application/pdf;q=0.9,*/*;q=0.8",
+  "accept-language":"ja,en-US;q=0.8,en;q=0.7",
+  "cache-control":"no-cache"
+};}
+function jinaReaderUrl(url){return `https://r.jina.ai/${String(url)}`;}
+function markdownLinksOf(text="",base=""){
+  const out=[];
+  for(const m of String(text).matchAll(/\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g)){const u=absoluteUrl(base,m[1]);if(u)out.push(u);}
+  for(const m of String(text).matchAll(/https?:\/\/[^\s<>()\]"']+/g)){const u=absoluteUrl(base,m[0].replace(/[),.;]+$/g,""));if(u)out.push(u);}
+  return [...new Set(out)];
+}
+function allLinksOf(page){return [...new Set([...(page.html?linksOf(page.html,page.url):[]),...markdownLinksOf(page.text,page.url)])];}
+function isPdfUrl(url=""){return /\.pdf(?:$|[?#])/i.test(String(url||""));}
+
+function sbBase(env){
+  const u=String(env.SUPABASE_URL||"").replace(/\/$/,"");
+  if(!u)throw new Error("SUPABASE_URL_missing");
+  return `${u}/rest/v1`;
+}
+function sbHeaders(env,extra={}){
+  const key=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY||env.SUPABASE_KEY;
+  if(!key)throw new Error("SUPABASE_SECRET_KEY_missing");
+  return {apikey:key,authorization:`Bearer ${key}`,"content-type":"application/json",...extra};
+}
+function supabaseReadRetryCount(method="GET",allow=true){
+  const m=String(method||"GET").toUpperCase();
+  return allow!==false&&(m==="GET"||m==="HEAD")?SUPABASE_GET_RETRY_COUNT:0;
+}
+function isRetryableSupabaseReadError(e){
+  const x=String(e?.message||e||"");
+  return /Supabase timeout|Supabase (503|504|520)|PGRST00[0-3]|network|fetch failed|connection/i.test(x);
+}
+async function sbOnce(env,path,options={}){
+  const controller=new AbortController();
+  const timeoutMs=Math.max(3000,Math.min(30000,Number(options.timeout_ms||SUPABASE_TIMEOUT_MS)));
+  const timer=setTimeout(()=>controller.abort("supabase_timeout"),timeoutMs);
+  try{
+    const r=await fetch(sbBase(env)+path,{method:options.method||"GET",headers:sbHeaders(env,options.headers||{}),body:options.body,signal:controller.signal});
+    const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null;}catch{data={raw};}
+    if(!r.ok)throw new Error(`Supabase ${r.status}: ${raw.slice(0,800)}`);
+    return data;
+  }catch(e){
+    if(String(e?.name||"")==="AbortError")throw new Error(`Supabase timeout after ${timeoutMs}ms: ${path.slice(0,220)}`);
+    throw e;
+  }finally{clearTimeout(timer);}
+}
+async function sb(env,path,options={}){
+  const method=String(options.method||"GET").toUpperCase();
+  const retries=supabaseReadRetryCount(method,options.retry_get!==false);
+  let lastErr=null;
+  for(let attempt=0;attempt<=retries;attempt++){
+    try{
+      const timeoutMs=attempt===0?options.timeout_ms:Math.min(30000,Number(options.timeout_ms||SUPABASE_TIMEOUT_MS)+5000);
+      return await sbOnce(env,path,{...options,timeout_ms:timeoutMs});
+    }catch(e){
+      lastErr=e;
+      if(attempt>=retries||!isRetryableSupabaseReadError(e))throw e;
+      await new Promise(r=>setTimeout(r,SUPABASE_GET_RETRY_DELAY_MS*(attempt+1)));
+    }
+  }
+  throw lastErr||new Error("supabase_unknown_error");
+}
+async function sbOptional(env,path,options={}){try{return await sb(env,path,options);}catch(e){console.log("sbOptional",safeError(e));return null;}}
+async function collectorDbPreflight(env){
+  try{
+    const data=await sb(env,"/parts_ingest_runs?select=version&limit=1",{timeout_ms:COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS});
+    return {ok:true,data,error:null};
+  }catch(e){return {ok:false,data:null,error:safeError(e)};}
+}
+
+function rotateWindow(items,tick,width){
+  if(!Array.isArray(items)||!items.length)return [];
+  const w=Math.max(1,Math.min(items.length,Number(width)||1));
+  const start=((Number(tick)||0)*w)%items.length;
+  const out=[];
+  for(let i=0;i<w;i++)out.push(items[(start+i)%items.length]);
+  return out;
+}
+function sourceInFilter(sources){
+  return sources.map(x=>`"${String(x.slug).replace(/"/g,'\\"')}"`).join(",");
+}
+async function activeQueueBacklog(env,limit=QUEUE_ACTIVE_BUDGET+1){
+  const now=new Date().toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(now)}&limit=${Math.max(1,Math.min(1000,Number(limit)||1))}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+async function activeMerchantQueueBacklog(env,limit=MERCHANT_QUEUE_BUDGET+1){
+  // Count only work that is actually due now. Future cooldown retries must not
+  // freeze new Merchant discovery for 24-72h.
+  const now=new Date().toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&source_slug=like.offer-*&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(now)}&limit=${Math.max(1,Math.min(500,Number(limit)||1))}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+async function quarantineDisabledMerchantQueue(env){
+  const disabled=OFFER_SOURCES.filter(x=>x.collection_enabled===false);
+  if(!disabled.length)return {disabled_sources:0,quarantined:false};
+  const path=`/parts_collector_queue?source_slug=in.(${encodeURIComponent(sourceInFilter(disabled))})&status=in.(pending,retry)`;
+  const result=await sbOptional(env,path,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({status:"failed",last_error:"SOURCE_DISABLED",updated_at:new Date().toISOString()})});
+  return {disabled_sources:disabled.length,quarantined:result!==null};
+}
+function isExpectedExternalSourceError(error=""){
+  const e=String(error||"");
+  return /HTTP_(403|404|429|520)|FALLBACK_JINA_HTTP_429|JINA_HTTP_429/i.test(e);
+}
+function isLikelyMerchantDetailUrl(source,url=""){
+  const u=String(url||"");

@@ -1,0 +1,300 @@
+  let best=null;for(const o of(Array.isArray(item.shippingOptions)?item.shippingOptions:[])){const c=o?.shippingCost;if(c?.value==null||!c?.currency)continue;const value=Number(c.value);if(!Number.isFinite(value))continue;if(!best||value<best.value)best={value,currency:String(c.currency)};}return best||{value:null,currency:null};
+}
+
+function envUsdJpyRate(env){const n=Number(env.EBAY_USDJPY||env.USDJPY||0);return Number.isFinite(n)&&n>50&&n<300?n:null;}
+
+async function resolveUsdJpy(env){
+  const configured=envUsdJpyRate(env);if(configured)return {rate:configured,source:"environment"};if(fxCache&&Date.now()<fxCacheExpiresAt)return fxCache;
+  try{const r=await fetch(ECB_FX_ENDPOINT,{headers:{accept:"application/xml,text/xml"}});if(!r.ok)throw new Error(`ECB FX ${r.status}`);const xml=await r.text();const usd=Number((xml.match(/currency=['"]USD['"]\s+rate=['"]([0-9.]+)['"]/i)||[])[1]);const jpy=Number((xml.match(/currency=['"]JPY['"]\s+rate=['"]([0-9.]+)['"]/i)||[])[1]);if(!Number.isFinite(usd)||!Number.isFinite(jpy)||usd<=0||jpy<=0)throw new Error("ECB FX parse failed");fxCache={rate:jpy/usd,source:"ecb_reference"};fxCacheExpiresAt=Date.now()+6*3600000;return fxCache;}catch(e){return {rate:null,source:"unavailable",error:safeError(e)};}
+}
+
+function originalToJpy(value,currency,fxRate=null){const n=Number(value);if(!Number.isFinite(n))return null;if(currency==="JPY")return Math.round(n);if(currency==="USD"&&fxRate)return Math.round(n*fxRate);return null;}
+
+async function saveEbayObservations(env,product,hits,recent=[],sourceId=null,fxInfo={rate:null,source:"unavailable"}){
+  if(!Array.isArray(hits)||!hits.length)return 0;let sid=sourceId;
+  if(!sid){const sources=await loadSources(env);sid=sourceIdBySlugOrName(sources,"ebay",["eBay"]);}if(!sid)throw new Error("eBay source_id missing");
+  const prev=latestObservationMap(recent.filter(o=>o.product_id===product.id)),now=new Date().toISOString(),rows=[];
+  for(const hit of hits){
+    const item=hit.item,purchaseUrl=item?.itemAffiliateWebUrl||item?.itemWebUrl;if(!item?.itemId||!purchaseUrl||item?.price?.value==null||!item?.price?.currency)continue;
+    const exact=["gtin","detail_gtin"].includes(hit.match_basis);if(!exact&&!['structured_item_specifics','strict_product_identity'].includes(hit.match_basis))continue;
+    const shipping=ebayShipping(item),currency=String(item.price.currency),convertedPrice=originalToJpy(item.price.value,currency,fxInfo.rate),convertedShipping=shipping.currency?originalToJpy(shipping.value,shipping.currency,fxInfo.rate):null;if(convertedPrice==null)continue;
+    const row={product_id:product.id,source_id:sid,external_listing_id:`ebay:${item.itemId}`,seller_name:null,listing_title:item.title||product.canonical_name_ja,listing_url:purchaseUrl,item_condition:String(item.condition||"").trim().toLowerCase()||null,price_jpy:convertedPrice,shipping_jpy:convertedShipping,price_original:Number(item.price.value),currency,shipping_original:shipping.value,in_stock:true,stock_text:"available",observed_at:now,metadata:{market_source:"ebay",marketplace:EBAY_MARKETPLACE,price_type:"asking",asking_price_jpy:convertedPrice,shipping_jpy:convertedShipping,total_price_jpy:convertedPrice+(convertedShipping||0),sold_transaction:false,match_score:hit.score,match_basis:hit.match_basis,identity_guard_version:VERSION,detail_verified:!!hit.verification,detail_gtin_match:hit.verification?.detail_gtin_match||false,structured_identity_verified:hit.verification?.structured_identity_verified||false,specialist_match:hit.verification?.specialist_match||null,canonical_jan:product.jan_code||null,canonical_name_en:product.canonical_name_en||null,image_url:item.image?.imageUrl||null,fx_rate_usdjpy:currency==="USD"?fxInfo.rate:null,fx_source:currency==="USD"?fxInfo.source:"native_jpy",jpy_conversion:currency==="JPY"?"native":"fx_reference",privacy_mode:"seller_identifier_not_stored",affiliate:!!item.itemAffiliateWebUrl,affiliate_source:item.itemAffiliateWebUrl?"ebay_partner_network":null,affiliate_campaign_configured:ebayEpnConfigured(env)}};
+    const old=prev.get(row.external_listing_id);if(!old||Number(old.price_original)!==row.price_original||String(old.currency||"")!==currency||Number(old.shipping_original??-1)!==Number(row.shipping_original??-1))rows.push(row);
+  }
+  if(rows.length)await sb(env,"/market_observations",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify(rows)});return rows.length;
+}
+
+async function refreshEbayBatch(env,limit=1,options={}){
+  if(!env.EBAY_CLIENT_ID||!env.EBAY_CLIENT_SECRET)throw new Error("eBay credentials are missing");const history=await recentEbayObservations(env);const safeLimit=Math.max(1,Math.min(PIPELINE.ebayStandalone,Number(limit)||1));const selected=await selectMarketProducts(env,history,safeLimit,options.products||null,"ebay");let sourceId=options.ebaySourceId||null;if(!sourceId){const sources=options.sources||await loadSources(env);sourceId=sourceIdBySlugOrName(sources,"ebay",["eBay"]);}const fxInfo=await resolveUsdJpy(env);const report=[];
+  for(const p of selected){try{const result=await ebaySearch(env,p,20);const inserted=await saveEbayObservations(env,p,result.hits,history,sourceId,fxInfo);await markMarketAttempt(env,p,"ebay",{returned:result.ebay_returned,matches:result.hits.length,inserted});report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),canonical_name_en:p.canonical_name_en,jan_code:p.jan_code,product_type:p.product_type||null,identity_quality:marketIdentityQuality(p),identity_guard_version:VERSION,query:result.query,search_method:result.method,ebay_returned:result.ebay_returned,matches:result.hits.length,inserted,queries_tried:result.queries_tried});}catch(e){try{await markMarketAttempt(env,p,"ebay",{error:safeError(e)});}catch{}report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),error:safeError(e)});}}
+  return {identity_guard_version:VERSION,selected:selected.length,usd_jpy_conversion:fxInfo.rate,usd_jpy_source:fxInfo.source,products:report};
+}
+
+/* =========================================================
+   KPI / REVENUE
+========================================================= */
+
+async function sha256Hex(value=""){
+  const data=new TextEncoder().encode(String(value));const digest=await crypto.subtle.digest("SHA-256",data);return [...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+async function logEvent(env,eventType,detail={}){
+  if(!env.SUPABASE_URL||!env.SUPABASE_SECRET_KEY)return false;
+  try{
+    // v3.7.35 — reserve metadata.version exclusively for the Worker/app version.
+    // Older x402 telemetry used metadata.version=2 for the protocol version,
+    // which overwrote the app version and caused current-version KPI filtering
+    // to silently exclude valid x402_gate_entered/payment_required/paid events.
+    const incomingMetadata={...(detail.metadata||{})};
+    if(incomingMetadata.protocol==="x402"&&incomingMetadata.version!=null&&incomingMetadata.x402_version==null){
+      incomingMetadata.x402_version=incomingMetadata.version;
+    }
+    delete incomingMetadata.version;
+    const metadata={...incomingMetadata,version:VERSION};
+    await sb(env,"/api_events",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify({occurred_at:new Date().toISOString(),event_type:eventType,endpoint:detail.endpoint||null,product_id:detail.product_id?String(detail.product_id):null,payer_hash:detail.payer_hash||null,amount_atomic:detail.amount_atomic!=null?Number(detail.amount_atomic):null,amount_usdc:detail.amount_usdc!=null?Number(detail.amount_usdc):null,payment_network:detail.payment_network||null,transaction_hash:detail.transaction_hash||null,metadata})});
+    return true;
+  }catch(e){console.warn("KPI event logging failed",safeError(e));return false;}
+}
+
+function getNested(obj,path=[]){let cur=obj;for(const key of path){if(cur==null||typeof cur!=="object")return null;cur=cur[key];}return cur??null;}
+function extractPaymentPayer(payload,settlement=null){const candidates=[["payload","authorization","from"],["payload","authorization","payer"],["payload","from"],["authorization","from"],["authorization","payer"],["payer"],["from"],["paymentPayload","payload","authorization","from"],["transaction","payer"],["transaction","from"]];for(const p of candidates){const v=getNested(payload,p)||getNested(settlement,p);if(typeof v==="string"&&v.length>=20)return v;}return null;}
+function extractSettlementTx(settlement){for(const p of [["transaction"],["transactionHash"],["txHash"],["tx"],["signature"],["receipt","transactionHash"],["receipt","signature"]]){const v=getNested(settlement,p);if(typeof v==="string"&&v)return v;}return null;}
+async function payerHashFromPayment(payload,settlement){const payer=extractPaymentPayer(payload,settlement);return payer?sha256Hex(`anime-intelligence:${payer}`):null;}
+
+function configuredTestPayerHashes(env){
+  return new Set(String(env?.X402_TEST_PAYER_HASHES||"").split(",").map(x=>x.trim()).filter(Boolean));
+}
+// v3.7.92 — isolate known legacy self-tests without permanently blacklisting a generic Node/NL fingerprint.
+// The fingerprint below was produced by our own pre-v3.7.92 test runner. It is treated as test traffic only
+// for events at or before the final known self-test window. Future traffic with the same coarse fingerprint
+// remains eligible to count as external unless it carries an explicit test marker.
+const LEGACY_SELF_TEST_FINGERPRINT_CUTOFFS={
+  "03ed7b5e9a95f7f08a07af23":"2026-09-24T08:28:51.132Z"
+};
+function isLegacySelfTestFingerprintEvent(x){
+  const fp=String(x?.metadata?.source_fingerprint||"");
+  const cutoff=LEGACY_SELF_TEST_FINGERPRINT_CUTOFFS[fp];
+  if(!cutoff)return false;
+  const ts=Date.parse(String(x?.occurred_at||"")),end=Date.parse(cutoff);
+  return Number.isFinite(ts)&&Number.isFinite(end)&&ts<=end;
+}
+function isAdminE2ETestEvent(x,env){
+  const meta=x?.metadata||{},ref=String(meta.referer||"").toLowerCase(),source=String(meta.source_class||"");
+  if(source==="admin_or_test"||String(meta.test_mode||"").startsWith("admin_")||String(meta.test_mode||"").startsWith("test_")||ref.includes("/admin")||isLegacySelfTestFingerprintEvent(x))return true;
+  const configured=configuredTestPayerHashes(env);
+  return !!(x?.payer_hash&&configured.has(String(x.payer_hash)));
+}
+
+// v3.7.98 — exact known self-test signature. This is intentionally narrower than a permanent
+// fingerprint blacklist: the fingerprint alone is not enough. The UA, country and literal query
+// must also match the test runner signature observed in our own historical/admin tests.
+const KNOWN_SELF_TEST_SIGNATURES=[{
+  fingerprint:"03ed7b5e9a95f7f08a07af23",
+  user_agent:"node",
+  country:"NL",
+  query:"\u521d\u97f3\u30df\u30af"
+}];
+function isKnownSelfTestSignatureEvent(x){
+  const m=x?.metadata||{};
+  const fp=String(m.source_fingerprint||"");
+  const ua=String(m.user_agent||"").trim().toLowerCase();
+  const country=String(m.country||"").trim().toUpperCase();
+  const query=String(m.intent_query||m.query_text||"").trim();
+  return KNOWN_SELF_TEST_SIGNATURES.some(sig=>fp===sig.fingerprint&&ua===sig.user_agent&&country===sig.country&&query===sig.query);
+}
+
+async function kpiApiEventsCount(env){
+  try{
+    const r=await fetch(sbBase(env)+"/api_events?select=event_type",{headers:sbHeaders(env,{Prefer:"count=planned",Range:"0-0"})});
+    const raw=await r.text();
+    if(!r.ok)throw new Error(`Supabase api_events count ${r.status}: ${raw.slice(0,600)}`);
+    const cr=r.headers.get("content-range")||"";
+    const m=cr.match(/\/(\d+)$/);
+    return {ok:true,count:m?Number(m[1]):null,error:null};
+  }catch(e){return {ok:false,count:null,error:safeError(e)};}
+}
+
+async function readKpiEvents(env,funnelTypes){
+  const limit=Math.max(1,Number(PIPELINE.kpiEventReadLimit)||5000);
+  const filter=encodeURIComponent(`(${funnelTypes.join(",")})`);
+  const primaryPath=`/api_events?select=*&event_type=in.${filter}&order=occurred_at.desc&limit=${limit}`;
+  let primaryError=null,fallbackError=null;
+  try{
+    const rows=await sb(env,primaryPath);
+    if(Array.isArray(rows)&&rows.length){
+      const count=await kpiApiEventsCount(env);
+      return {ok:true,rows,read_mode:"filtered_query",primary_error:null,fallback_error:null,api_events_rows_seen:rows.length,table_has_events:true,total_event_count_estimate:count.count,count_error:count.error};
+    }
+  }catch(e){primaryError=safeError(e);}
+
+  // A filtered query can fail or return an unexpected empty set after schema/query changes.
+  // Fall back to a broad recent read and filter in JavaScript so telemetry failure is never disguised as zero traffic.
+  try{
+    const broad=await sb(env,`/api_events?select=*&order=occurred_at.desc&limit=${limit}`);
+    const broadRows=Array.isArray(broad)?broad:[];
+    const allowed=new Set(funnelTypes);
+    const rows=broadRows.filter(x=>allowed.has(String(x?.event_type||"")));
+    const count=await kpiApiEventsCount(env);
+    return {ok:true,rows,read_mode:primaryError?"broad_fallback_after_filtered_error":"broad_fallback_after_filtered_empty",primary_error:primaryError,fallback_error:null,api_events_rows_seen:broadRows.length,table_has_events:broadRows.length>0,total_event_count_estimate:count.count,count_error:count.error};
+  }catch(e){fallbackError=safeError(e);}
+
+  const count=await kpiApiEventsCount(env);
+  return {ok:false,rows:[],read_mode:"unavailable",primary_error:primaryError,fallback_error:fallbackError,api_events_rows_seen:0,table_has_events:count.ok?(Number(count.count||0)>0):null,total_event_count_estimate:count.count,count_error:count.error,error:fallbackError||primaryError||count.error||"unknown telemetry read failure"};
+}
+
+function isContextlessSyntheticShoppingCall(x){
+  const m=x?.metadata||{};
+  if(m.id_present||m.canonical_product_id)return false;
+  const q=String(m.intent_query||m.query_text||"").trim();
+  if(!q)return false;
+  const deictic=/\b(this|that|this exact|this cheap|this figure|this nendoroid|this listing|this prize|this item|the exact figure|the exact nendoroid)\b/i.test(q);
+  const genericOnly=/^(what is the real total cost for a buyer in [a-z ]+\??|when does preorder close for this figure\??|buy or wait for this .*figure\??)$/i.test(q);
+  const concreteId=/https?:\/\/|\bjan\s*[:#-]?\s*\d{8,14}\b|\b\d{12,14}\b|\b[A-Z0-9_-]{8,}\b/i.test(q);
+  return (deictic||genericOnly)&&!concreteId;
+}
+
+async function readAffiliateTelemetry(env){
+  const limit=5000;
+  const filter=encodeURIComponent('(affiliate_link_served,affiliate_click)');
+  try{
+    const rows=await sb(env,`/api_events?select=*&event_type=in.${filter}&order=occurred_at.desc&limit=${limit}`);
+    return {ok:true,rows:Array.isArray(rows)?rows:[],error:null};
+  }catch(e){return {ok:false,rows:[],error:safeError(e)};}
+}
+
+async function revenueMetrics(env){
+  const funnelTypes=["api_call","x402_gate_entered","x402_configuration_error","payment_challenge_issued","payment_required","payment_retry_received","payment_attempt","payment_invalid_header","payment_verify_failed","payment_verified","paid_call","payment_settlement_failed","x402_failed","product_intent","canonical_product_selected","product_requested","product_not_found","service_execution_failed","disambiguation_required","identity_preflight_failed","affiliate_link_served","affiliate_click","affiliate_link_registered","ranked_product_auto_selected","purchase_intent_created","merchant_selected","purchase_url_served","checkout_started","purchase_confirmed","travel_offer_selected","commerce_search","commerce_offer_selected","parts_intelligence_served","parts_ingest_run"];
+  const telemetry=await readKpiEvents(env,funnelTypes);
+  const affiliateTelemetry=await readAffiliateTelemetry(env);
+  const allEvents=telemetry.rows;
+  const versionEvents=allEvents.filter(x=>String(x?.metadata?.version||"")===VERSION);
+  const events=versionEvents.length?versionEvents:allEvents;
+  const byType={};for(const x of events)byType[x.event_type]=(byType[x.event_type]||0)+1;
+  const calls=events.filter(x=>x.event_type==="api_call"),paid=events.filter(x=>x.event_type==="paid_call"),products=events.filter(x=>x.event_type==="product_requested"),selected=events.filter(x=>x.event_type==="canonical_product_selected"),settlementFailures=events.filter(x=>x.event_type==="payment_settlement_failed"),purchaseIntents=events.filter(x=>x.event_type==="purchase_intent_created"),merchantSelections=events.filter(x=>x.event_type==="merchant_selected"),checkoutStarts=events.filter(x=>x.event_type==="checkout_started"),purchaseConfirmed=events.filter(x=>x.event_type==="purchase_confirmed");
+  const affiliateEvents=affiliateTelemetry.ok?affiliateTelemetry.rows:events.filter(x=>x.event_type==="affiliate_link_served"||x.event_type==="affiliate_click");
+  const affiliateServed=affiliateEvents.filter(x=>x.event_type==="affiliate_link_served"),affiliateClicks=affiliateEvents.filter(x=>x.event_type==="affiliate_click");
+  const gateEntered=events.filter(x=>x.event_type==="x402_gate_entered"),configErrors=events.filter(x=>x.event_type==="x402_configuration_error"),paymentChallenges=events.filter(x=>x.event_type==="payment_challenge_issued"),paymentRequired=events.filter(x=>x.event_type==="payment_required"),paymentRetries=events.filter(x=>x.event_type==="payment_retry_received"),attempts=events.filter(x=>x.event_type==="payment_attempt"),verified=events.filter(x=>x.event_type==="payment_verified");
+  const crawlerClasses=new Set(["bot_or_monitor","x402scan","402_index","402_ad","agent402","coinbase_or_cdp","x402_endpoint_record","verantis_verifier","nitrograph_verifier","admin_or_test"]);
+  const queryCalls=calls.filter(x=>x.metadata?.query_present||x.metadata?.id_present);
+  const knownSelfTestQueryCalls=queryCalls.filter(isKnownSelfTestSignatureEvent);
+  const knownSelfTestRequestIds=new Set(knownSelfTestQueryCalls.map(x=>String(x?.metadata?.request_id||"")).filter(Boolean));
+  const isKnownSelfTestEvent=x=>{
+    if(isKnownSelfTestSignatureEvent(x))return true;
+    const rid=String(x?.metadata?.request_id||"");
+    return !!(rid&&knownSelfTestRequestIds.has(rid));
+  };
+  const isExternalCommercialEvent=x=>{const source=String(x?.metadata?.source_class||"");return !crawlerClasses.has(source)&&source!=="unknown"&&!isAdminE2ETestEvent(x,env)&&!isKnownSelfTestEvent(x);};
+  const crawlerCalls=calls.filter(x=>crawlerClasses.has(String(x.metadata?.source_class||""))),unclassifiedCalls=calls.filter(x=>String(x.metadata?.source_class||"")==="unclassified_client"),adminOrTestCalls=calls.filter(x=>isAdminE2ETestEvent(x,env)||isKnownSelfTestEvent(x));
+  const verifierCalls=calls.filter(x=>["verantis_verifier","nitrograph_verifier"].includes(String(x.metadata?.source_class||"")));
+  const verifierQueryCalls=verifierCalls.filter(x=>x.metadata?.query_present||x.metadata?.id_present);
+  const syntheticOrContextlessProbeCalls=queryCalls.filter(x=>isExternalCommercialEvent(x)&&isContextlessSyntheticShoppingCall(x));
+  const realShoppingIntentCalls=queryCalls.filter(x=>isExternalCommercialEvent(x)&&!isContextlessSyntheticShoppingCall(x));
+  const canonicalIdCalls=calls.filter(x=>x.metadata?.id_present),queryOnlyCalls=calls.filter(x=>x.metadata?.query_present&&!x.metadata?.id_present);
+  // v3.7.93: only events carrying, or request-linked to, a real query/canonical-id are allowed
+  // into the confirmed external shopping funnel. Bare non-test probes are reported separately.
+  const confirmedIntentRequestIds=new Set(realShoppingIntentCalls.map(x=>String(x?.metadata?.request_id||"")).filter(Boolean));
+  const hasConfirmedShoppingIntent=x=>{
+    if(!isExternalCommercialEvent(x))return false;
+    const m=x?.metadata||{},rid=String(m.request_id||"");
+    return !!(m.query_present||m.id_present||m.canonical_product_id||(rid&&confirmedIntentRequestIds.has(rid)));
+  };
+  const externalSelected=selected.filter(hasConfirmedShoppingIntent),externalGateEntered=gateEntered.filter(hasConfirmedShoppingIntent),externalConfigErrors=configErrors.filter(hasConfirmedShoppingIntent),externalPaymentRequired=paymentRequired.filter(hasConfirmedShoppingIntent),externalAttempts=attempts.filter(hasConfirmedShoppingIntent),externalVerified=verified.filter(hasConfirmedShoppingIntent);
+  const nonTestProbeGateEntered=gateEntered.filter(x=>isExternalCommercialEvent(x)&&!hasConfirmedShoppingIntent(x));
+  const nonTestProbePaymentRequired=paymentRequired.filter(x=>isExternalCommercialEvent(x)&&!hasConfirmedShoppingIntent(x));
+  const payerCounts=new Map();for(const x of paid){if(x.payer_hash)payerCounts.set(x.payer_hash,(payerCounts.get(x.payer_hash)||0)+1);}
+  const testPaid=paid.filter(x=>isAdminE2ETestEvent(x,env)),externalPaid=paid.filter(hasConfirmedShoppingIntent);
+  const testPayers=new Set(testPaid.map(x=>x.payer_hash).filter(Boolean)),externalPayers=new Set(externalPaid.map(x=>x.payer_hash).filter(Boolean));
+  const externalRevenue=externalPaid.reduce((n,x)=>n+Number(x.amount_usdc||0),0),testRevenue=testPaid.reduce((n,x)=>n+Number(x.amount_usdc||0),0);
+  const callsByEndpoint={},paidByEndpoint={},queryByEndpoint={};
+  for(const x of calls){const k=x.endpoint||"unknown";callsByEndpoint[k]=(callsByEndpoint[k]||0)+1;if(x.metadata?.query_present||x.metadata?.id_present)queryByEndpoint[k]=(queryByEndpoint[k]||0)+1;}
+  for(const x of paid){const k=x.endpoint||"unknown";paidByEndpoint[k]=(paidByEndpoint[k]||0)+1;}
+  const countBy=(xs,keyFn)=>xs.reduce((m,x)=>{const k=String(keyFn(x)||"unknown");m[k]=(m[k]||0)+1;return m;},{});
+  const paymentRequiredBySource=countBy(paymentRequired,x=>x.metadata?.source_class);
+  const paymentRequiredByEndpoint=countBy(paymentRequired,x=>x.endpoint);
+  const paymentRequiredBySourceAndEndpoint={};for(const x of paymentRequired){const source=String(x.metadata?.source_class||"unknown"),endpoint=String(x.endpoint||"unknown");paymentRequiredBySourceAndEndpoint[source]??={};paymentRequiredBySourceAndEndpoint[source][endpoint]=(paymentRequiredBySourceAndEndpoint[source][endpoint]||0)+1;}
+  const paymentRequiredWithQuery=paymentRequired.filter(x=>x.metadata?.query_present).length,paymentRequiredWithCanonicalId=paymentRequired.filter(x=>x.metadata?.id_present).length,paymentRequiredWithoutIntent=paymentRequired.filter(x=>!x.metadata?.query_present&&!x.metadata?.id_present).length;
+  const canonicalSelectedBySource=countBy(selected,x=>x.metadata?.source_class);
+  const paymentAttemptsBySource=countBy(attempts,x=>x.metadata?.source_class);
+
+  // v3.7.37: identify conversion semantics are now explicit.
+  // conversion_identify_to_paid = identify product-intent calls that became paid identify calls.
+  // identify_to_higher_tier_payer_conversion = identify payers who later paid for another tier.
+  const identifyIntentCalls=queryCalls.filter(x=>x.endpoint==="/v1/identify");
+  const identifyAttempts=attempts.filter(x=>x.endpoint==="/v1/identify");
+  const identifyPaid=paid.filter(x=>x.endpoint==="/v1/identify");
+  const identifyPayers=new Set(identifyPaid.filter(x=>x.payer_hash).map(x=>x.payer_hash)),higherPayers=new Set(paid.filter(x=>x.endpoint!=="/v1/identify"&&x.payer_hash).map(x=>x.payer_hash));let upgradedIdentifyPayers=0;for(const p of identifyPayers)if(higherPayers.has(p))upgradedIdentifyPayers++;
+  const identifyToPaidRate=identifyIntentCalls.length?Math.min(1,identifyPaid.length/identifyIntentCalls.length):0;
+  const identifyPaymentSuccessRate=identifyAttempts.length?Math.min(1,identifyPaid.length/identifyAttempts.length):0;
+  const identifyToHigherTierRate=identifyPayers.size?upgradedIdentifyPayers/identifyPayers.size:0;
+
+  const revenue=paid.reduce((n,x)=>n+Number(x.amount_usdc||0),0),latestPaid=paid.length?paid[0]:null,firstPaid=paid.length?paid[paid.length-1]:null;
+  const recentHistoryPaid=allEvents.filter(x=>x.event_type==="paid_call"),recentHistoryRevenue=recentHistoryPaid.reduce((n,x)=>n+Number(x.amount_usdc||0),0),recentHistoryPayers=new Set(recentHistoryPaid.map(x=>x.payer_hash).filter(Boolean));
+  const recentHistoryTestPaid=recentHistoryPaid.filter(x=>isAdminE2ETestEvent(x,env)),recentHistoryExternalPaid=recentHistoryPaid.filter(hasConfirmedShoppingIntent);
+  const recentHistoryExternalPayers=new Set(recentHistoryExternalPaid.map(x=>x.payer_hash).filter(Boolean)),recentHistoryTestPayers=new Set(recentHistoryTestPaid.map(x=>x.payer_hash).filter(Boolean));
+  const recentHistoryExternalRevenue=recentHistoryExternalPaid.reduce((n,x)=>n+Number(x.amount_usdc||0),0),recentHistoryTestRevenue=recentHistoryTestPaid.reduce((n,x)=>n+Number(x.amount_usdc||0),0);
+  const paymentView=x=>x?{occurred_at:x.occurred_at||null,endpoint:x.endpoint||null,amount_usdc:Number(x.amount_usdc||0),amount_atomic:x.amount_atomic!=null?Number(x.amount_atomic):null,network:x.payment_network||null,transaction_hash:x.transaction_hash||null,payer_hash:x.payer_hash||null}:null;
+  const latestExternal=externalPaid.length?externalPaid[0]:null,firstExternal=externalPaid.length?externalPaid[externalPaid.length-1]:null;
+  const recentLatestExternal=recentHistoryExternalPaid.length?recentHistoryExternalPaid[0]:null,recentFirstExternal=recentHistoryExternalPaid.length?recentHistoryExternalPaid[recentHistoryExternalPaid.length-1]:null;
+  // v3.7.92 — funnel_stage is now the genuine external-shopping funnel only. Discovery crawlers,
+  // admin/self-tests and legacy test fingerprints cannot advance or block this stage.
+  const stage=!telemetry.ok?"telemetry_unavailable":(realShoppingIntentCalls.length===0)?(calls.length?"no_confirmed_external_shopping_intent":"no_external_api_traffic"):(externalSelected.length===0)?"external_product_intent_but_no_canonical_selection":(externalGateEntered.length===0)?"external_canonical_selected_but_x402_gate_not_entered":(externalPaymentRequired.length===0)?(externalConfigErrors.length?"external_x402_configuration_error_before_402":"external_x402_gate_entered_but_402_not_issued"):(externalAttempts.length===0)?"external_402_issued_but_no_payment_retry":(externalVerified.length===0)?"external_payment_retry_received_but_not_verified":(externalPaid.length===0)?"external_payment_verified_but_not_settled":"external_revenue_confirmed";
+  const selectedByRequest=new Map(selected.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
+  const requiredByRequest=new Map(paymentRequired.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
+  const attemptByRequest=new Map(attempts.map(x=>[String(x.metadata?.request_id||""),x]).filter(([k])=>k));
+  const query_intent_samples=realShoppingIntentCalls.slice(0,20).map(x=>{const rid=String(x.metadata?.request_id||"");const sel=selectedByRequest.get(rid),req=requiredByRequest.get(rid),att=attemptByRequest.get(rid);return {occurred_at:x.occurred_at||null,endpoint:x.endpoint||null,source_class:x.metadata?.source_class||null,source_fingerprint:x.metadata?.source_fingerprint||null,user_agent:x.metadata?.user_agent||null,client_name:x.metadata?.client_name||null,referer:x.metadata?.referer||null,origin:x.metadata?.origin||null,country:x.metadata?.country||null,query:String(x.metadata?.intent_query||x.metadata?.query_text||"").slice(0,180)||null,canonical_product_id:sel?.product_id||sel?.metadata?.canonical_product_id||null,payment_required:!!req,payment_attempted:!!att,payment_header_name:att?.metadata?.payment_header_name||null};});
+  const query_source_fingerprints=countBy(realShoppingIntentCalls,x=>x.metadata?.source_fingerprint||x.metadata?.source_class);
+  return {
+    telemetry_read_ok:telemetry.ok,telemetry_read_mode:telemetry.read_mode,telemetry_read_error:telemetry.ok?null:(telemetry.error||null),telemetry_primary_error:telemetry.primary_error||null,telemetry_fallback_error:telemetry.fallback_error||null,telemetry_api_events_rows_seen:telemetry.api_events_rows_seen,telemetry_api_events_total_estimate:telemetry.total_event_count_estimate,telemetry_count_error:telemetry.count_error||null,telemetry_table_has_events:telemetry.table_has_events,
+    event_window:versionEvents.length?`current_version_${VERSION}_events_within_latest_${PIPELINE.kpiEventReadLimit}`:`latest_${PIPELINE.kpiEventReadLimit}_x402_funnel_events_fallback`,events_in_window:events.length,all_recent_events_seen:allEvents.length,funnel_stage:stage,
+    first_revenue_confirmed:paid.length>0,recent_history_revenue_confirmed:recentHistoryPaid.length>0,
+    first_external_revenue_confirmed:externalPaid.length>0,recent_history_external_revenue_confirmed:recentHistoryExternalPaid.length>0,
+    recent_history_paid_calls:recentHistoryPaid.length,recent_history_unique_payers:recentHistoryPayers.size,recent_history_revenue_usdc:Number(recentHistoryRevenue.toFixed(6)),
+    recent_history_external_paid_calls:recentHistoryExternalPaid.length,recent_history_external_unique_payers:recentHistoryExternalPayers.size,recent_history_external_revenue_usdc:Number(recentHistoryExternalRevenue.toFixed(6)),
+    recent_history_test_paid_calls:recentHistoryTestPaid.length,recent_history_test_unique_payers:recentHistoryTestPayers.size,recent_history_test_revenue_usdc:Number(recentHistoryTestRevenue.toFixed(6)),
+    total_api_calls:calls.length,query_bearing_calls:queryCalls.length,query_only_calls:queryOnlyCalls.length,canonical_id_calls:canonicalIdCalls.length,crawler_or_monitor_calls:crawlerCalls.length,verifier_calls:verifierCalls.length,verifier_query_calls:verifierQueryCalls.length,unclassified_client_calls:unclassifiedCalls.length,admin_or_test_calls:adminOrTestCalls.length,known_self_test_signature_calls:knownSelfTestQueryCalls.length,synthetic_or_contextless_probe_calls:syntheticOrContextlessProbeCalls.length,real_shopping_intent_calls:realShoppingIntentCalls.length,confirmed_external_shopping_intent_calls:realShoppingIntentCalls.length,query_source_fingerprints,query_intent_samples,
+    legacy_self_test_fingerprints_excluded:Object.keys(LEGACY_SELF_TEST_FINGERPRINT_CUTOFFS),known_self_test_signatures_excluded:KNOWN_SELF_TEST_SIGNATURES.map(x=>({source_fingerprint:x.fingerprint,user_agent:x.user_agent,country:x.country,query:x.query})),
+    canonical_product_selected:selected.length,canonical_product_selected_by_source:canonicalSelectedBySource,x402_gate_entered:gateEntered.length,x402_configuration_errors:configErrors.length,payment_challenges_issued:paymentChallenges.length,payment_required_responses:paymentRequired.length,payment_retry_received:paymentRetries.length,payment_required_with_query:paymentRequiredWithQuery,payment_required_with_canonical_id:paymentRequiredWithCanonicalId,payment_required_without_query_or_id:paymentRequiredWithoutIntent,payment_required_by_source:paymentRequiredBySource,payment_required_by_endpoint:paymentRequiredByEndpoint,payment_required_by_source_and_endpoint:paymentRequiredBySourceAndEndpoint,payment_attempts:attempts.length,payment_attempts_by_source:paymentAttemptsBySource,payment_verified:verified.length,
+    external_canonical_product_selected:externalSelected.length,external_x402_gate_entered:externalGateEntered.length,external_x402_configuration_errors:externalConfigErrors.length,external_payment_required_responses:externalPaymentRequired.length,external_payment_attempts:externalAttempts.length,external_payment_verified:externalVerified.length,
+    non_test_probe_x402_gate_entered:nonTestProbeGateEntered.length,non_test_probe_payment_required_responses:nonTestProbePaymentRequired.length,
+    paid_calls:paid.length,unique_payers:payerCounts.size,repeat_payers:[...payerCounts.values()].filter(n=>n>=2).length,revenue_usdc:Number(revenue.toFixed(6)),first_payment:paymentView(firstPaid),latest_payment:paymentView(latestPaid),
+    external_paid_calls:externalPaid.length,external_unique_payers:externalPayers.size,external_revenue_usdc:Number(externalRevenue.toFixed(6)),first_external_payment:paymentView(firstExternal),latest_external_payment:paymentView(latestExternal),
+    test_paid_calls:testPaid.length,test_unique_payers:testPayers.size,test_revenue_usdc:Number(testRevenue.toFixed(6)),
+    recent_history_first_external_payment:paymentView(recentFirstExternal),recent_history_latest_external_payment:paymentView(recentLatestExternal),
+    calls_by_endpoint:callsByEndpoint,query_calls_by_endpoint:queryByEndpoint,paid_calls_by_endpoint:paidByEndpoint,event_counts:byType,
+    conversion_query_to_canonical_selection:realShoppingIntentCalls.length?Number((externalSelected.length/realShoppingIntentCalls.length).toFixed(4)):0,conversion_canonical_selection_to_payment_attempt:externalSelected.length?Number((externalAttempts.length/externalSelected.length).toFixed(4)):0,conversion_query_to_payment_attempt:realShoppingIntentCalls.length?Number((externalAttempts.length/realShoppingIntentCalls.length).toFixed(4)):0,conversion_payment_attempt_to_paid:externalAttempts.length?Number((externalPaid.length/externalAttempts.length).toFixed(4)):0,
+    conversion_identify_to_paid:Number(identifyToPaidRate.toFixed(4)),conversion_identify_to_paid_percent:Number((identifyToPaidRate*100).toFixed(1)),conversion_identify_payment_attempt_to_paid:Number(identifyPaymentSuccessRate.toFixed(4)),identify_to_higher_tier_payer_conversion:Number(identifyToHigherTierRate.toFixed(4)),identify_to_higher_tier_payer_conversion_percent:Number((identifyToHigherTierRate*100).toFixed(1)),
+    products_requested:products.length,unique_products_requested:new Set(products.map(x=>x.product_id).filter(Boolean)).size,affiliate_telemetry_read_ok:affiliateTelemetry.ok,affiliate_telemetry_read_error:affiliateTelemetry.error||null,affiliate_links_served:affiliateServed.length,affiliate_links_served_by_source:affiliateServed.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),affiliate_clicks:affiliateClicks.length,affiliate_clicks_by_source:affiliateClicks.reduce((m,x)=>{const k=x.metadata?.source||"unknown";m[k]=(m[k]||0)+1;return m;},{}),purchase_intents:purchaseIntents.length,merchant_selections:merchantSelections.length,checkout_starts:checkoutStarts.length,purchases_confirmed:purchaseConfirmed.length,conversion_purchase_intent_to_click:purchaseIntents.length?Number((affiliateClicks.length/purchaseIntents.length).toFixed(4)):0,conversion_click_to_purchase:affiliateClicks.length?Number((purchaseConfirmed.length/affiliateClicks.length).toFixed(4)):0,settlement_failures:settlementFailures.length,settlement_successes:paid.length,
+    measurement_note:"Confirmed external shopping funnel requires a resolvable query/canonical-id signal (or the same request_id), excludes crawler/discovery/verifier probes including Verantis and Nitrograph, explicit admin/self-tests, configured test payers, bounded legacy self-tests, the exact known Node/NL/Hatsune-Miku self-test signature (including request-linked events), and contextless synthetic benchmark prompts such as 'this exact figure' without an identifier. Verifier traffic is reported separately as verifier_* and can never advance the commercial funnel. Bare non-test x402 probes are reported separately as non_test_probe_*. Affiliate impressions/clicks are read from a dedicated telemetry query so high x402 volume cannot hide them. payment_attempt requires a payment-signature retry.",generated_at:new Date().toISOString()
+  };
+}
+
+async function monetizationStatus(env,origin,{checkBazaar=false}={}){
+  const kpi=await revenueMetrics(env);
+  let bazaar={checked:false,status:null,indexed_count:null,expected_count:INDEX402_SERVICES.length,all_indexed:false,errors:[]};
+  if(checkBazaar||kpi.first_revenue_confirmed){
+    try{const b=await bazaarCheck(env,origin);bazaar={checked:true,status:b.status,indexed_count:b.indexed_count,expected_count:b.expected_count,all_indexed:b.all_indexed,missing_paths:b.missing_paths,errors:b.errors||[],checked_at:b.checked_at};}
+    catch(e){bazaar={checked:true,status:"CHECK_FAILED",indexed_count:null,expected_count:INDEX402_SERVICES.length,all_indexed:false,errors:[safeError(e)]};}
+  }
+  const revenueEver=!!(kpi.first_revenue_confirmed||kpi.recent_history_revenue_confirmed);
+  const externalRevenueEver=!!(kpi.first_external_revenue_confirmed||kpi.recent_history_external_revenue_confirmed);
+  return {service:PLATFORM_NAME,version:VERSION,status:externalRevenueEver?"EXTERNAL_REVENUE_CONFIRMED":revenueEver?"TEST_REVENUE_CONFIRMED":"WAITING_FOR_FIRST_PAYMENT",maturity:{registered:null,listed:null,searchable:null,external_evidence_note:"Null means this request did not verify an external directory. Use the dedicated discovery audit endpoints for registration/listing/searchability evidence.",payment_verified:kpi.payment_verified>0,settlement_verified:kpi.paid_calls>0||kpi.recent_history_paid_calls>0,first_real_buyer:externalRevenueEver},revenue_usdc:kpi.revenue_usdc,recent_history_revenue_usdc:kpi.recent_history_revenue_usdc||0,external_revenue_usdc:kpi.external_revenue_usdc||0,recent_history_external_revenue_usdc:kpi.recent_history_external_revenue_usdc||0,test_revenue_usdc:kpi.test_revenue_usdc||0,recent_history_test_revenue_usdc:kpi.recent_history_test_revenue_usdc||0,paid_calls:kpi.paid_calls,recent_history_paid_calls:kpi.recent_history_paid_calls||0,external_paid_calls:kpi.external_paid_calls||0,recent_history_external_paid_calls:kpi.recent_history_external_paid_calls||0,unique_payers:kpi.unique_payers,recent_history_unique_payers:kpi.recent_history_unique_payers||0,external_unique_payers:kpi.external_unique_payers||0,recent_history_external_unique_payers:kpi.recent_history_external_unique_payers||0,repeat_payers:kpi.repeat_payers,affiliate_links_served:kpi.affiliate_links_served||0,affiliate_clicks:kpi.affiliate_clicks||0,settlement_failures:kpi.settlement_failures||0,first_payment:kpi.first_payment,latest_payment:kpi.latest_payment,first_external_payment:kpi.first_external_payment||kpi.recent_history_first_external_payment||null,latest_external_payment:kpi.latest_external_payment||kpi.recent_history_latest_external_payment||null,paid_calls_by_endpoint:kpi.paid_calls_by_endpoint,bazaar,next_action:externalRevenueEver?"optimize_external_discovery_and_repeat_conversion":revenueEver?(bazaar.all_indexed?"acquire_first_external_payer":"wait_for_or_verify_bazaar_indexing"):"wait_for_first_external_x402_settlement",generated_at:new Date().toISOString()};
+}
+
+/* =========================================================
+   RAKUTEN ICHIBA LIVE SEARCH + AFFILIATE ROUTING v3.7.87
+   Uses the official 2026-07-01 Rakuten Ichiba Item Search API when
+   RAKUTEN_APPLICATION_ID + RAKUTEN_ACCESS_KEY are configured.
+   RAKUTEN_AFFILIATE_ID is optional and, when present, asks Rakuten
+   to return affiliate URLs for live results. Pre-generated affiliate
+   links remain supported as a fallback.
+========================================================= */
+
+const RAKUTEN_ICHIBA_SEARCH_ENDPOINT="https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701";
+
+function rakutenConfigured(env){return !!String(env.RAKUTEN_AFFILIATE_ID||"").trim()||rakutenWebServiceConfigured(env);}
+function rakutenWebServiceConfigured(env){return !!String(env.RAKUTEN_APPLICATION_ID||"").trim()&&!!String(env.RAKUTEN_ACCESS_KEY||"").trim();}
+
+function rakutenSearchQuery(product){
+  return [product?.canonical_name_ja,product?.canonical_name_en,product?.model_number,product?.jan_code].map(x=>String(x||"").trim()).find(Boolean)||"anime figure";
+}
+function rakutenSearchQueries(product){

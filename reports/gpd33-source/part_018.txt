@@ -1,0 +1,300 @@
+  if(o.datasheet_url)trust+=15;
+  if(o.authenticity_evidence_url)trust+=10; else improvements.push("Provide authenticity or supply-chain evidence when relevant.");
+  if(o.return_policy_url)trust+=10; else {issues.push("return_policy_missing");improvements.push("Publish a machine-readable or stable return-policy URL.");}
+  if(m.website_url)trust+=10;
+
+  if(o.price!=null&&o.price>=0)ready+=25; else {issues.push("price_missing");improvements.push("Publish current price.");}
+  if(o.currency)ready+=10; else improvements.push("Publish currency with price.");
+  if(o.stock_status&&o.stock_status!=="unknown")ready+=20; else {issues.push("stock_unknown");improvements.push("Publish current stock status.");}
+  if(o.stock_quantity!=null)ready+=10; else improvements.push("Publish stock quantity when operationally possible.");
+  if(o.lead_time_days!=null)ready+=15; else {issues.push("lead_time_missing");improvements.push("Publish lead time in days.");}
+  if(o.checkout_url||o.product_url)ready+=10;
+  if(Array.isArray(o.ships_to)&&o.ships_to.length)ready+=10; else {issues.push("shipping_regions_missing");improvements.push("Publish ship-to country/region coverage.");}
+
+  if(["in_stock","low_stock"].includes(o.stock_status))fulfill+=30;
+  else if(o.stock_status==="backorder"||o.stock_status==="preorder")fulfill+=10;
+  if(o.stock_quantity!=null&&o.stock_quantity>0)fulfill+=15;
+  if(o.lead_time_days!=null){if(o.lead_time_days<=1)fulfill+=25;else if(o.lead_time_days<=3)fulfill+=20;else if(o.lead_time_days<=7)fulfill+=10;}
+  const ships=(o.ships_to||[]).map(x=>String(x).toUpperCase());
+  if(ships.length){if(!buyerCountry||ships.includes(String(buyerCountry).toUpperCase())||ships.includes("WORLDWIDE")||ships.includes("ALL"))fulfill+=20;}
+  if(o.shipping_cost!=null)fulfill+=10;
+
+  if(o.part_number&&o.mpn&&normalizePartNumber(o.part_number)===normalizePartNumber(o.mpn))compat+=40;
+  if(o.datasheet_url)compat+=25;
+  if(o.compatibility_evidence_url)compat+=25;
+  if(o.compatibility_claim){
+    if(o.compatibility_evidence_url)compat+=10;
+    else {issues.push("compatibility_claim_without_evidence");improvements.push("A compatibility/substitution claim receives no ranking credit until an official evidence URL is supplied.");}
+  }else if(!o.compatibility_evidence_url){
+    improvements.push("If claiming substitution/compatibility, provide the official evidence URL.");
+  }
+
+  discover=clamp100(discover);trust=clamp100(trust);ready=clamp100(ready);compat=clamp100(compat);fulfill=clamp100(fulfill);
+  const overall=clamp100(discover*.25+trust*.25+ready*.25+fulfill*.15+compat*.10);
+  const band=overall>=85?"agent_ready":overall>=70?"competitive":overall>=50?"needs_improvement":"low_visibility";
+  return {agent_discoverability_score:discover,agent_trust_score:trust,purchase_readiness_score:ready,compatibility_evidence_score:compat,fulfillment_score:fulfill,overall_agent_score:overall,rankability_band:band,issues:[...new Set(issues)],improvements:[...new Set(improvements)].slice(0,12),ranking_policy:"evidence_based_no_paid_placement"};
+}
+async function merchantByApiKey(env,request){
+  const key=String(request.headers.get("x-merchant-key")||"").trim();
+  if(!key)return null;
+  const hash=await sha256HexText(key);
+  const rows=await sbOptional(env,`/merchants?select=*&merchant_api_key_hash=eq.${encodeURIComponent(hash)}&status=eq.active&limit=1`);
+  return Array.isArray(rows)&&rows.length?rows[0]:null;
+}
+async function registerMerchantAdmin(env,body,origin){
+  const name=String(body?.name||"").trim();if(!name)throw new Error("merchant_name_required");
+  const rawSlug=String(body?.slug||"").trim().toLowerCase().replace(/[^a-z0-9-]+/g,"-").replace(/^-+|-+$/g,"");
+  const slug=rawSlug||`merchant-${crypto.randomUUID().slice(0,8)}`;
+  const existing=await sbOptional(env,`/merchants?select=id,slug,name,status&slug=eq.${encodeURIComponent(slug)}&limit=1`);
+  if(Array.isArray(existing)&&existing.length)throw new Error("merchant_slug_already_exists");
+  const apiKey=`mai_${crypto.randomUUID().replace(/-/g,"")}${crypto.randomUUID().replace(/-/g,"").slice(0,16)}`;
+  const hash=await sha256HexText(apiKey),now=new Date().toISOString();
+  const row={id:crypto.randomUUID(),slug,name,website_url:body?.website_url||null,country_code:String(body?.country_code||"JP").toUpperCase(),status:"active",verified:!!body?.verified,merchant_api_key_hash:hash,merchant_api_key_prefix:apiKey.slice(0,12),agent_description:body?.agent_description||null,capabilities:body?.capabilities||{},metadata:body?.metadata||{},created_at:now,updated_at:now};
+  const saved=await sb(env,"/merchants",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(row)});
+  const merchant=Array.isArray(saved)&&saved.length?saved[0]:row;
+  await sbOptional(env,"/merchant_agent_profiles?on_conflict=merchant_id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({merchant_id:merchant.id,discovery_name:name,description:body?.agent_description||`${name} machine-readable commerce profile`,checkout_mode:"link_out",supports_agent_checkout:false,protocols:["https","json"],capabilities:body?.capabilities||{},policies:{ranking:"evidence_based_no_paid_placement"},metadata:{feed_url:`${origin}/v1/merchant/feed?merchant=${encodeURIComponent(slug)}`},updated_at:now})});
+  return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,merchant:merchantPublicShape(merchant),merchant_api_key:apiKey,important:"This API key is returned once. Store it securely. Send it in x-merchant-key for merchant write endpoints.",feed_url:`${origin}/v1/merchant/feed?merchant=${encodeURIComponent(slug)}`,diagnostic_url:`${origin}/v1/merchant/diagnostic?merchant=${encodeURIComponent(slug)}`};
+}
+
+function safeMerchantUrl(v){
+  const s=String(v||"").trim();if(!s)return null;
+  try{const u=new URL(s);if(!["http:","https:"].includes(u.protocol))return null;return u.toString();}catch{return null;}
+}
+async function merchantRegistrationIpHash(request){
+  const raw=String(request?.headers?.get("cf-connecting-ip")||request?.headers?.get("x-forwarded-for")||"").split(",")[0].trim();
+  return raw?await sha256HexText(`merchant-registration-v1|${raw}`):null;
+}
+async function enforceMerchantRegistrationRateLimit(env,request){
+  const ipHash=await merchantRegistrationIpHash(request);
+  if(!ipHash)return {ip_hash:null,recent_count:null};
+  const cutoff=new Date(Date.now()-24*60*60*1000).toISOString();
+  const path=`/merchants?select=id&metadata-%3E%3Eregistration_ip_hash=eq.${encodeURIComponent(ipHash)}&created_at=gte.${encodeURIComponent(cutoff)}&limit=4`;
+  const rows=await sbOptional(env,path);
+  const count=Array.isArray(rows)?rows.length:0;
+  if(count>=3){
+    const e=new Error("merchant_registration_rate_limited");
+    e.status=429;
+    throw e;
+  }
+  return {ip_hash:ipHash,recent_count:count};
+}
+function publicMerchantRegistrationBody(body){
+  const name=String(body?.name||body?.merchant_name||"").trim().slice(0,120);
+  if(name.length<2)throw new Error("merchant_name_too_short");
+  const country=String(body?.country_code||"JP").trim().toUpperCase();
+  if(!/^[A-Z]{2}$/.test(country))throw new Error("invalid_country_code");
+  const websiteRaw=String(body?.website_url||"").trim();
+  const website=websiteRaw?safeMerchantUrl(websiteRaw):null;
+  if(websiteRaw&&!website)throw new Error("invalid_website_url");
+  const slugRaw=String(body?.slug||"").trim().toLowerCase();
+  if(slugRaw&&!/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(slugRaw))throw new Error("invalid_slug");
+  return {
+    name,
+    slug:slugRaw||"",
+    website_url:website,
+    country_code:country,
+    verified:false,
+    agent_description:String(body?.agent_description||"").trim().slice(0,1000)||null,
+    capabilities:body?.capabilities&&typeof body.capabilities==="object"&&!Array.isArray(body.capabilities)?body.capabilities:{},
+    metadata:{
+      onboarding_source:"public_self_service",
+      merchant_type:String(body?.merchant_type||"").trim().slice(0,80)||null,
+      direct_seller:body?.direct_seller===true,
+      registration_terms_accepted:body?.accept_terms===true,
+      registered_at:new Date().toISOString()
+    }
+  };
+}
+async function registerMerchantPublic(env,request,body,origin){
+  if(body?.company_fax)return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,registration:"accepted"};
+  if(body?.accept_terms!==true)throw new Error("terms_acceptance_required");
+  const rate=await enforceMerchantRegistrationRateLimit(env,request);
+  const normalized=publicMerchantRegistrationBody(body);
+  normalized.metadata={...(normalized.metadata||{}),registration_ip_hash:rate.ip_hash||null};
+  return registerMerchantAdmin(env,normalized,origin);
+}
+async function merchantSelfApi(env,request,origin){
+  const merchant=await merchantByApiKey(env,request);
+  if(!merchant)return {ok:false,status:401,error:"invalid_merchant_key"};
+  const profiles=await sbOptional(env,`/merchant_agent_profiles?select=*&merchant_id=eq.${encodeURIComponent(merchant.id)}&limit=1`);
+  const countRows=await sbOptional(env,`/merchant_offers?select=id&merchant_id=eq.${encodeURIComponent(merchant.id)}&active=eq.true&limit=1000`);
+  return {
+    ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,
+    merchant:merchantPublicShape(merchant),
+    agent_profile:Array.isArray(profiles)&&profiles.length?profiles[0]:null,
+    active_offer_count:Array.isArray(countRows)?countRows.length:null,
+    endpoints:{
+      feed:`${origin}/v1/merchant/feed?merchant=${encodeURIComponent(merchant.slug)}`,
+      diagnostic:`${origin}/v1/merchant/diagnostic?merchant=${encodeURIComponent(merchant.slug)}`,
+      search:`${origin}/v1/merchant/search?part_number=<MPN>&manufacturer=<MANUFACTURER>`
+    }
+  };
+}
+async function rotateMerchantApiKey(env,request){
+  const merchant=await merchantByApiKey(env,request);
+  if(!merchant)return {ok:false,status:401,error:"invalid_merchant_key"};
+  const apiKey=`mai_${crypto.randomUUID().replace(/-/g,"")}${crypto.randomUUID().replace(/-/g,"").slice(0,16)}`;
+  const hash=await sha256HexText(apiKey),now=new Date().toISOString();
+  await sb(env,`/merchants?id=eq.${encodeURIComponent(merchant.id)}`,{
+    method:"PATCH",headers:{Prefer:"return=minimal"},
+    body:JSON.stringify({merchant_api_key_hash:hash,merchant_api_key_prefix:apiKey.slice(0,12),updated_at:now})
+  });
+  return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,merchant:merchantPublicShape({...merchant,updated_at:now}),merchant_api_key:apiKey,important:"The previous merchant API key is now invalid. This new key is returned once; store it securely."};
+}
+function merchantLandingPage(origin){
+  const esc=(s)=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Merchant Intelligence | Make your store readable to AI purchasing agents</title>
+<meta name="description" content="Publish exact-MPN inventory, fulfillment and trust evidence so AI purchasing agents can discover, compare and select your offers. Evidence-based ranking; no paid placement.">
+<meta name="robots" content="index,follow"><style>
+:root{color-scheme:dark;--bg:#090b0f;--panel:#12161c;--line:#29313b;--muted:#9aa6b5;--text:#f5f7fa;--accent:#9fb7ff;--good:#8ee6aa;--warn:#ffd477}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#172138 0,#090b0f 35%);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}
+a{color:inherit}.wrap{max-width:1120px;margin:auto;padding:0 22px}.nav{display:flex;justify-content:space-between;align-items:center;padding:20px 0}.brand{font-weight:900;letter-spacing:.11em;font-size:12px;color:var(--accent)}.navlinks{display:flex;gap:16px;align-items:center;font-size:14px}.navlinks a{text-decoration:none;color:#c6cfdb}
+.hero{padding:70px 0 54px;display:grid;grid-template-columns:1.15fr .85fr;gap:34px;align-items:center}.eyebrow{font-size:12px;font-weight:900;color:var(--accent);letter-spacing:.12em}.hero h1{font-size:56px;line-height:1.02;margin:10px 0 18px;letter-spacing:-.035em}.hero p{font-size:19px;color:#b7c1ce;max-width:720px}.cta{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}.btn{display:inline-block;padding:13px 18px;border-radius:11px;font-weight:850;text-decoration:none;background:#edf2ff;color:#0a0d12}.btn.secondary{background:#1a2029;color:#fff;border:1px solid #33404d}.proof{background:linear-gradient(180deg,#141a23,#0f1319);border:1px solid #2b3542;border-radius:18px;padding:22px}.proof h3{margin:0 0 12px}.metric{display:flex;justify-content:space-between;border-top:1px solid #27303a;padding:11px 0}.metric:first-of-type{border-top:0}.metric b{color:var(--good)}
+.section{padding:54px 0}.section h2{font-size:34px;margin:0 0 12px}.lead{color:#aeb8c5;max-width:820px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:24px}.card{background:rgba(18,22,28,.88);border:1px solid var(--line);border-radius:16px;padding:19px}.card h3{margin:0 0 7px;font-size:18px}.card p{margin:0;color:#aab5c2;font-size:14px}.num{font-size:12px;color:var(--accent);font-weight:900;letter-spacing:.08em}
+.scoregrid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:22px}.score{border:1px solid #2c3540;border-radius:13px;background:#0f1318;padding:14px}.score b{display:block;font-size:13px}.score span{font-size:12px;color:#9ba7b5}
+.policy{margin-top:24px;padding:18px;border-left:3px solid var(--good);background:#101813;border-radius:10px}.policy b{color:var(--good)}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:24px}.step{padding:18px;border-radius:15px;background:#12171e;border:1px solid #2a323d}.step strong{display:block;margin:5px 0}.step span{font-size:13px;color:#9aa6b5}
+.footer{padding:40px 0 60px;color:#8793a2;font-size:13px;border-top:1px solid #202731;margin-top:40px}
+@media(max-width:800px){.hero{grid-template-columns:1fr;padding-top:42px}.hero h1{font-size:42px}.cards,.steps{grid-template-columns:1fr}.scoregrid{grid-template-columns:1fr 1fr}.navlinks a:not(.btn){display:none}}
+</style></head><body>
+<div class="wrap"><nav class="nav"><div class="brand">AI PURCHASE INTELLIGENCE / MERCHANT INTELLIGENCE</div><div class="navlinks"><a href="/openapi.json">API</a><a href="/llms.txt">LLMs</a><a class="btn" href="/merchant/onboard">Register merchant</a></div></nav>
+
+<section class="hero"><div><div class="eyebrow">AGENT COMMERCE INFRASTRUCTURE</div><h1>Make your store readable to AI purchasing agents.</h1>
+<p>AI agents increasingly compare exact products, stock, lead time, shipping and trust evidence before choosing where to buy. Merchant Intelligence gives your store a machine-readable offer feed, an evidence-based score and a diagnostic showing what prevents selection.</p>
+<div class="cta"><a class="btn" href="/merchant/onboard">Start merchant onboarding</a><a class="btn secondary" href="/v1/merchant/search?part_number=E2E-X5ME1">See agent-ready search</a></div></div>
+<div class="proof"><h3>What an AI agent can evaluate</h3><div class="metric"><span>Exact MPN identity</span><b>YES</b></div><div class="metric"><span>Price / stock / lead time</span><b>YES</b></div><div class="metric"><span>Ship-to coverage</span><b>YES</b></div><div class="metric"><span>Official documents / evidence</span><b>YES</b></div><div class="metric"><span>Merchant trust and readiness</span><b>YES</b></div><div class="metric"><span>Paid placement changes ranking</span><b>NO</b></div></div></section>
+
+<section class="section"><h2>What you publish</h2><p class="lead">The goal is not another storefront. It is a clean machine-readable layer that lets purchasing agents understand exactly what you sell and whether the offer is safe and actionable.</p>
+<div class="cards"><div class="card"><div class="num">01</div><h3>Exact product identity</h3><p>Manufacturer, MPN, GTIN/JAN/EAN, merchant SKU and stable product URL.</p></div><div class="card"><div class="num">02</div><h3>Availability and fulfillment</h3><p>Price, currency, stock status, quantity, lead time, shipping regions and shipping cost.</p></div><div class="card"><div class="num">03</div><h3>Trust evidence</h3><p>Official datasheet, return policy, authorized-channel evidence and compatibility evidence.</p></div></div></section>
+
+<section class="section"><h2>How agent readiness is scored</h2><p class="lead">Scores are evidence-based. Self-claims without evidence receive limited or no ranking credit.</p>
+<div class="scoregrid"><div class="score"><b>Discoverability</b><span>Can an agent identify the exact offer?</span></div><div class="score"><b>Trust</b><span>Can claims and merchant status be substantiated?</span></div><div class="score"><b>Purchase readiness</b><span>Can the agent actually make a purchase decision?</span></div><div class="score"><b>Compatibility evidence</b><span>Are substitution claims backed by evidence?</span></div><div class="score"><b>Fulfillment</b><span>Can the order be delivered predictably?</span></div></div>
+<div class="policy"><b>No pay-to-rank.</b> Paying for access or future commercial plans does not improve search position. Ranking is based on exact identity, evidence quality, purchase readiness and fulfillment data.</div></section>
+
+<section class="section"><h2>Onboard in four practical steps</h2><div class="steps"><div class="step"><span>STEP 1</span><strong>Register</strong><span>Create the merchant identity and receive a one-time API Key.</span></div><div class="step"><span>STEP 2</span><strong>Describe your store</strong><span>Publish the agent-facing merchant profile.</span></div><div class="step"><span>STEP 3</span><strong>Publish offers</strong><span>Start with exact-MPN inventory; add evidence where available.</span></div><div class="step"><span>STEP 4</span><strong>Improve the score</strong><span>Use the diagnostic to see exactly what an AI agent still cannot trust or use.</span></div></div>
+<div class="cta"><a class="btn" href="/merchant/onboard">Open Merchant Onboarding</a></div></section>
+
+<footer class="footer">API base: ${esc(origin)} | Evidence-based ranking | Compatibility claims require evidence | Merchant API keys are stored only as SHA-256 hashes.</footer></div>
+</body></html>`;
+}
+
+function merchantOnboardingPage(origin){
+  const esc=(s)=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Merchant Onboarding | AI PURCHASE INTELLIGENCE</title>
+<meta name="robots" content="index,follow"><style>
+:root{color-scheme:dark;--bg:#0a0c10;--panel:#131820;--line:#2a333e;--muted:#99a5b4;--text:#f5f7fa;--accent:#9fb7ff;--good:#8ee6aa;--warn:#ffd477;--bad:#ff9cae}
+*{box-sizing:border-box}body{margin:0;background:#0a0c10;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.5}
+main{max-width:1040px;margin:auto;padding:22px}.topbar{display:flex;justify-content:space-between;align-items:center;gap:12px}.brand{font-weight:900;font-size:12px;letter-spacing:.11em;color:var(--accent)}a{color:#cbd6e6}.back{text-decoration:none;font-size:13px;color:#aeb8c5}
+.hero{padding:28px 0 12px}.hero h1{font-size:38px;line-height:1.08;margin:7px 0}.sub{color:#aab5c2;max-width:790px}.progress{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:22px 0}.pstep{border:1px solid #2b3440;border-radius:12px;padding:10px;background:#0e1217;color:#8793a2;font-size:12px}.pstep.done{border-color:#356c46;color:#a9efbd;background:#101b14}.pstep.active{border-color:#526baf;color:#c8d5ff;background:#11182a}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin:8px 0}.card h2{margin:2px 0 8px;font-size:20px}.step{font-weight:900;color:var(--accent);font-size:12px;letter-spacing:.08em}
+label{display:block;font-size:13px;color:#c4ccd7;margin-top:12px}input,textarea,select{width:100%;padding:12px;margin-top:5px;border-radius:10px;border:1px solid #394451;background:#0e1217;color:white;font-size:16px}textarea{min-height:90px}
+button,.btn{display:inline-block;border:0;border-radius:10px;padding:12px 16px;font-weight:800;margin-top:14px;background:#e8eefc;color:#0c1118;text-decoration:none;cursor:pointer}.secondary{background:#252d38;color:#fff}.danger{background:#4a2530;color:#fff}.copy{background:#1c2635;color:#dbe7ff}
+pre{white-space:pre-wrap;word-break:break-word;background:#0a0d11;border:1px solid #252c34;border-radius:10px;padding:12px;min-height:44px;font-size:12px}.small{font-size:12px;color:var(--muted)}.ok{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.wide{grid-column:1/-1}.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1;min-width:180px}.required:after{content:" *";color:#ff9cae}.keybox{display:none;margin-top:14px;padding:14px;border:1px solid #6b5b27;background:#171307;border-radius:12px}.keybox.show{display:block}.keyrow{display:flex;gap:8px;align-items:center}.keyrow input{margin-top:0}.notice{padding:12px 14px;border-radius:10px;background:#111722;border:1px solid #2c3a4c;color:#c0c9d7;font-size:13px}.scorebox{display:none}.scorebox.show{display:block}.scores{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}.score{background:#0d1218;border:1px solid #26303a;border-radius:11px;padding:10px}.score b{font-size:22px;display:block}.score span{font-size:11px;color:#9ca8b5}.issue{padding:8px 10px;background:#151018;border:1px solid #3a2935;border-radius:9px;margin:6px 0;font-size:12px}.links{display:none;margin-top:12px}.links.show{display:block}.links a{display:block;margin:5px 0;font-size:13px}
+@media(max-width:720px){main{padding:16px}.grid{grid-template-columns:1fr}.wide{grid-column:auto}.hero h1{font-size:31px}.progress{grid-template-columns:1fr 1fr}.scores{grid-template-columns:1fr 1fr}.keyrow{align-items:stretch;flex-direction:column}}
+</style></head><body><main>
+<div class="topbar"><div class="brand">AI PURCHASE INTELLIGENCE / MERCHANT INTELLIGENCE</div><a class="back" href="/merchant">Why this exists</a></div>
+<div class="hero"><h1>Merchant Onboarding</h1><p class="sub">Register your store, publish machine-readable exact-MPN offers, and see what an AI purchasing agent still needs before it can confidently select you.</p></div>
+<div class="progress"><div id="pg1" class="pstep active">1. Register</div><div id="pg2" class="pstep">2. Profile</div><div id="pg3" class="pstep">3. Publish offer</div><div id="pg4" class="pstep">4. Improve score</div></div>
+
+<div class="grid">
+<section class="card wide"><div class="step">STEP 1</div><h2>Register merchant</h2>
+<div class="notice">Required fields are marked with *. Registration creates an active but unverified merchant. Verification is separate and cannot be self-granted.</div>
+<div class="row"><div><label class="required">Merchant name<input id="r_name" placeholder="Example FA Shop"></label></div><div><label>Slug (optional)<input id="r_slug" placeholder="example-fa-shop"></label></div></div>
+<div class="row"><div><label>Website URL<input id="r_site" placeholder="https://example.com"></label></div><div><label class="required">Country<select id="r_country"><option value="JP">JP</option><option value="US">US</option><option value="GB">GB</option><option value="DE">DE</option><option value="FR">FR</option><option value="SG">SG</option><option value="KR">KR</option><option value="CN">CN</option></select></label></div></div>
+<label>Agent description<textarea id="r_desc" placeholder="What you sell, regions served, strengths, authorized status, etc."></textarea></label>
+<label style="display:none">Fax<input id="company_fax" autocomplete="off"></label>
+<label><input id="terms" type="checkbox" style="width:auto"> I confirm I am authorized to publish this merchant's commerce data and accept evidence-based ranking.</label>
+<button id="register_btn" onclick="registerMerchant()">Register merchant</button>
+<div id="key_box" class="keybox"><b class="warn">Save this API Key now. It is shown once.</b><div class="keyrow"><input id="issued_key" type="password" readonly><button class="copy" onclick="copyIssuedKey()">Copy key</button><button class="secondary" onclick="toggleIssuedKey()">Show / hide</button></div><p class="small">The server stores only a SHA-256 hash. Losing this key means you will need a controlled recovery/rotation path.</p></div>
+<pre id="register_out"></pre></section>
+
+<section class="card"><div class="step">CONNECTION</div><h2>Merchant API Key</h2>
+<label>Merchant API Key<input id="api_key" type="password" placeholder="mai_..."></label>
+<button onclick="connectMerchant()">Connect</button><button class="secondary" onclick="toggleKey()">Show / hide</button>
+<p id="connection_state" class="small">Not connected.</p>
+<pre id="me_out"></pre></section>
+
+<section class="card"><div class="step">STEP 2</div><h2>Agent-facing profile</h2>
+<label>Discovery name<input id="p_name" placeholder="Example FA Shop"></label>
+<label>Description<textarea id="p_desc" placeholder="Industrial parts distributor serving Japan..."></textarea></label>
+<label><input id="p_checkout" type="checkbox" style="width:auto"> Supports agent checkout</label>
+<button onclick="saveProfile()">Publish profile</button>
+<pre id="profile_out"></pre></section>
+
+<section class="card wide"><div class="step">STEP 3</div><h2>Publish one exact-MPN offer</h2>
+<p class="small">Start with one real offer. Exact MPN, current price, stock, lead time and stable URLs are more useful than a large low-quality feed.</p>
+<div class="row"><div><label class="required">Manufacturer<input id="o_mfr" placeholder="OMRON"></label></div><div><label class="required">Part number / MPN<input id="o_pn" placeholder="E2E-X5ME1"></label></div><div><label>Merchant SKU<input id="o_sku" placeholder="SKU-001"></label></div></div>
+<label>Title<input id="o_title" placeholder="OMRON E2E-X5ME1 Proximity Sensor"></label>
+<div class="row"><div><label>Price<input id="o_price" type="number" step="0.01" min="0"></label></div><div><label>Currency<input id="o_currency" value="JPY" maxlength="3"></label></div><div><label>Stock quantity<input id="o_qty" type="number" min="0"></label></div><div><label>Stock status<select id="o_stock"><option>in_stock</option><option>low_stock</option><option>backorder</option><option>preorder</option><option>out_of_stock</option><option>unknown</option></select></label></div></div>
+<div class="row"><div><label>Lead time days<input id="o_lead" type="number" min="0"></label></div><div><label>Ships to (ISO codes)<input id="o_ships" value="JP" placeholder="JP,US,DE"></label></div><div><label>Shipping cost<input id="o_shipping" type="number" step="0.01" min="0"></label></div></div>
+<div class="row"><div><label>Product URL<input id="o_url" placeholder="https://..."></label></div><div><label>Checkout URL<input id="o_checkout" placeholder="https://..."></label></div></div>
+<div class="row"><div><label>Datasheet URL<input id="o_datasheet" placeholder="https://...pdf"></label></div><div><label>Return policy URL<input id="o_return" placeholder="https://.../returns"></label></div></div>
+<label><input id="o_auth" type="checkbox" style="width:auto"> Authorized distributor / authorized supply channel</label>
+<p class="small">Authorized status receives full Trust credit only when merchant verification or supply-chain evidence substantiates it.</p>
+<button onclick="publishOffer()">Publish offer & run diagnostic</button>
+<pre id="offer_out"></pre></section>
+
+<section class="card wide"><div class="step">STEP 4</div><h2>AI-agent diagnostic</h2>
+<div id="score_box" class="scorebox"><div class="scores"><div class="score"><b id="s_overall">-</b><span>Overall</span></div><div class="score"><b id="s_discover">-</b><span>Discoverability</span></div><div class="score"><b id="s_trust">-</b><span>Trust</span></div><div class="score"><b id="s_ready">-</b><span>Purchase readiness</span></div><div class="score"><b id="s_compat">-</b><span>Compatibility evidence</span></div><div class="score"><b id="s_fulfill">-</b><span>Fulfillment</span></div></div><div id="issue_list"></div></div>
+<button onclick="runDiagnostic()">Run diagnostic</button>
+<div id="public_links" class="links"><b>Public agent endpoints</b><a id="feed_link" target="_blank">Merchant feed</a><a id="diag_link" target="_blank">Diagnostic JSON</a></div>
+<pre id="diag_out"></pre></section>
+
+<section class="card wide"><div class="step">SECURITY</div><h2>Rotate API key</h2>
+<p class="small">Use only if you still possess the current key. Rotation immediately invalidates the old key. The replacement key is shown once.</p>
+<button class="danger" onclick="rotateKey()">Rotate key</button>
+<pre id="rotate_out"></pre></section>
+</div>
+
+<p class="small">API base: ${esc(origin)} | Ranking policy: evidence_based_no_paid_placement | Compatibility claims require evidence.</p>
+</main><script>
+const $=id=>document.getElementById(id);
+let merchantSlug="";
+const out=(id,v)=>$(id).textContent=typeof v==="string"?v:JSON.stringify(v,null,2);
+function key(){return $("api_key").value.trim()}
+function setProgress(n){for(let i=1;i<=4;i++){const e=$("pg"+i);e.classList.toggle("done",i<n);e.classList.toggle("active",i===n)}}
+function safePublicResult(j){if(!j||typeof j!=="object")return j;const c=JSON.parse(JSON.stringify(j));if(c.merchant_api_key)c.merchant_api_key="[REDACTED - saved in API Key field]";return c}
+function setConnected(ok,name=""){const e=$("connection_state");e.textContent=ok?("Connected"+(name?": "+name:"")):"Not connected.";e.className="small "+(ok?"ok":"bad")}
+function setPublicLinks(slug){if(!slug)return;merchantSlug=slug;const feed="/v1/merchant/feed?merchant="+encodeURIComponent(slug);const diag="/v1/merchant/diagnostic?merchant="+encodeURIComponent(slug);$("feed_link").href=feed;$("diag_link").href=diag;$("public_links").classList.add("show")}
+async function api(path,opt={}){const r=await fetch(path,opt);let j;try{j=await r.json()}catch{j={ok:false,error:"non_json_response",status:r.status}};if(!r.ok&&!j.status)j.status=r.status;return j}
+async function registerMerchant(){
+  const btn=$("register_btn");btn.disabled=true;btn.textContent="Registering...";
+  const body={name:$("r_name").value.trim(),slug:$("r_slug").value.trim(),website_url:$("r_site").value.trim(),country_code:$("r_country").value,agent_description:$("r_desc").value.trim(),company_fax:$("company_fax").value,accept_terms:$("terms").checked};
+  if(!body.name){out("register_out",{ok:false,error:"Merchant name is required."});btn.disabled=false;btn.textContent="Register merchant";return}
+  if(!body.accept_terms){out("register_out",{ok:false,error:"Please confirm authorization and evidence-based ranking."});btn.disabled=false;btn.textContent="Register merchant";return}
+  const j=await api("/v1/merchant/register",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  out("register_out",safePublicResult(j));btn.disabled=false;btn.textContent="Register merchant";
+  if(j.merchant_api_key){
+    $("issued_key").value=j.merchant_api_key;$("api_key").value=j.merchant_api_key;$("key_box").classList.add("show");
+    merchantSlug=j.merchant?.slug||"";$("p_name").value=j.merchant?.name||body.name;$("p_desc").value=j.merchant?.agent_description||body.agent_description;
+    setPublicLinks(merchantSlug);setProgress(2);
+    const me=await api("/v1/merchant/me",{headers:{"x-merchant-key":j.merchant_api_key}});out("me_out",me);setConnected(!!me.ok,me.merchant?.name||"");
+  }
+}
+async function copyIssuedKey(){const v=$("issued_key").value;if(!v)return;try{await navigator.clipboard.writeText(v);out("register_out",{ok:true,message:"API Key copied. Store it in your password manager or secret store."})}catch{out("register_out",{ok:false,error:"Clipboard copy failed. Select the API Key and copy it manually."})}}
+function toggleIssuedKey(){const e=$("issued_key");e.type=e.type==="password"?"text":"password"}
+async function connectMerchant(){const k=key();if(!k){setConnected(false);out("me_out",{ok:false,error:"Enter your Merchant API Key."});return}const j=await api("/v1/merchant/me",{headers:{"x-merchant-key":k}});out("me_out",j);setConnected(!!j.ok,j.merchant?.name||"");if(j.merchant?.slug){setPublicLinks(j.merchant.slug);$("p_name").value=j.profile?.discovery_name||j.merchant.name||$("p_name").value;$("p_desc").value=j.profile?.description||j.merchant.agent_description||$("p_desc").value;setProgress(2)}}
+function toggleKey(){const e=$("api_key");e.type=e.type==="password"?"text":"password"}
+async function saveProfile(){
+ if(!key()){out("profile_out",{ok:false,error:"Connect your Merchant API Key first."});return}
+ const body={discovery_name:$("p_name").value.trim(),description:$("p_desc").value.trim(),supports_agent_checkout:$("p_checkout").checked,checkout_mode:$("p_checkout").checked?"agent_checkout":"link_out",protocols:["https","json"]};
+ const j=await api("/v1/merchant/profile/update",{method:"POST",headers:{"content-type":"application/json","x-merchant-key":key()},body:JSON.stringify(body)});out("profile_out",j);if(j.merchant?.slug)setPublicLinks(j.merchant.slug);if(j.ok)setProgress(3)
+}
+function nval(id){const v=$(id).value.trim();return v===""?null:Number(v)}
+async function publishOffer(){
+ if(!key()){out("offer_out",{ok:false,error:"Connect your Merchant API Key first."});return}
+ const mfr=$("o_mfr").value.trim(),pn=$("o_pn").value.trim();if(!mfr||!pn){out("offer_out",{ok:false,error:"Manufacturer and Part number / MPN are required."});return}
+ const body={offer:{manufacturer:mfr,part_number:pn,mpn:pn,merchant_sku:$("o_sku").value.trim()||pn,title:$("o_title").value.trim()||null,price:nval("o_price"),currency:$("o_currency").value.trim().toUpperCase(),stock_quantity:nval("o_qty"),stock_status:$("o_stock").value,lead_time_days:nval("o_lead"),ships_to:$("o_ships").value.split(",").map(x=>x.trim().toUpperCase()).filter(Boolean),shipping_cost:nval("o_shipping"),product_url:$("o_url").value.trim()||null,checkout_url:$("o_checkout").value.trim()||null,datasheet_url:$("o_datasheet").value.trim()||null,return_policy_url:$("o_return").value.trim()||null,authorized_distributor:$("o_auth").checked,active:true}};
+ const j=await api("/v1/merchant/offers/upsert",{method:"POST",headers:{"content-type":"application/json","x-merchant-key":key()},body:JSON.stringify(body)});out("offer_out",j);if(j.merchant?.slug)setPublicLinks(j.merchant.slug);if(j.ok){setProgress(4);await runDiagnostic()}
+}
+function renderDiagnostic(j){
+ if(!j?.ok||!j.average_scores)return;
+ const s=j.average_scores;$("s_overall").textContent=s.overall_agent_score??"-";$("s_discover").textContent=s.agent_discoverability_score??"-";$("s_trust").textContent=s.agent_trust_score??"-";$("s_ready").textContent=s.purchase_readiness_score??"-";$("s_compat").textContent=s.compatibility_evidence_score??"-";$("s_fulfill").textContent=s.fulfillment_score??"-";
+ const issues=[];(j.top_issues||[]).forEach(x=>issues.push((x.issue||"issue")+" ("+(x.count||1)+")"));(j.priority_improvements||[]).slice(0,6).forEach(x=>issues.push(x.improvement||x));
+ $("issue_list").innerHTML=issues.length?issues.map(x=>'<div class="issue"></div>').join(""):'<div class="small ok">No high-priority issues returned.</div>';const nodes=$("issue_list").querySelectorAll(".issue");issues.forEach((x,i)=>nodes[i].textContent=x);$("score_box").classList.add("show")
+}
+async function runDiagnostic(){
+ if(!merchantSlug){const m=await api("/v1/merchant/me",{headers:{"x-merchant-key":key()}});if(m.merchant?.slug)setPublicLinks(m.merchant.slug);else{return out("diag_out",m)}}

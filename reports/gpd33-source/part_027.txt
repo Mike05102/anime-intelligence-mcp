@@ -1,0 +1,300 @@
+    user_agent_hint:String(request.headers.get("user-agent")||"").slice(0,180)||null
+  };
+}
+async function x402Gate(request,env,amount,description,work,ctx=null){
+  deferTelemetry(ctx,logRequestStage(env,request,"x402_gate_entered",{
+    amount_atomic:Number(amount),
+    amount_usdc:Number(amount)/1000000,
+    metadata:{protocol:"x402",x402_version:2,critical_telemetry:false,nonblocking_telemetry:true}
+  }));
+
+  /*
+    v3.7.25 — preserve the exact PaymentRequirements from the original 402 handshake.
+
+    Coinbase CDP may advertise a different SVM sponsor/feePayer on a later
+    /supported call. The browser builds and partially signs the Solana
+    transaction against the feePayer contained in the ORIGINAL 402 response.
+
+    Previous behavior rebuilt payment requirements on the retry request,
+    causing:
+      invalid_exact_solana_fee_payer_mismatch
+
+    For payment retries, use payload.accepted (the requirement the client
+    actually paid against), while independently validating all merchant-owned
+    immutable fields: scheme, network, amount, asset and payTo.
+    Coinbase /verify remains the authority for validating the sponsor feePayer
+    and the signed transaction.
+  */
+
+  const sig=request.headers.get("payment-signature")||request.headers.get("x-payment");
+
+  // First request: generate and advertise a fresh requirement.
+  if(!sig){
+    let cfg;
+    try{
+      cfg=await paymentRequirement(request,env,amount,description);
+    }catch(e){
+      deferTelemetry(ctx,logRequestStage(env,request,"x402_configuration_error",{metadata:{response_status:503,error:safeError(e)}}));
+      return json({error:"x402_configuration_error",detail:safeError(e)},503);
+    }
+
+    const requirementFingerprint=await paymentRequirementFingerprint(cfg.accepted);
+    const capabilitySignals=paymentCapabilitySignals(request);
+
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_challenge_issued",{
+      amount_atomic:Number(amount),
+      amount_usdc:Number(amount)/1000000,
+      payment_network:cfg.accepted.network,
+      metadata:{
+        response_status:402,
+        protocol:"x402",
+        x402_version:2,
+        requirement_fingerprint:requirementFingerprint,
+        scheme:cfg.accepted?.scheme||null,
+        asset:cfg.accepted?.asset||null,
+        fee_payer:cfg.accepted?.extra?.feePayer||null,
+        capability_signals:capabilitySignals,
+        nonblocking_telemetry:true
+      }
+    }));
+
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_required",{
+      amount_atomic:Number(amount),
+      amount_usdc:Number(amount)/1000000,
+      payment_network:cfg.accepted.network,
+      metadata:{
+        response_status:402,
+        protocol:"x402",
+        x402_version:2,
+        requirement_fingerprint:requirementFingerprint,
+        scheme:cfg.accepted?.scheme||null,
+        asset:cfg.accepted?.asset||null,
+        fee_payer:cfg.accepted?.extra?.feePayer||null,
+        capability_signals:capabilitySignals,
+        critical_telemetry:false,
+        nonblocking_telemetry:true
+      }
+    }));
+
+    const probeHeaders={
+      "PAYMENT-REQUIRED":b64(JSON.stringify(cfg.required)),
+      "WWW-Authenticate":"x402",
+      "x402-price":String(Number(amount)/1000000),
+      "x402-asset":"USDC",
+      "x402-network":cfg.accepted.network,
+      "x402-pay-to":cfg.accepted.payTo,
+      "x402-retry-header":"PAYMENT-SIGNATURE",
+      "x402-service":"ANIME INTELLIGENCE",
+      "x402-endpoint":new URL(request.url).pathname,
+      "x402-value":String((DISCOVERY_CONFIG[new URL(request.url).pathname]?.buyer_outcome||DISCOVERY_CONFIG[new URL(request.url).pathname]?.value||description||"")).slice(0,240),
+      "x402-requirement-fingerprint":requirementFingerprint||"",
+      "access-control-expose-headers":"PAYMENT-REQUIRED,PAYMENT-RESPONSE,WWW-Authenticate,x402-price,x402-asset,x402-network,x402-pay-to,x402-retry-header,x402-service,x402-endpoint,x402-value,x402-requirement-fingerprint",
+      "cache-control":"no-store"
+    };
+    return json(cfg.required,402,probeHeaders);
+  }
+
+  // Retry with PAYMENT-SIGNATURE: decode the exact accepted requirement
+  // that the client used to construct/sign the Solana transaction.
+  let payload;
+  try{
+    payload=unb64(sig);
+  }catch{
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_invalid_header",{metadata:{response_status:402}}));
+    return json({error:"invalid_payment_signature_header"},402);
+  }
+
+  const paidRequirement=payload?.accepted;
+  const retryRequirementFingerprint=await paymentRequirementFingerprint(paidRequirement);
+  deferTelemetry(ctx,logRequestStage(env,request,"payment_retry_received",{
+    amount_atomic:Number(amount),
+    amount_usdc:Number(amount)/1000000,
+    payment_network:paidRequirement?.network||null,
+    metadata:{
+      protocol:"x402",
+      x402_version:2,
+      requirement_fingerprint:retryRequirementFingerprint,
+      payment_header_name:request.headers.get("payment-signature")?"PAYMENT-SIGNATURE":"X-PAYMENT",
+      capability_signals:paymentCapabilitySignals(request),
+      nonblocking_telemetry:true
+    }
+  }));
+  const expectedPayTo=String(env.X402_WALLET_ADDRESS||"");
+  const requirementValid=
+    paidRequirement &&
+    paidRequirement.scheme==="exact" &&
+    paidRequirement.network===SOLANA_MAINNET &&
+    String(paidRequirement.amount)===String(amount) &&
+    paidRequirement.asset===SOLANA_USDC &&
+    String(paidRequirement.payTo)===expectedPayTo &&
+    typeof paidRequirement?.extra?.feePayer==="string" &&
+    paidRequirement.extra.feePayer.length>=20;
+
+  if(!requirementValid){
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_invalid_header",{
+      metadata:{
+        response_status:402,
+        reason:"payment_requirements_mismatch",
+        expected:{
+          scheme:"exact",
+          network:SOLANA_MAINNET,
+          amount:String(amount),
+          asset:SOLANA_USDC,
+          payTo:expectedPayTo
+        },
+        received:{
+          scheme:paidRequirement?.scheme||null,
+          network:paidRequirement?.network||null,
+          amount:paidRequirement?.amount??null,
+          asset:paidRequirement?.asset||null,
+          payTo:paidRequirement?.payTo||null,
+          feePayer:paidRequirement?.extra?.feePayer||null
+        }
+      }
+    }));
+    return json({error:"payment_requirements_mismatch"},402);
+  }
+
+  deferTelemetry(ctx,logRequestStage(env,request,"payment_attempt",{
+    amount_atomic:Number(amount),
+    amount_usdc:Number(amount)/1000000,
+    payment_network:paidRequirement.network,
+    metadata:{
+      protocol:"x402",
+      version:2,
+      fee_payer:paidRequirement.extra.feePayer,
+      requirements_source:"payment_payload_accepted",
+      requirement_fingerprint:retryRequirementFingerprint,
+      payment_header_name:request.headers.get("payment-signature")?"PAYMENT-SIGNATURE":"X-PAYMENT",
+      nonblocking_telemetry:true
+    }
+  }));
+
+  // Keep the client's accepted requirement unchanged. Only supply resource
+  // metadata when absent; do NOT regenerate feePayer on the retry path.
+  const path=new URL(request.url).pathname;
+  const discovery=DISCOVERY_CONFIG[path]||{};
+  const fallbackDescription=String(discovery.description||description||"ANIME INTELLIGENCE paid collectible intelligence")
+    .replace(/\s+/g," ").trim();
+  const safeDescription=fallbackDescription.length>480
+    ? fallbackDescription.slice(0,477)+"..."
+    : fallbackDescription;
+
+  const fallbackResource={
+    url:canonicalPaidResourceUrl(request,path),
+    description:safeDescription,
+    mimeType:"application/json",
+    serviceName:BAZAAR_SERVICE_NAME,
+    tags:bazaarTags(path),
+    iconUrl:`${new URL(request.url).origin}/icon.svg`
+  };
+
+  const enrichedPayload={
+    ...payload,
+    x402Version:2,
+    resource:payload?.resource||fallbackResource,
+    accepted:paidRequirement,
+    extensions:{
+      bazaar:bazaarDiscoveryExtension(path),
+      ...(payload?.extensions||{})
+    }
+  };
+
+  try{
+    const verified=await facilitatorPost(env,"/verify",enrichedPayload,paidRequirement);
+
+    if(!verified?.isValid){
+      deferTelemetry(ctx,logRequestStage(env,request,"payment_verify_failed",{
+        metadata:{
+          response_status:402,
+          reason:verified?.invalidReason||null,
+          fee_payer:paidRequirement.extra.feePayer
+        }
+      }));
+      return json({error:"payment_invalid",detail:verified?.invalidReason||verified},402);
+    }
+
+    deferTelemetry(ctx,logRequestStage(env,request,"payment_verified",{
+      metadata:{
+        protocol:"x402",
+        version:2,
+        fee_payer:paidRequirement.extra.feePayer,
+        nonblocking_telemetry:true
+      }
+    }));
+
+    let result;
+    try{
+      result=await work();
+    }catch(e){
+      const notFound=e?.code==="PRODUCT_NOT_FOUND"||e?.message==="product_not_found";
+      const status=notFound?404:500;
+      deferTelemetry(ctx,logRequestStage(env,request,notFound?"product_not_found":"service_execution_failed",{
+        metadata:{response_status:status,error:safeError(e)}
+      }));
+      return json({
+        service:"ANIME INTELLIGENCE",
+        version:VERSION,
+        error:notFound?"product_not_found":"service_execution_failed",
+        charged:false,
+        detail:notFound
+          ?"Try an exact JAN/EAN-13 code, model/style code or a more specific official product name."
+          :safeError(e)
+      },status);
+    }
+
+    const settlement=await facilitatorPost(env,"/settle",enrichedPayload,paidRequirement);
+
+    if(!settlement?.success){
+      deferTelemetry(ctx,logRequestStage(env,request,"payment_settlement_failed",{
+        metadata:{
+          response_status:402,
+          fee_payer:paidRequirement.extra.feePayer
+        }
+      }));
+      return json({error:"payment_settlement_failed",charged:false,detail:settlement},402);
+    }
+
+    const payerHash=await payerHashFromPayment(enrichedPayload,settlement);
+    const tx=extractSettlementTx(settlement);
+    const paymentAttribution=result&&typeof result==="object"?result._payment_attribution||null:null;
+    if(result&&typeof result==="object"&&"_payment_attribution" in result)delete result._payment_attribution;
+
+    deferTelemetry(ctx,logRequestStage(env,request,"paid_call",{
+      product_id:result?.product?.id||null,
+      payer_hash:payerHash,
+      amount_atomic:Number(amount),
+      amount_usdc:Number(amount)/1000000,
+      payment_network:paidRequirement.network,
+      transaction_hash:tx,
+      metadata:{
+        protocol:"x402",
+        version:2,
+        asset:"USDC",
+        response_status:200,
+        fee_payer:paidRequirement.extra.feePayer,
+        bazaar_catalog_response:settlement?.__extension_responses?.bazaar||null,
+        purchase_attribution:paymentAttribution,
+        attribution_key:paymentAttribution?.attribution_key||null,
+        query_family:paymentAttribution?.query_family||null,
+        decision_action:paymentAttribution?.decision_action||null,
+        nonblocking_telemetry:true
+      }
+    }));
+
+    return json(result,200,{
+      "PAYMENT-RESPONSE":b64(JSON.stringify(settlement)),
+      "cache-control":"private, no-store"
+    });
+  }catch(e){
+    deferTelemetry(ctx,logRequestStage(env,request,"x402_failed",{
+      metadata:{
+        response_status:402,
+        error:safeError(e),
+        fee_payer:paidRequirement?.extra?.feePayer||null
+      }
+    }));
+    return json({error:"x402_failed",detail:safeError(e)},402);
+  }
+}
+

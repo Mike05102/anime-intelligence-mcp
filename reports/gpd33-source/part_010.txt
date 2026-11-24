@@ -1,0 +1,300 @@
+  const vals=[product?.jan_code,product?.canonical_name_ja,product?.canonical_name_en,[product?.canonical_name_en,product?.model_number].filter(Boolean).join(" ")];
+  const seen=new Set(),out=[];
+  for(const v of vals){const q=String(v||"").replace(/\s+/g," ").trim();if(!q)continue;const key=q.toLowerCase();if(seen.has(key))continue;seen.add(key);out.push(q);}
+  return out.slice(0,4);
+}
+
+function rakutenPublicSearchUrl(product){
+  const q=rakutenSearchQuery(product);
+  return `https://search.rakuten.co.jp/search/mall/${encodeURIComponent(q)}/`;
+}
+
+function isOfficialRakutenAffiliateUrl(v){
+  try{const u=new URL(v);const h=u.hostname.toLowerCase();return u.protocol==="https:"&&(h==="hb.afl.rakuten.co.jp"||h.endsWith(".rakuten.co.jp")||h==="rakuten.co.jp");}catch{return false;}
+}
+
+function normalizeRakutenAffiliateOffer(raw,product){
+  if(!raw)return null;const obj=typeof raw==="string"?{affiliate_url:raw}:raw;if(!obj||typeof obj!=="object")return null;const affiliateUrl=String(obj.affiliate_url||obj.url||"").trim();if(!isOfficialRakutenAffiliateUrl(affiliateUrl))return null;const price=Number(obj.price_jpy??obj.total_price_jpy??0);const total=Number(obj.total_price_jpy??obj.price_jpy??0);return {source:"rakuten",seller:obj.seller||obj.shop_name||"Rakuten Ichiba",title:obj.title||product?.canonical_name_ja||product?.canonical_name_en||null,item_code:obj.item_code||null,price_jpy:Number.isFinite(price)&&price>0?price:null,shipping_jpy:Number.isFinite(Number(obj.shipping_jpy))?Number(obj.shipping_jpy):null,total_price_jpy:Number.isFinite(total)&&total>0?total:null,affiliate_url:affiliateUrl,image_url:obj.image_url||null,match_score:Number.isFinite(Number(obj.match_score))?Number(obj.match_score):100,link_source:"official_pre_generated_affiliate_link",affiliate_ready:true};
+}
+
+function registeredRakutenAffiliateOffers(product){
+  const m=product?.metadata||{},raw=[];
+  for(const key of ["rakuten_affiliate_url","rakuten_affiliate_link"]){if(m[key])raw.push(m[key]);}
+  for(const key of ["rakuten_affiliate_urls","rakuten_affiliate_links","rakuten_offers"]){if(Array.isArray(m[key]))raw.push(...m[key]);}
+  if(m.affiliate?.rakuten){if(Array.isArray(m.affiliate.rakuten))raw.push(...m.affiliate.rakuten);else raw.push(m.affiliate.rakuten);}
+  const seen=new Set(),offers=[];for(const x of raw){const o=normalizeRakutenAffiliateOffer(x,product);if(!o||seen.has(o.affiliate_url))continue;seen.add(o.affiliate_url);offers.push(o);}
+  return offers.sort((a,b)=>(a.total_price_jpy||Infinity)-(b.total_price_jpy||Infinity)).slice(0,5);
+}
+
+function rakutenApiItems(body){
+  const raw=Array.isArray(body?.Items)?body.Items:Array.isArray(body?.items)?body.items:[];
+  return raw.map(x=>x?.Item||x?.item||x).filter(Boolean);
+}
+
+function normalizeRakutenLiveOffer(item,product,analysis,affiliateIdPresent){
+  const price=Number(item?.itemPrice??item?.itemPriceMin1??item?.itemPriceMin2??item?.itemPriceMin3);
+  if(!Number.isFinite(price)||price<=0)return null;
+  const affiliateUrl=String(item?.affiliateUrl||"").trim();
+  const itemUrl=String(item?.itemUrl||"").trim();
+  const url=(affiliateUrl&&isOfficialRakutenAffiliateUrl(affiliateUrl))?affiliateUrl:itemUrl;
+  if(!url)return null;
+  return {source:"rakuten",seller:item?.shopName||item?.shopCode||"Rakuten Ichiba",title:item?.itemName||product?.canonical_name_ja||product?.canonical_name_en||null,item_code:item?.itemCode||null,price_jpy:Math.round(price),shipping_jpy:null,total_price_jpy:Math.round(price),affiliate_url:url,image_url:item?.mediumImageUrls?.[0]?.imageUrl||item?.smallImageUrls?.[0]?.imageUrl||null,match_score:analysis?.score??null,match_basis:analysis?.basis||"live_rakuten_identity",link_source:affiliateUrl?"rakuten_web_service_affiliate_url":"rakuten_web_service_item_url",affiliate_ready:!!affiliateUrl&&affiliateIdPresent,live_api:true};
+}
+
+async function rakutenApiSearch(env,product){
+  if(!rakutenWebServiceConfigured(env))return {configured:false,returned:0,offers:[],attempts:[],error:null};
+  const applicationId=String(env.RAKUTEN_APPLICATION_ID||"").trim(),accessKey=String(env.RAKUTEN_ACCESS_KEY||"").trim(),affiliateId=String(env.RAKUTEN_AFFILIATE_ID||"").trim();
+  const attempts=[],seen=new Map();let returned=0,lastError=null;
+  for(const query of rakutenSearchQueries(product)){
+    try{
+      const u=new URL(RAKUTEN_ICHIBA_SEARCH_ENDPOINT);
+      u.searchParams.set("applicationId",applicationId);
+      u.searchParams.set("accessKey",accessKey);
+      u.searchParams.set("format","json");
+      u.searchParams.set("formatVersion","2");
+      u.searchParams.set("keyword",query);
+      u.searchParams.set("hits","30");
+      u.searchParams.set("availability","1");
+      if(affiliateId)u.searchParams.set("affiliateId",affiliateId);
+      const r=await fetch(u.toString(),{headers:{accept:"application/json","accessKey":accessKey}});
+      const text=await r.text();let body=null;try{body=text?JSON.parse(text):null}catch{}
+      if(!r.ok){const msg=body?.error_description||body?.error||text.slice(0,240)||`HTTP ${r.status}`;attempts.push({query,status:r.status,ok:false,error:msg});lastError=msg;if(r.status===429||r.status>=500)continue;break;}
+      const items=rakutenApiItems(body);returned+=items.length;let accepted=0;
+      for(const item of items){const a=yahooIdentityAnalysis(product,{name:item?.itemName||"",janCode:null});if(!a.accepted)continue;const offer=normalizeRakutenLiveOffer(item,product,a,!!affiliateId);if(!offer)continue;const key=String(offer.item_code||offer.affiliate_url||offer.title||"");const prev=seen.get(key);if(!prev||Number(offer.total_price_jpy)<Number(prev.total_price_jpy))seen.set(key,offer);accepted++;}
+      attempts.push({query,status:r.status,ok:true,returned:items.length,accepted});
+      if(seen.size>=5)break;
+    }catch(e){lastError=safeError(e);attempts.push({query,status:0,ok:false,error:lastError});}
+  }
+  const offers=[...seen.values()].sort((a,b)=>(a.total_price_jpy||Infinity)-(b.total_price_jpy||Infinity)).slice(0,12);
+  return {configured:true,returned,offers,attempts,error:offers.length?null:lastError};
+}
+
+async function rakutenSearch(env,product){
+  const registered=registeredRakutenAffiliateOffers(product),affiliateIdPresent=!!String(env.RAKUTEN_AFFILIATE_ID||"").trim(),apiConfigured=rakutenWebServiceConfigured(env);
+  let live={configured:false,returned:0,offers:[],attempts:[],error:null};
+  if(apiConfigured)live=await rakutenApiSearch(env,product);
+  const byKey=new Map();
+  for(const o of [...live.offers,...registered]){const key=String(o.item_code||o.affiliate_url||`${o.seller}|${o.title}`);const prev=byKey.get(key);if(!prev||Number(o.total_price_jpy||Infinity)<Number(prev.total_price_jpy||Infinity))byKey.set(key,o);}
+  const offers=[...byKey.values()].sort((a,b)=>(a.total_price_jpy||Infinity)-(b.total_price_jpy||Infinity)).slice(0,12);
+  const affiliateOnly=!apiConfigured&&(affiliateIdPresent||registered.length>0);
+  return {configured:apiConfigured||affiliateOnly,mode:apiConfigured?"live_web_service_plus_affiliate":(affiliateOnly?"affiliate_only":"not_configured"),live_price_api_configured:apiConfigured,affiliate_only:affiliateOnly,web_service_api:apiConfigured,application_id_present:!!String(env.RAKUTEN_APPLICATION_ID||"").trim(),access_key_present:!!String(env.RAKUTEN_ACCESS_KEY||"").trim(),affiliate_id_present:affiliateIdPresent,live_returned:live.returned||0,live_matches:(live.offers||[]).length,live_attempts:live.attempts||[],live_error:live.error||null,registered_offer_count:registered.length,offers,best:offers[0]||null,search_url:rakutenPublicSearchUrl(product),affiliate_ready:offers.some(o=>o.affiliate_ready),pricing_source:apiConfigured?"Rakuten Ichiba live API + Yahoo Shopping + eBay + stored market observations":"Yahoo Shopping + eBay live pricing; Rakuten registered affiliate links are purchase links only and their stored prices are lower-confidence",note:apiConfigured?"Live Rakuten Ichiba pricing is included in purchase routing. Affiliate URLs are used when Rakuten returns them.":(registered.length?"Registered Rakuten affiliate links remain usable, but their stored prices are not treated as live market prices.":"Rakuten live pricing is inactive; Yahoo/eBay remain the live market-price sources.")};
+}
+
+function base64UrlEncode(v=""){const bytes=new TextEncoder().encode(String(v));let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");}
+function base64UrlDecode(v=""){const normalized=String(v).replace(/-/g,"+").replace(/_/g,"/");const padded=normalized+"=".repeat((4-normalized.length%4)%4);const bin=atob(padded);return new TextDecoder().decode(Uint8Array.from(bin,c=>c.charCodeAt(0)));}
+function affiliateRedirectUrl(origin,offer,productId){if(!offer?.affiliate_url||!isOfficialRakutenAffiliateUrl(offer.affiliate_url))return null;const u=new URL(`${origin}/r/rakuten`);u.searchParams.set("u",base64UrlEncode(offer.affiliate_url));if(productId)u.searchParams.set("pid",String(productId));return u.toString();}
+function isAllowedAffiliateUrl(v){return isOfficialRakutenAffiliateUrl(v);}
+async function handleRakutenRedirect(request,env,url){const encoded=url.searchParams.get("u")||"";let target;try{target=base64UrlDecode(encoded);}catch{return json({error:"invalid_affiliate_url"},400);}if(!isAllowedAffiliateUrl(target))return json({error:"affiliate_destination_not_allowed"},400);await logEvent(env,"affiliate_click",{endpoint:"/r/rakuten",product_id:url.searchParams.get("pid")||null,metadata:{source:"rakuten",mode:"affiliate_link_only"}});return new Response(null,{status:302,headers:corsHeaders({location:target,"cache-control":"no-store"})});}
+
+
+/* =========================================================
+   YAHOO COLLECTIBLES CATALOG SEEDING v3.0.0
+   Search result pages are used only as discovery evidence.
+   JAN is preferred. JAN-less collectibles use a deterministic canonical fingerprint.
+   Existing figure ingestion continues while adjacent collectible categories expand in parallel.
+========================================================= */
+
+const BASE_COLLECTIBLE_CATALOG_QUERIES=[
+  // Figures remain a core category.
+  "\u306d\u3093\u3069\u308d\u3044\u3069","figma","POP UP PARADE","\u30b9\u30b1\u30fc\u30eb\u30d5\u30a3\u30ae\u30e5\u30a2","S.H.Figuarts",
+  "\u30d5\u30a3\u30ae\u30e5\u30a2 \u521d\u97f3\u30df\u30af","\u30d5\u30a3\u30ae\u30e5\u30a2 ONE PIECE","\u30d5\u30a3\u30ae\u30e5\u30a2 \u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb","\u30d5\u30a3\u30ae\u30e5\u30a2 \u9b3c\u6ec5\u306e\u5203","\u30d5\u30a3\u30ae\u30e5\u30a2 \u546a\u8853\u5efb\u6226",
+  "\u30d5\u30a3\u30ae\u30e5\u30a2 \u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3","\u30d5\u30a3\u30ae\u30e5\u30a2 Fate","\u30d5\u30a3\u30ae\u30e5\u30a2 \u30db\u30ed\u30e9\u30a4\u30d6","\u30d5\u30a3\u30ae\u30e5\u30a2 \u539f\u795e","\u30d5\u30a3\u30ae\u30e5\u30a2 NARUTO",
+  // First-wave adjacent collectibles: same canonical identity + JAN model works well.
+  "\u306c\u3044\u3050\u308b\u307f \u521d\u97f3\u30df\u30af","\u306c\u3044\u3050\u308b\u307f ONE PIECE","\u306c\u3044\u3050\u308b\u307f \u30dd\u30b1\u30e2\u30f3","\u306c\u3044\u3050\u308b\u307f \u3061\u3044\u304b\u308f","\u306c\u3044\u3050\u308b\u307f \u30b5\u30f3\u30ea\u30aa",
+  "\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 \u521d\u97f3\u30df\u30af","\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 ONE PIECE","\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 \u9b3c\u6ec5\u306e\u5203","\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 \u546a\u8853\u5efb\u6226","\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 \u30db\u30ed\u30e9\u30a4\u30d6",
+  "\u4e00\u756a\u304f\u3058 ONE PIECE","\u4e00\u756a\u304f\u3058 \u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb","\u4e00\u756a\u304f\u3058 \u9b3c\u6ec5\u306e\u5203","\u4e00\u756a\u304f\u3058 \u546a\u8853\u5efb\u6226","\u4e00\u756a\u304f\u3058 \u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3",
+  "\u30d7\u30e9\u30e2\u30c7\u30eb \u30ac\u30f3\u30c0\u30e0","MODEROID","\u30ad\u30e3\u30e9\u30af\u30bf\u30fc \u30d7\u30e9\u30e2\u30c7\u30eb",
+  "\u30ad\u30fc\u30db\u30eb\u30c0\u30fc \u521d\u97f3\u30df\u30af","\u7f36\u30d0\u30c3\u30b8 ONE PIECE","\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba \u9650\u5b9a",
+  // Specialist categories are discoverable now; metadata keeps category-specific attributes extensible.
+  "\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9 \u30a2\u30cb\u30e1","ONE PIECE \u30ab\u30fc\u30c9","\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9",
+  "\u30a2\u30cb\u30e1 \u30b3\u30e9\u30dc \u30b9\u30cb\u30fc\u30ab\u30fc","\u30ad\u30e3\u30e9\u30af\u30bf\u30fc \u30b3\u30e9\u30dc \u30b9\u30cb\u30fc\u30ab\u30fc","\u30a2\u30cb\u30e1 \u30b3\u30e9\u30dc \u30a2\u30d1\u30ec\u30eb",
+  // v3.1 specialist expansion: broaden demand capture while specialist guards prevent cross-category contamination.
+  "\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 SAR","\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 PSA10","ONE PIECE \u30ab\u30fc\u30c9 \u30d1\u30e9\u30ec\u30eb","ONE PIECE \u30ab\u30fc\u30c9 PSA10","UNION ARENA \u30d6\u30fc\u30b9\u30bf\u30fc","\u30f4\u30a1\u30a4\u30b9\u30b7\u30e5\u30f4\u30a1\u30eb\u30c4 \u30d6\u30fc\u30b9\u30bf\u30fc",
+  "\u30ac\u30f3\u30d7\u30e9 MG","\u30ac\u30f3\u30d7\u30e9 RG","\u30ac\u30f3\u30d7\u30e9 HG","\u30d7\u30ec\u30df\u30a2\u30e0\u30d0\u30f3\u30c0\u30a4 \u30ac\u30f3\u30d7\u30e9",
+  "\u4e00\u756a\u304f\u3058 ONE PIECE \u30e9\u30b9\u30c8\u30ef\u30f3","\u4e00\u756a\u304f\u3058 \u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb \u30e9\u30b9\u30c8\u30ef\u30f3","\u4e00\u756a\u304f\u3058 \u30d2\u30ed\u30a2\u30ab","\u4e00\u756a\u304f\u3058 NARUTO",
+  "\u306c\u3044\u3050\u308b\u307f \u9b3c\u6ec5\u306e\u5203","\u306c\u3044\u3050\u308b\u307f \u546a\u8853\u5efb\u6226","\u306c\u3044\u3050\u308b\u307f \u30db\u30ed\u30e9\u30a4\u30d6","\u306c\u3044\u3050\u308b\u307f NARUTO",
+  "\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 \u30d6\u30eb\u30fc\u30ed\u30c3\u30af","\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 \u63a8\u3057\u306e\u5b50","\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 NARUTO",
+  "\u7f36\u30d0\u30c3\u30b8 \u9b3c\u6ec5\u306e\u5203","\u7f36\u30d0\u30c3\u30b8 \u546a\u8853\u5efb\u6226","\u7f36\u30d0\u30c3\u30b8 \u30db\u30ed\u30e9\u30a4\u30d6","\u30ad\u30fc\u30db\u30eb\u30c0\u30fc ONE PIECE","\u30ad\u30fc\u30db\u30eb\u30c0\u30fc \u9b3c\u6ec5\u306e\u5203",
+  "CONVERSE NARUTO \u30b9\u30cb\u30fc\u30ab\u30fc","PUMA \u30dd\u30b1\u30e2\u30f3 \u30b9\u30cb\u30fc\u30ab\u30fc","VANS \u30a2\u30cb\u30e1 \u30b3\u30e9\u30dc","SPINGLE \u30a2\u30cb\u30e1 \u30b3\u30e9\u30dc",
+  "NEW ERA \u30a2\u30cb\u30e1 \u30b3\u30e9\u30dc","graniph \u30a2\u30cb\u30e1 \u30b3\u30e9\u30dc","COSPA \u30a2\u30cb\u30e1 T\u30b7\u30e3\u30c4","UNIQLO \u30a2\u30cb\u30e1 UT"
+];
+
+// v3.2 query universe is generated deterministically at runtime rather than hand-writing
+// thousands of phrases. The original 76 queries remain first so old category-test indices stay valid.
+const CATALOG_IP_UNIVERSE=[
+  "ONE PIECE","\u30dd\u30b1\u30e2\u30f3","\u521d\u97f3\u30df\u30af","\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb","\u9b3c\u6ec5\u306e\u5203","\u546a\u8853\u5efb\u6226","NARUTO","BLEACH","\u50d5\u306e\u30d2\u30fc\u30ed\u30fc\u30a2\u30ab\u30c7\u30df\u30a2","\u9032\u6483\u306e\u5de8\u4eba",
+  "\u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3","\u30ac\u30f3\u30c0\u30e0","Fate","\u30db\u30ed\u30e9\u30a4\u30d6","\u539f\u795e","\u5d29\u58ca\u30b9\u30bf\u30fc\u30ec\u30a4\u30eb","\u30d6\u30eb\u30fc\u30a2\u30fc\u30ab\u30a4\u30d6","\u30a6\u30de\u5a18","\u30a2\u30a4\u30c9\u30eb\u30de\u30b9\u30bf\u30fc","\u30e9\u30d6\u30e9\u30a4\u30d6",
+  "\u30cf\u30a4\u30ad\u30e5\u30fc","\u540d\u63a2\u5075\u30b3\u30ca\u30f3","\u846c\u9001\u306e\u30d5\u30ea\u30fc\u30ec\u30f3","SPY\u00d7FAMILY","\u30c1\u30a7\u30f3\u30bd\u30fc\u30de\u30f3","\u30c0\u30f3\u30c0\u30c0\u30f3","\u30d6\u30eb\u30fc\u30ed\u30c3\u30af","\u63a8\u3057\u306e\u5b50","Re:\u30bc\u30ed","\u8ee2\u751f\u3057\u305f\u3089\u30b9\u30e9\u30a4\u30e0\u3060\u3063\u305f\u4ef6",
+  "SAO","To LOVE\u308b","\u4e94\u7b49\u5206\u306e\u82b1\u5ac1","\u307c\u3063\u3061\u30fb\u3056\u30fb\u308d\u3063\u304f","\u3051\u3044\u304a\u3093","\u30b3\u30fc\u30c9\u30ae\u30a2\u30b9","\u30b8\u30e7\u30b8\u30e7\u306e\u5947\u5999\u306a\u5192\u967a","HUNTER\u00d7HUNTER","\u5e7d\u904a\u767d\u66f8","\u308b\u308d\u3046\u306b\u5263\u5fc3",
+  "\u30bb\u30fc\u30e9\u30fc\u30e0\u30fc\u30f3","\u30ab\u30fc\u30c9\u30ad\u30e3\u30d7\u30bf\u30fc\u3055\u304f\u3089","\u30d7\u30ea\u30ad\u30e5\u30a2","\u3061\u3044\u304b\u308f","\u30b5\u30f3\u30ea\u30aa","\u3059\u307f\u3063\u30b3\u3050\u3089\u3057","\u661f\u306e\u30ab\u30fc\u30d3\u30a3","\u30c9\u30e9\u3048\u3082\u3093","\u30ea\u30b3\u30ea\u30b9\u30fb\u30ea\u30b3\u30a4\u30eb","\u85ac\u5c4b\u306e\u3072\u3068\u308a\u3054\u3068",
+  "\u602a\u73638\u53f7","WIND BREAKER","\u4ffa\u3060\u3051\u30ec\u30d9\u30eb\u30a2\u30c3\u30d7\u306a\u4ef6","Dr.STONE","\u6771\u4eac\u30ea\u30d9\u30f3\u30b8\u30e3\u30fc\u30ba","\u6587\u8c6a\u30b9\u30c8\u30ec\u30a4\u30c9\u30c3\u30b0\u30b9","\u30d2\u30d7\u30ce\u30b7\u30b9\u30de\u30a4\u30af","\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u30bb\u30ab\u30a4","\u30a2\u30fc\u30af\u30ca\u30a4\u30c4","NieR"
+];
+const CATALOG_CATEGORY_QUERY_PATTERNS=[
+  "\u30d5\u30a3\u30ae\u30e5\u30a2 {ip}","\u306d\u3093\u3069\u308d\u3044\u3069 {ip}","figma {ip}","\u30d7\u30e9\u30e2\u30c7\u30eb {ip}","\u306c\u3044\u3050\u308b\u307f {ip}","\u30de\u30b9\u30b3\u30c3\u30c8 {ip}",
+  "\u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9 {ip}","\u30a2\u30af\u30ea\u30eb\u30ad\u30fc\u30db\u30eb\u30c0\u30fc {ip}","\u30ad\u30fc\u30db\u30eb\u30c0\u30fc {ip}","\u7f36\u30d0\u30c3\u30b8 {ip}","\u4e00\u756a\u304f\u3058 {ip}","\u30d7\u30e9\u30a4\u30ba {ip}",
+  "\u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9 {ip}","\u30ab\u30fc\u30c9 {ip} BOX","{ip} \u30b3\u30e9\u30dc \u30b9\u30cb\u30fc\u30ab\u30fc","{ip} \u30b3\u30e9\u30dc \u30a2\u30d1\u30ec\u30eb","{ip} \u9650\u5b9a \u30b0\u30c3\u30ba"
+];
+const CATALOG_MANUFACTURER_UNIVERSE=[
+  "Good Smile Company","Max Factory","BANDAI SPIRITS","MegaHouse","Kotobukiya","ALTER","KADOKAWA","ANIPLEX","FuRyu","SEGA",
+  "TAITO","BANPRESTO","Bushiroad Creative","movic","ensky","COSPA","Gift","AMAKUNI","Hobby Sakura","Union Creative",
+  "Solarain","APEX","Myethos","FREEing","Phat Company","ORANGE ROUGE","WING","PLUM","BellFine","MEDICOS ENTERTAINMENT"
+];
+const CATALOG_MANUFACTURER_PATTERNS=["{maker} \u30d5\u30a3\u30ae\u30e5\u30a2","{maker} \u306c\u3044\u3050\u308b\u307f","{maker} \u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9","{maker} \u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u30b0\u30c3\u30ba","{maker} \u9650\u5b9a"];
+const CATALOG_CARD_QUERY_UNIVERSE=[
+  "\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 SAR","\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 SR","\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 UR","\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 AR","\u30dd\u30b1\u30e2\u30f3\u30ab\u30fc\u30c9 PSA10","ONE PIECE\u30ab\u30fc\u30c9 SEC","ONE PIECE\u30ab\u30fc\u30c9 SP","ONE PIECE\u30ab\u30fc\u30c9 \u30d1\u30e9\u30ec\u30eb","ONE PIECE\u30ab\u30fc\u30c9 PSA10",
+  "\u904a\u622f\u738b 25th \u30b7\u30fc\u30af\u30ec\u30c3\u30c8","\u904a\u622f\u738b \u30d7\u30ea\u30ba\u30de\u30c6\u30a3\u30c3\u30af","\u904a\u622f\u738b PSA10","UNION ARENA \u30d1\u30e9\u30ec\u30eb","UNION ARENA \u661f2","\u30f4\u30a1\u30a4\u30b9\u30b7\u30e5\u30f4\u30a1\u30eb\u30c4 SSP","\u30f4\u30a1\u30a4\u30b9\u30b7\u30e5\u30f4\u30a1\u30eb\u30c4 SP","\u30c7\u30e5\u30a8\u30eb\u30de\u30b9\u30bf\u30fc\u30ba \u91d1\u30c8\u30ec\u30b8\u30e3\u30fc","\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb\u30ab\u30fc\u30c9 \u30d1\u30e9\u30ec\u30eb"
+];
+const CATALOG_COLLAB_BRANDS=["CONVERSE","PUMA","VANS","adidas","NIKE","Reebok","SPINGLE","NEW ERA","graniph","COSPA","UNIQLO UT"];
+function buildCollectibleCatalogQueries(){
+  const out=[...BASE_COLLECTIBLE_CATALOG_QUERIES],seen=new Set(out.map(x=>String(x).toLowerCase()));
+  const add=q=>{q=String(q||"").replace(/\s+/g," ").trim();const k=q.toLowerCase();if(q&&q.length<=120&&!seen.has(k)){seen.add(k);out.push(q);}};
+  for(const ip of CATALOG_IP_UNIVERSE)for(const pattern of CATALOG_CATEGORY_QUERY_PATTERNS)add(pattern.replace("{ip}",ip));
+  for(const maker of CATALOG_MANUFACTURER_UNIVERSE)for(const pattern of CATALOG_MANUFACTURER_PATTERNS)add(pattern.replace("{maker}",maker));
+  for(const q of CATALOG_CARD_QUERY_UNIVERSE)add(q);
+  // Cross a bounded set of high-demand IPs with collaboration brands. This is deliberately
+  // generated rather than a static list so new IPs/brands can be added with one line.
+  for(const brand of CATALOG_COLLAB_BRANDS)for(const ip of CATALOG_IP_UNIVERSE.slice(0,30))add(`${brand} ${ip} \u30b3\u30e9\u30dc`);
+  // Preserve the 1,594-query v3.2.0 production baseline without moving legacy indices.
+  for(const q of ["ONE PIECE Bandai collectible","Pokemon Bandai collectible","Hatsune Miku Good Smile collectible","Dragon Ball Bandai collectible","Demon Slayer Aniplex collectible","Jujutsu Kaisen Bandai collectible","NARUTO Bandai collectible","BLEACH Bandai collectible","My Hero Academia Bandai collectible","Attack on Titan collectible","Evangelion collectible","Gundam Bandai collectible","Fate Aniplex collectible","Hololive collectible","Genshin Impact collectible","Honkai Star Rail collectible","Blue Archive collectible","Uma Musume collectible","The Idolmaster collectible","Love Live collectible","Haikyu collectible","Detective Conan collectible","Frieren collectible","SPY FAMILY collectible","Chainsaw Man collectible","Dandadan collectible","Blue Lock collectible","Oshi no Ko collectible","Re Zero collectible","That Time I Got Reincarnated as a Slime collectible","Sword Art Online collectible","To LOVE Ru collectible","The Quintessential Quintuplets collectible","Bocchi the Rock collectible","K ON collectible","Code Geass collectible","JoJo collectible","HUNTER HUNTER collectible","Yu Yu Hakusho collectible","Rurouni Kenshin collectible","Sailor Moon collectible","Cardcaptor Sakura collectible","Precure collectible"])add(q);
+  return out;
+}
+const COLLECTIBLE_CATALOG_QUERIES=buildCollectibleCatalogQueries();
+
+
+// v3.3 self-expanding search universe. Seed terms are learned from canonical products already
+// accepted into the database, then crossed with collectible intents. The learned pool is
+// persisted in api_events so Cron can keep exploring without a browser or code deployment.
+const DYNAMIC_QUERY_PATTERNS=[
+  "{seed} \u30d5\u30a3\u30ae\u30e5\u30a2","{seed} \u306d\u3093\u3069\u308d\u3044\u3069","{seed} figma","{seed} \u30d7\u30e9\u30e2\u30c7\u30eb","{seed} \u306c\u3044\u3050\u308b\u307f","{seed} \u30de\u30b9\u30b3\u30c3\u30c8",
+  "{seed} \u30a2\u30af\u30ea\u30eb\u30b9\u30bf\u30f3\u30c9","{seed} \u30ad\u30fc\u30db\u30eb\u30c0\u30fc","{seed} \u7f36\u30d0\u30c3\u30b8","{seed} \u4e00\u756a\u304f\u3058","{seed} \u30d7\u30e9\u30a4\u30ba","{seed} \u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9",
+  "{seed} \u30ab\u30fc\u30c9 BOX","{seed} \u9650\u5b9a \u30b0\u30c3\u30ba","{seed} \u30b3\u30e9\u30dc \u30a2\u30d1\u30ec\u30eb","{seed} \u30b3\u30e9\u30dc \u30b9\u30cb\u30fc\u30ab\u30fc"
+];
+function dynamicSeedSafe(v){
+  const x=String(v||"").normalize("NFKC").replace(/[\/|<>\[\]{}]/g," ").replace(/\s+/g," ").trim();
+  if(x.length<3||x.length>48)return null;
+  if(/^(?:unknown|other|figure|goods|anime|character|none|null|n\/?a|not set|unregistered|brand(?: not)? registered|character|figure|goods|limited|style|color|clear|tone|aqua|life|stay|sr|crux|keith|ruby|jump|global work|rageblue)$/i.test(x))return null;
+  if(/^https?:/i.test(x)||/^\d+(?:[.\-_]\d+)*$/.test(x))return null;
+  if(/^(?:[A-Z]{1,6}[-_]?\d{1,6}[A-Z0-9-]*|\d{2,}[A-Z]{0,4})$/i.test(x))return null;
+  if(/^(?:Nintendo Switch|PlayStation(?:\s*[345])?|PS[345]|Xbox(?: Series [XS])?|Steam)$/i.test(x))return null;
+  if(/[\u00c3\u00c2\u00e3\u00e5\u00e6\u00e8\u00e9\u00e7]/.test(x))return null;
+  return x;
+}
+function dynamicSeedLearnable(v,field,count=1){
+  const x=dynamicSeedSafe(v);if(!x)return null;
+  const trusted=new Set([...CATALOG_IP_UNIVERSE,...CATALOG_MANUFACTURER_UNIVERSE,...CATALOG_COLLAB_BRANDS].map(z=>String(z).toLowerCase()));
+  if(trusted.has(x.toLowerCase()))return x;
+  if(field==="franchise")return count>=2?x:null;
+  if(field==="manufacturer"||field==="brand")return count>=3?x:null;
+  if(field==="series")return count>=5&&x.length>=5?x:null;
+  return null;
+}
+async function loadDynamicCatalogPool(env){
+  const rows=await sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.dynamic_catalog_pool&order=occurred_at.desc&limit=1");
+  const m=Array.isArray(rows)&&rows[0]?.metadata?rows[0].metadata:null;
+  // Reject persisted pools from older generators; this forces a clean Unicode-safe rebuild.
+  return m&&m.version==="dynamic-v3.7.2"&&Array.isArray(m.queries)
+    ?m
+    :{version:"dynamic-v3.7.2",queries:[],seeds:[],updatedAt:null};
+}
+async function refreshDynamicCatalogPool(env){
+  const rows=await sbOptional(env,"/products?select=franchise,manufacturer,brand,series,product_type&limit=2000");
+  const seeds=new Set([...CATALOG_IP_UNIVERSE,...CATALOG_MANUFACTURER_UNIVERSE].map(dynamicSeedSafe).filter(Boolean));
+  const counts=new Map();
+  for(const r of Array.isArray(rows)?rows:[])for(const field of ["franchise","manufacturer","brand","series"]){
+    const raw=dynamicSeedSafe(r?.[field]);if(!raw)continue;const key=`${field}|${raw.toLowerCase()}`;const rec=counts.get(key)||{field,value:raw,count:0};rec.count++;counts.set(key,rec);
+  }
+  for(const rec of counts.values()){const v=dynamicSeedLearnable(rec.value,rec.field,rec.count);if(v)seeds.add(v);}
+  const staticSet=new Set(COLLECTIBLE_CATALOG_QUERIES.map(x=>String(x).toLowerCase()));
+  const queries=[],seen=new Set();
+  for(const seed of seeds){for(const pat of DYNAMIC_QUERY_PATTERNS){const q=pat.replace("{seed}",seed).replace(/\s+/g," ").trim(),key=q.toLowerCase();if(q.length<=120&&!staticSet.has(key)&&!seen.has(key)){seen.add(key);queries.push(q);if(queries.length>=10000)break;}}if(queries.length>=10000)break;}
+  const state={version:"dynamic-v3.7.2",seed_count:seeds.size,query_count:queries.length,seeds:[...seeds].slice(0,500),queries,learned_seed_candidates:counts.size,updatedAt:new Date().toISOString()};
+  await logEvent(env,"dynamic_catalog_pool",{endpoint:"scheduled",metadata:state});return state;
+}
+async function dynamicCatalogProgress(env){
+  const rows=await sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.dynamic_catalog_progress&order=occurred_at.desc&limit=1");
+  const m=Array.isArray(rows)&&rows[0]?.metadata?rows[0].metadata:null;
+  if(!m||m.version!=="dynamic-v3.7.2")return {version:"dynamic-v3.7.2",queryIndex:0,page:1,totalInserted:0,totalRequests:0,cycles:0};
+  return m;
+}
+async function runDynamicCatalogBatch(env,batches=2){
+  let pool=await loadDynamicCatalogPool(env);if(!pool.queries?.length)pool=await refreshDynamicCatalogPool(env);
+  let st=await dynamicCatalogProgress(env),qi=Math.max(0,Number(st.queryIndex)||0),pg=Math.max(1,Number(st.page)||1),ins=Number(st.totalInserted)||0,req=Number(st.totalRequests)||0,cycles=Number(st.cycles)||0;
+  const max=Math.max(1,Math.min(8,Number(batches)||2)),results=[];
+  for(let n=0;n<max&&pool.queries.length;n++){
+    if(qi>=pool.queries.length){qi=0;pg=1;cycles++;pool=await refreshDynamicCatalogPool(env);if(!pool.queries.length)break;}
+    const query=pool.queries[qi];let a;
+    try{a=await seedCollectibleCatalogYahoo(env,0,pg,{query});}catch(e){a={query,page:pg,inserted:0,exhausted:false,skipped_error:true,errors:[{error:safeError(e)}]};}
+    results.push(a);ins+=Number(a.inserted||0);req++;
+    const err=a.skipped_error?(a.errors?.[0]?.error||"unknown"):null,y403=isYahoo403Error(err);
+    if(!a.skipped_error){if(a.exhausted||pg>=20){qi++;pg=1;}else pg++;}
+    st={version:"dynamic-v3.7.2",queryIndex:qi,page:pg,totalInserted:ins,totalRequests:req,cycles,updatedAt:new Date().toISOString(),pool_query_count:pool.queries.length,pool_seed_count:pool.seed_count||0,last_query:query,last_error:err};
+    await logEvent(env,"dynamic_catalog_progress",{endpoint:"scheduled",metadata:st});
+    if(y403)break;
+    await new Promise(r=>setTimeout(r,1100));
+  }
+  const lastError=st.last_error||null;
+  return {status:isYahoo403Error(lastError)?"yahoo_403":"running",yahoo_403:isYahoo403Error(lastError),batch_requests:results.length,batch_inserted:results.reduce((n,x)=>n+Number(x.inserted||0),0),...st};
+}
+
+const COLLECTIBLE_CATALOG_TYPES=new Set(["nendoroid","figma","figure","model_kit","plush","acrylic_goods","keychain","badge","lottery_prize","trading_card","sneaker","apparel"]);
+
+function tradingCardAccessoryReason(name=""){
+  const n=String(name||"");
+  const accessoryRe=/(?:\u30c8\u30ec\u30ab|\u30ab\u30fc\u30c9)?(?:\u30b1\u30fc\u30b9|\u30db\u30eb\u30c0\u30fc|\u30d5\u30a1\u30a4\u30eb|\u30d0\u30a4\u30f3\u30c0\u30fc|\u30a2\u30eb\u30d0\u30e0|\u53ce\u7d0d|\u30b3\u30ec\u30af\u30c8\u30d6\u30c3\u30af|\u30b7\u30fc\u30eb\u5e33|\u30ea\u30d5\u30a3\u30eb|\u30b9\u30ea\u30fc\u30d6|\u30ed\u30fc\u30c0\u30fc|\u30b5\u30a4\u30c9\u30ed\u30fc\u30c0\u30fc|\u30c8\u30c3\u30d7\u30ed\u30fc\u30c0\u30fc|\u30c7\u30c3\u30ad\u30b1\u30fc\u30b9|\u30c7\u30c3\u30ad\u30db\u30eb\u30c0\u30fc|\u30ab\u30fc\u30c9\u30b7\u30fc\u30c8|\u30ab\u30fc\u30c9\u30b9\u30bf\u30f3\u30c9|\u30ab\u30fc\u30c9\u30d5\u30ec\u30fc\u30e0|\u30d7\u30ec\u30a4\u30de\u30c3\u30c8|\u30b9\u30c8\u30ec\u30fc\u30b8\u30dc\u30c3\u30af\u30b9)/i;
+  if(accessoryRe.test(n))return "trading_card_accessory";
+  if(/\b(?:card\s*(?:case|holder|binder|album|sleeve|loader|toploader)|deck\s*(?:case|box)|playmat|storage\s*box)\b/i.test(n))return "trading_card_accessory";
+  return null;
+}
+function tradingCardForm(name=""){
+  const n=String(name||"");
+  if(/(?:\u30d6\u30fc\u30b9\u30bf\u30fc\u30d1\u30c3\u30af|\u30b9\u30bf\u30fc\u30bf\u30fc\u30c7\u30c3\u30ad|\u30b9\u30bf\u30fc\u30c8\u30c7\u30c3\u30ad|\u69cb\u7bc9\u6e08\u307f\u30c7\u30c3\u30ad|\u30d6\u30fc\u30b9\u30bf\u30fc|\u30d1\u30c3\u30af|BOX|\u30dc\u30c3\u30af\u30b9|1\u30dc\u30c3\u30af\u30b9|\u30ab\u30fc\u30c0\u30b9|NEW CARD SELECTION)/i.test(n))return "sealed_product";
+  if(/(?:\u30ab\u30fc\u30c9\u756a\u53f7|\u30ab\u30fc\u30c9No\.?|\u54c1\u756a)\s*[:\uff1a]?\s*[A-Z0-9-]{3,}/i.test(n))return "single_card";
+  if(/\b(?:SEC|SP|SR|SSR|UR|SAR|CSR|CHR|RRR|RR|R|C|UC)\b/.test(n)&&/(?:PSA|BGS|CGC|\u9451\u5b9a|\u30d1\u30e9\u30ec\u30eb|\u30ec\u30a2|\u30ab\u30fc\u30c9)/i.test(n))return "single_card";
+  if(/(?:PSA|BGS|CGC)\s*10/i.test(n))return "single_card";
+  return "unspecified";
+}
+function tradingCardQuality(name,classification){
+  if(classification?.type!=="trading_card")return {ok:true,form:null,reason:null};
+  const reason=tradingCardAccessoryReason(name);
+  return reason?{ok:false,form:null,reason}:{ok:true,form:tradingCardForm(name),reason:null};
+}
+function tradingCardFilterSelfTest(){
+  const bad=[
+    "\u30b7\u30fc\u30eb\u5e33 a5 \u30d0\u30a4\u30f3\u30c0\u30fc \u30b3\u30ec\u30af\u30c8\u30d6\u30c3\u30af 6\u7a74 \u30c8\u30ec\u30ab\u30b1\u30fc\u30b9",
+    "\u30b5\u30a4\u30c9\u30ed\u30fc\u30c0\u30fc \u30dd\u30b1\u30e2\u30f3 \u30dd\u30b1\u30ab \u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9\u30b1\u30fc\u30b9",
+    "FINGOOO \u30c8\u30ec\u30ab \u30d5\u30a1\u30a4\u30eb \u30ab\u30fc\u30c9\u30d5\u30a1\u30a4\u30eb 9\u30dd\u30b1\u30c3\u30c8"
+  ];
+  const good=[
+    "UNION ARENA \u30d6\u30fc\u30b9\u30bf\u30fc\u30d1\u30c3\u30af Re:\u30bc\u30ed\u304b\u3089\u59cb\u3081\u308b\u7570\u4e16\u754c\u751f\u6d3b Vol.2",
+    "TV\u30a2\u30cb\u30e1 Dr.STONE \u30c8\u30ec\u30fc\u30c7\u30a3\u30f3\u30b0\u30ab\u30fc\u30c9 BOX"
+  ];
+  const badResults=bad.map(name=>({name,rejected:tradingCardAccessoryReason(name)==="trading_card_accessory"}));
+  const goodResults=good.map(name=>({name,rejected:tradingCardAccessoryReason(name)==="trading_card_accessory",form:tradingCardForm(name)}));
+  return {ok:badResults.every(x=>x.rejected)&&goodResults.every(x=>!x.rejected),bad:badResults,good:goodResults};
+}
+
+function collectibleCatalogHitAccepted(hit){
+  const jan=cleanJan(hit?.janCode),name=cleanOfficialTitle(hit?.name||"")||String(hit?.name||"").trim();
+  if(!name)return null;
+  const c=classifyProduct(name);
+  if(!COLLECTIBLE_CATALOG_TYPES.has(c.type))return null;
+  const tcq=tradingCardQuality(name,c);if(!tcq.ok)return null;
+  if(/\b(?:bootleg|recast|replica|copy|counterfeit|fake)\b/i.test(name))return null;
+  const noJan=jan?null:noJanCanonicalKey(name,c.type);
+  return {jan:jan||null,name,classification:c,trading_card_form:c.type==="trading_card"?tcq.form:null,hit,canonical_identity:noJan?.identity||null,canonical_fingerprint:noJan?.fingerprint||null,source_key:jan?`catalog:yahoo:jan:${jan}`:noJan.source_key};
+}
+
+function normalizeCatalogDate(value){
+  if(value==null||value==="")return null;
+  const raw=String(value).trim();
+  let d=null;
+  if(/^\d{9,10}$/.test(raw))d=new Date(Number(raw)*1000);
+  else if(/^\d{12,13}$/.test(raw))d=new Date(Number(raw));
+  else if(/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(raw))d=new Date(raw.replace(/\//g,"-"));
+  else {const parsed=Date.parse(raw);if(Number.isFinite(parsed))d=new Date(parsed);}
+  if(!d||!Number.isFinite(d.getTime()))return null;
+  const year=d.getUTCFullYear();if(year<1970||year>2100)return null;
+  return d.toISOString().slice(0,10);
+}
+
+function yahooCatalogSeedPayload(x,query,start,sourceId,now){

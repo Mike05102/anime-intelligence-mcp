@@ -1,0 +1,300 @@
+}
+function parseOmronStoreOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC");
+  const models=extractModels("OMRON",text);
+  const upper=text.toUpperCase();
+  const located=[];
+  for(const pn of models){const i=upper.indexOf(pn);if(i>=0)located.push({pn,i});}
+  located.sort((a,b)=>a.i-b.i);
+  const out=[];
+  for(let n=0;n<located.length;n++){
+    const {pn,i}=located[n];
+    const next=located[n+1]?.i??text.length;
+    const seg=text.slice(i,Math.min(next,i+360));
+    const pm=seg.match(/[\u00a5\uffe5]\s*([0-9][0-9,]*)/);
+    if(!pm)continue;
+    const price=Number(pm[1].replace(/,/g,""));
+    if(!Number.isFinite(price)||price<=0)continue;
+    const label=/\u6a19\u6e96\u5728\u5eab\u6a5f\u7a2e/.test(seg)?"standard_stock":/\u53d7\u6ce8\u751f\u7523\u6a5f\u7a2e/.test(seg)?"made_to_order":null;
+    const stock=label==="made_to_order"?"backorder":"unknown";
+    out.push({part_number:pn,price,availability_label:label,stock_status:stock,segment:seg.slice(0,280)});
+    if(out.length>=120)break;
+  }
+  const seen=new Set();
+  return out.filter(x=>{const k=x.part_number;if(seen.has(k))return false;seen.add(k);return true;});
+}
+
+function rsStockMap(label=""){
+  const x=String(label||"").trim();
+  if(x==="\u5728\u5eab\u3042\u308a")return {stock_status:"in_stock",active:true};
+  if(["\u304a\u53d6\u308a\u5bc4\u305b\u54c1","\u53d7\u6ce8\u8abf\u9054","\u5165\u8377\u5f85\u3061\uff08\u65b0\u5546\u54c1\uff09"].includes(x))return {stock_status:"backorder",active:true};
+  if(["\u5165\u8377\u5f85\u3061","\u4e00\u6642\u7684\u306b\u5728\u5eab\u5207\u308c"].includes(x))return {stock_status:"out_of_stock",active:true};
+  if(x==="\u53d6\u6271\u505c\u6b62\u4e2d")return {stock_status:"out_of_stock",active:false};
+  return {stock_status:"unknown",active:true};
+}
+function parseRsOmronOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC");
+  const statuses=["\u5728\u5eab\u3042\u308a","\u5728\u5eab\u9650\u308a","\u304a\u53d6\u308a\u5bc4\u305b\u54c1","\u53d7\u6ce8\u8abf\u9054","\u5165\u8377\u5f85\u3061\uff08\u65b0\u5546\u54c1\uff09","\u4e00\u6642\u7684\u306b\u5728\u5eab\u5207\u308c","\u5165\u8377\u5f85\u3061","\u53d6\u6271\u505c\u6b62\u4e2d"];
+  const out=[];
+  const rsRe=/RS\u54c1\u756a\s*[:\uff1a]?\s*([0-9A-Z-]+)/gi;
+  const matches=[...text.matchAll(rsRe)];
+  for(let i=0;i<matches.length;i++){
+    const m=matches[i];
+    const blockStart=Math.max(0,(i?matches[i-1].index:0));
+    const blockEnd=Math.min(text.length,(i+1<matches.length?matches[i+1].index:m.index+1800));
+    const block=text.slice(blockStart,blockEnd);
+    const rel=m.index-blockStart;
+    const after=block.slice(rel);
+    const mpnMatch=after.match(/\u30e1\u30fc\u30ab\u30fc\u578b\u756a\s*[:\uff1a]?\s*([^\n\r]{1,140})/i);
+    if(!mpnMatch)continue;
+    let mpn=String(mpnMatch[1]||"").trim();
+    mpn=mpn.replace(/\s+(?:\u30d6\u30e9\u30f3\u30c9|\u30d7\u30ed\u30c0\u30af\u30c8\u30bf\u30a4\u30d7|1\u500b\u5c0f\u8a08|\u6570\u91cf|\u30c7\u30fc\u30bf\u30b7\u30fc\u30c8).*$/i,"").trim();
+    if(!mpn||mpn.length>120)continue;
+    const priceMatch=after.match(/(?:1\u500b\u5c0f\u8a08|[0-9]+\s*(?:\u500b|\u888b|\u7bb1).*?\u5c0f\u8a08)\s*[:\uff1a]?\s*[\r\n ]*[\uffe5\u00a5]\s*([0-9][0-9,]*(?:\.\d+)?)/i)
+      || after.match(/[\uffe5\u00a5]\s*([0-9][0-9,]*(?:\.\d+)?)\s*\(\u7a0e\u629c\)/i);
+    const price=priceMatch?Number(priceMatch[1].replace(/,/g,"")):null;
+    let label=null,last=-1;
+    const before=block.slice(0,rel);
+    for(const st of statuses){const p=before.lastIndexOf(st);if(p>last){last=p;label=st;}}
+    const mapped=label==="\u5728\u5eab\u9650\u308a"?{stock_status:"low_stock",active:true}:rsStockMap(label);
+    out.push({
+      part_number:mpn,
+      price:Number.isFinite(price)&&price>0?price:null,
+      availability_label:label,
+      stock_status:mapped.stock_status,
+      active:mapped.active,
+      merchant_sku:`RS-${m[1]}`,
+      tax_included:false,
+      segment:block.slice(Math.max(0,rel-200),Math.min(block.length,rel+700))
+    });
+    if(out.length>=120)break;
+  }
+  const seen=new Set();
+  return out.filter(x=>{const k=normalizePartNumber(x.part_number);if(!k||seen.has(k))return false;seen.add(k);return true;});
+}
+function decodeEmbeddedUnicode(v=""){
+  return String(v||"")
+    .replace(/\\u\{([0-9a-fA-F]+)\}/g,(_,h)=>{try{return String.fromCodePoint(parseInt(h,16));}catch{return _;}})
+    .replace(/\\u([0-9a-fA-F]{4})/g,(_,h)=>String.fromCharCode(parseInt(h,16)))
+    .replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>String.fromCharCode(parseInt(h,16)));
+}
+function monotaroPrimaryWindow(text="",pn=""){
+  const src=String(text||"").normalize("NFKC");
+  const rawPn=String(pn||"").normalize("NFKC").trim();
+  const candidates=[rawPn,normalizePartNumber(rawPn)].filter(Boolean);
+  let idx=-1;
+  for(const c of candidates){
+    idx=src.toUpperCase().indexOf(c.toUpperCase());
+    if(idx>=0)break;
+  }
+  if(idx<0)return src.slice(0,5000);
+  // The commercial facts for the selected SKU sit close to the exact MPN.
+  // Keep recommendations/related-products outside the decision window.
+  return src.slice(Math.max(0,idx-1800),Math.min(src.length,idx+2600));
+}
+function canonicalMonotaroProductUrl(url=""){
+  try{
+    const u=new URL(String(url));
+    const m=u.pathname.match(/^\/p\/(\d{4})\/(\d{4})(?:\/print)?\/?$/);
+    if(!m)return String(url);
+    return `https://www.monotaro.com/p/${m[1]}/${m[2]}/`;
+  }catch{return String(url);}
+}
+function monotaroPrintUrl(url=""){
+  const canonical=canonicalMonotaroProductUrl(url);
+  return /\/p\/\d{4}\/\d{4}\/$/.test(canonical)?`${canonical}print/`:null;
+}
+function classifyMonotaroCommerce({discontinued=false,salePrice=null,leadDays=null}={}){
+  const hasSalePrice=salePrice!=null&&salePrice!==""&&Number.isFinite(Number(salePrice))&&Number(salePrice)>0;
+  const hasLead=leadDays!=null&&leadDays!==""&&Number.isFinite(Number(leadDays))&&Number(leadDays)>=0;
+  const active=!discontinued && (hasSalePrice||hasLead);
+  return {
+    active,
+    stock_status:discontinued?"out_of_stock":hasLead?"in_stock":"unknown",
+    price:active&&hasSalePrice?Number(salePrice):null
+  };
+}
+function sliceLabelValue(src,label,nextLabels=[]){
+  const hay=String(src||"");
+  const idx=hay.indexOf(label);
+  if(idx<0)return null;
+  let v=hay.slice(idx+label.length).replace(/^\s*[:\uff1a]?\s*/,"");
+  let cut=v.length;
+  for(const n of nextLabels){
+    const j=v.indexOf(n);
+    if(j>=0&&j<cut)cut=j;
+  }
+  return v.slice(0,cut).trim();
+}
+function moneyAfterLabel(src,label){
+  const v=sliceLabelValue(src,label,["\u6ce8\u6587\u30b3\u30fc\u30c9","\u54c1\u756a","\u5185\u5bb9\u91cf","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"]);
+  if(!v)return null;
+  const m=v.match(/[\uffe5\u00a5]?\s*([0-9][0-9,]*)/);
+  if(!m)return null;
+  const n=Number(m[1].replace(/,/g,""));
+  return Number.isFinite(n)&&n>0?n:null;
+}
+function parseMonotaroEvidenceText(text="",pageUrl=""){
+  const src=String(text||"").normalize("NFKC").replace(/\s+/g," ").trim();
+  if(!src)return null;
+
+  // Label-boundary parsing: avoid runtime-specific regex lookahead behavior.
+  const pnRaw=sliceLabelValue(src,"\u54c1\u756a",["\u5185\u5bb9\u91cf","\u6ce8\u6587\u30b3\u30fc\u30c9","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"])
+    || sliceLabelValue(src,"\u30e1\u30fc\u30ab\u30fc\u54c1\u756a",["\u5185\u5bb9\u91cf","\u6ce8\u6587\u30b3\u30fc\u30c9","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"]);
+  const genericMpn=(src.match(/\b[A-Z][A-Z0-9]*-[A-Z0-9][A-Z0-9._/+()\-]*(?:\s+\d+M)?\b/i)||[])[0]||null;
+  const displayPn=String(pnRaw||genericMpn||"").trim().replace(/\s+/g," ");
+  const normalizedPn=normalizePartNumber(displayPn);
+  if(!normalizedPn || !/[A-Z]/.test(normalizedPn) || !/[0-9]/.test(normalizedPn))return null;
+
+  const discontinued=["\u53d6\u308a\u6271\u3044\u3092\u7d42\u4e86","\u53d6\u6271\u3044\u7d42\u4e86","\u8ca9\u58f2\u7d42\u4e86","\u53d6\u308a\u6271\u3044\u7d42\u4e86","\u53d6\u6271\u7d42\u4e86","\u8ca9\u58f2\u3092\u7d42\u4e86","\u8ca9\u58f2\u7d42\u4e86\u54c1"].some(x=>src.includes(x));
+  const referencePrice=moneyAfterLabel(src,"\u53c2\u8003\u57fa\u6e96\u4fa1\u683c(\u7a0e\u5225)") ?? moneyAfterLabel(src,"\u53c2\u8003\u57fa\u6e96\u4fa1\u683c");
+  const salePrice=moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u5225)") ?? moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u5225)") ?? moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u8fbc)") ?? moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u8fbc)");
+  const taxIncluded=(moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u8fbc)")!=null || moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u8fbc)")!=null) && !(moneyAfterLabel(src,"\u5358\u4fa1(\u7a0e\u5225)")!=null || moneyAfterLabel(src,"\u8ca9\u58f2\u4fa1\u683c(\u7a0e\u5225)")!=null);
+
+  let leadDays=null, leadLabel=null;
+  if(src.includes("\u5f53\u65e5\u51fa\u8377")){leadDays=0;leadLabel="\u5f53\u65e5\u51fa\u8377";}
+  else {
+    const m=src.match(/([0-9]+)\u65e5\u4ee5\u5185(?:\u51fa\u8377|\u767a\u9001)/);
+    if(m){leadDays=Number(m[1]);leadLabel=m[0];}
+  }
+  const commerce=classifyMonotaroCommerce({discontinued,salePrice,leadDays});
+  const orderRaw=sliceLabelValue(src,"\u6ce8\u6587\u30b3\u30fc\u30c9",["\u54c1\u756a","\u5185\u5bb9\u91cf","\u53c2\u8003\u57fa\u6e96\u4fa1\u683c","\u5358\u4fa1","\u8ca9\u58f2\u4fa1\u683c","\u30e1\u30fc\u30ab\u30fc","\u7279\u9577","\u4ed5\u69d8","\u51fa\u8377"]);
+  const orderCode=orderRaw?.match(/[0-9A-Z-]+/i)?.[0]||null;
+  const pathSku=String(pageUrl||"").match(/\/p\/(\d{4})\/(\d{4})\//)?.slice(1).join("")||null;
+
+  return {
+    part_number:displayPn,
+    price:commerce.price,
+    reference_price:Number.isFinite(referencePrice)&&referencePrice>0?referencePrice:null,
+    availability_label:discontinued?"discontinued":leadLabel,
+    stock_status:commerce.stock_status,
+    active:commerce.active,
+    tax_included:commerce.active?taxIncluded:false,
+    lead_time_days:Number.isFinite(leadDays)?leadDays:null,
+    merchant_sku:orderCode||pathSku||null,
+    identity_evidence:"visible_part_number_label",
+    status_evidence:discontinued?"monotaro_discontinued_marker":leadLabel||((Number.isFinite(salePrice)&&salePrice>0)?"monotaro_sale_price":"no_positive_purchase_evidence"),
+    commerce_window_chars:src.length,
+    segment:src.slice(0,1400)
+  };
+}
+function parseMonotaroOffers(source,page){
+  const html=String(page.html||"");
+  const text=String(page.text||stripHtml(html)).normalize("NFKC");
+  const raw=html.normalize("NFKC");
+  const decodedRaw=decodeEmbeddedUnicode(raw).normalize("NFKC");
+  const pageUrl=String(page.official_url||page.url||"");
+  if(/\/s\//.test(pageUrl))return [];
+  if(!/\/p\//.test(pageUrl))return [];
+
+  // Print pages are the canonical commerce evidence path for MonotaRO.
+  // Use one pure parser for both production and self-test to prevent runtime drift.
+  const combined=`${text}\n${stripHtml(decodedRaw)}`.normalize("NFKC");
+  if(/\/print\/?(?:[?#].*)?$/.test(pageUrl)){
+    const parsed=parseMonotaroEvidenceText(combined,pageUrl);
+    return parsed?[parsed]:[];
+  }
+
+  // Normal product pages are identity/discovery fallback only. Keep fail-closed.
+  const title=html?String(titleOf(html)||"").normalize("NFKC"):(text.match(/^Title:\s*(.+)$/mi)?.[1]||"");
+  const explicitText=combined.match(/(?:\u30e1\u30fc\u30ab\u30fc)?\u54c1\u756a\s*[:\uff1a]?\s*([A-Z0-9][A-Z0-9._/+()\-]{1,100}(?:\s+\d+M)?)/i);
+  const titleLead=title.match(/^\s*([A-Z0-9][A-Z0-9._/+()\-]{2,100}(?:\s+\d+M)?)(?=\s|$)/i);
+  const displayPn=(explicitText?.[1]||titleLead?.[1]||"").trim().replace(/\s+/g," ");
+  const normalizedPn=normalizePartNumber(displayPn);
+  if(!normalizedPn || !/[A-Z]/.test(normalizedPn) || !/[0-9]/.test(normalizedPn))return [];
+  const pathSku=pageUrl.match(/\/p\/(\d{4})\/(\d{4})\//)?.slice(1).join("")||null;
+  return [{
+    part_number:displayPn||normalizedPn,
+    price:null,
+    reference_price:null,
+    availability_label:null,
+    stock_status:"unknown",
+    active:false,
+    tax_included:false,
+    lead_time_days:null,
+    merchant_sku:pathSku,
+    identity_evidence:explicitText?"visible_part_number":"document_title_exact_token",
+    status_evidence:"normal_page_identity_only_fail_closed",
+    commerce_window_chars:0,
+    segment:""
+  }];
+}
+
+
+function parseMisumiOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC").replace(/\s+/g," ").trim();
+  const pageUrl=String(page.official_url||page.url||"");
+  let urlPn=null;
+  try{urlPn=new URL(pageUrl).searchParams.get("HissuCode");}catch{}
+  const titlePn=(text.match(/\u578b\u756a\s*[:\uff1a]\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)||[])[1]||null;
+  const displayPn=String(urlPn||titlePn||"").trim().replace(/\s+/g," ");
+  if(!displayPn)return [];
+  const normalizedPn=normalizePartNumber(displayPn);
+  if(!normalizedPn||!/[A-Z]/.test(normalizedPn)||!/[0-9]/.test(normalizedPn))return [];
+  const idx=text.toUpperCase().indexOf(displayPn.toUpperCase());
+  const seg=idx>=0?text.slice(Math.max(0,idx-500),Math.min(text.length,idx+1800)):text.slice(0,2600);
+  const stopped=seg.includes("\u6ce8\u6587\u505c\u6b62\u4e2d");
+  const pm=seg.match(/\u901a\u5e38\u5358\u4fa1\s*\(\u7a0e\u5225\)\s*([0-9][0-9,]*)\u5186/i);
+  const price=pm?Number(pm[1].replace(/,/g,"")):null;
+  let leadDays=null,availability=null,stock="unknown";
+  if(/\u5f53\u65e5\u51fa\u8377\u53ef\u80fd/.test(seg)){leadDays=0;availability="\u5f53\u65e5\u51fa\u8377\u53ef\u80fd";stock="in_stock";}
+  else{
+    const lm=seg.match(/\u901a\u5e38\u51fa\u8377\u65e5\s*[:\uff1a]?\s*(?:\u5728\u5eab\u54c1)?\s*([0-9]+)\u65e5\u76ee/);
+    if(lm){leadDays=Number(lm[1]);availability=lm[0];stock=/\u5728\u5eab\u54c1/.test(lm[0])?"in_stock":"backorder";}
+  }
+  const active=!stopped && ((Number.isFinite(price)&&price>0)||leadDays!=null);
+  return [{
+    part_number:displayPn,price:active&&Number.isFinite(price)&&price>0?price:null,reference_price:null,
+    availability_label:stopped?"order_stopped":availability,stock_status:stopped?"out_of_stock":stock,active,
+    tax_included:false,lead_time_days:Number.isFinite(leadDays)?leadDays:null,merchant_sku:displayPn,currency:"JPY",
+    identity_evidence:urlPn?"misumi_hissu_code":"misumi_model_label",
+    status_evidence:stopped?"misumi_order_stopped":availability||((price!=null)?"misumi_public_price":"no_positive_purchase_evidence"),
+    commerce_window_chars:seg.length,segment:seg.slice(0,1400)
+  }];
+}
+
+function parseDigiKeyOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC").replace(/\s+/g," ").trim();
+  const pageUrl=String(page.official_url||page.url||"");
+  if(!/\/products\/detail\//.test(pageUrl))return [];
+  const pn=(text.match(/\u30e1\u30fc\u30ab\u30fc\u88fd\u54c1\u756a\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)
+    ||text.match(/Manufacturer Product Number\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)||[])[1]||null;
+  if(!pn)return [];
+  const sku=(text.match(/DigiKey\u88fd\u54c1\u756a\s*([A-Z0-9._/+()\-]+)/i)
+    ||text.match(/DigiKey Part Number\s*([A-Z0-9._/+()\-]+)/i)||[])[1]||pn;
+  const stockM=text.match(/\u5728\u5eab\s*[:\uff1a]\s*([0-9][0-9,]*)\s*\u500b/i)||text.match(/In Stock\s*[:\uff1a]?\s*([0-9][0-9,]*)/i);
+  const stockQty=stockM?Number(stockM[1].replace(/,/g,"")):null;
+  const priceM=text.match(/\u5358\u4fa1\s*\(\u6d88\u8cbb\u7a0e\u629c\u304d\)\s*[:\uff1a]?\s*[\uffe5\u00a5]\s*([0-9][0-9,.]*)/i)
+    ||text.match(/Unit Price\s*[:\uff1a]?\s*[\uffe5\u00a5]\s*([0-9][0-9,.]*)/i)
+    ||text.match(/\b1\s*[\|\s]+[\uffe5\u00a5]\s*([0-9][0-9,.]*)/i);
+  const price=priceM?Number(priceM[1].replace(/,/g,"")):null;
+  const obsolete=/\u751f\u7523\u4e2d\u6b62|\u5ec3\u6b62|Obsolete/i.test(text);
+  const partActive=/\u90e8\u54c1\u72b6\u6cc1\s*\u30a2\u30af\u30c6\u30a3\u30d6/i.test(text)||/Part Status\s*Active/i.test(text);
+  const active=!obsolete && (partActive||stockQty!=null||price!=null) && ((stockQty!=null&&stockQty>0)||(price!=null&&price>0));
+  const stock=stockQty!=null?(stockQty>0?"in_stock":"out_of_stock"):(active?"unknown":"unknown");
+  return [{
+    part_number:pn.trim(),price:active&&Number.isFinite(price)&&price>0?price:null,reference_price:null,
+    availability_label:stockQty!=null?`stock:${stockQty}`:(partActive?"active":null),stock_status:stock,stock_quantity:Number.isFinite(stockQty)?stockQty:null,active,
+    tax_included:false,lead_time_days:null,merchant_sku:sku,currency:"JPY",
+    identity_evidence:"digikey_manufacturer_part_number",
+    status_evidence:stockQty!=null?"digikey_stock_quantity":(price!=null?"digikey_public_price":"no_positive_purchase_evidence"),
+    commerce_window_chars:text.length,segment:text.slice(0,1400)
+  }];
+}
+
+function parseMouserOffers(source,page){
+  const text=String(page.text||stripHtml(page.html||"")).normalize("NFKC").replace(/\s+/g," ").trim();
+  const pageUrl=String(page.official_url||page.url||"");
+  if(!/\/ProductDetail\//i.test(pageUrl))return [];
+  const pn=(text.match(/Mfr\.\s*#\s*[:\uff1a]?\s*([A-Z0-9][A-Z0-9._/+()\-]*(?:\s+[0-9.]+M)?)/i)||[])[1]||null;
+  if(!pn)return [];
+  const sku=(text.match(/Mouser\s*#\s*[:\uff1a]?\s*([A-Z0-9._/+()\-]+)/i)||[])[1]||pn;
+  const nonStocked=/Stock\s*[:\uff1a]?\s*Non-Stocked/i.test(text);
+  const stockM=text.match(/Stock\s*[:\uff1a]?\s*([0-9][0-9,]*)/i);
+  const stockQty=stockM?Number(stockM[1].replace(/,/g,"")):null;
+  const pricingIdx=text.search(/Pricing\s*\(USD\)/i);
+  const pricingText=pricingIdx>=0?text.slice(pricingIdx,pricingIdx+900):text;
+  const priceM=pricingText.match(/\b1\s*(?:\||\s)+\$\s*([0-9][0-9,.]*)/i)||pricingText.match(/\$\s*([0-9][0-9,.]*)/i);
+  const price=priceM?Number(priceM[1].replace(/,/g,"")):null;
+  const obsolete=/Obsolete|Not Recommended for New Designs|Discontinued/i.test(text);
+  const active=!obsolete && Number.isFinite(price)&&price>0;

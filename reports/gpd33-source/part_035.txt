@@ -1,0 +1,300 @@
+  const generic=[];
+  for(const tc of WORLD_DISCOVERY_GENERIC_CASES){
+    try{
+      const rows=await findProducts(env,tc.query,10),franchises=[...new Set(rows.map(x=>canonicalizeDiscoveryFranchise(discoverySafeFranchise(x))).filter(Boolean))],types=[...new Set(rows.map(discoveryEffectiveType).filter(Boolean))];
+      const matches=rows.map(p=>worldAuditProductMatches(p,tc)),targetHits=matches.filter(x=>x.typeOk&&x.franchiseOk).length;
+      const pass=tc.mode==="broad"
+        ? rows.length>=tc.min_count&&franchises.length>=tc.min_franchises&&types.length>=tc.min_types
+        : rows.length>=tc.min_count&&targetHits===rows.length;
+      generic.push({label:tc.label,query:tc.query,count:rows.length,unique_franchises:franchises.length,unique_types:types.length,target_hits:targetHits,pass});
+    }catch(e){generic.push({label:tc.label,query:tc.query,pass:false,error:safeError(e)});}
+  }
+
+  const summary={
+    interpretation_pass:interpretation.filter(x=>x.pass).length,
+    interpretation_total:interpretation.length,
+    live_pass:live.filter(x=>x.pass).length,
+    live_total:live.length,
+    generic_pass:generic.filter(x=>x.pass).length,
+    generic_total:generic.length
+  };
+  return {
+    summary,
+    pass:summary.interpretation_pass===summary.interpretation_total&&summary.live_pass===summary.live_total&&summary.generic_pass===summary.generic_total,
+    interpretation,live,generic
+  };
+}
+async function worldDiscoveryAgent402Register(origin){
+  try{
+    const r=await fetch("https://agent402.tools/api/index/register",{method:"POST",headers:{"content-type":"application/json",accept:"application/json","user-agent":`ANIME-INTELLIGENCE-Discovery-Register/${VERSION}`},body:JSON.stringify({origin})});
+    const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,1000)};}
+    return {attempted:true,endpoint:"https://agent402.tools/api/index/register",origin,http_status:r.status,ok:r.ok,response:data};
+  }catch(e){return {attempted:true,endpoint:"https://agent402.tools/api/index/register",origin,ok:false,error:safeError(e)};}
+}
+async function worldDiscoveryAgent402Audit(origin){
+  const registration=await worldDiscoveryAgent402Register(origin);
+  const results=[];
+  for(const q of WORLD_DISCOVERY_AGENT402_QUERIES){
+    try{
+      const r=await fetch(`https://agent402.tools/api/find?q=${encodeURIComponent(q)}&k=10`,{headers:{accept:"application/json","user-agent":`ANIME-INTELLIGENCE-Discovery-Audit/${VERSION}`}});
+      const raw=await r.text();let data=null;try{data=raw?JSON.parse(raw):null;}catch{data={raw:raw.slice(0,500)};}
+      const rows=worldAuditRows(data),idx=rows.findIndex(worldAuditOwnAgent402Result);
+      results.push({query:q,http_status:r.status,ok:r.ok,count:rows.length,found:idx>=0,rank:idx>=0?idx+1:null,matched:idx>=0?worldAuditResultLabel(rows[idx]):null,top3:rows.slice(0,3).map(worldAuditResultLabel)});
+    }catch(e){results.push({query:q,ok:false,found:false,rank:null,error:safeError(e)});}
+  }
+  const found=results.filter(x=>x.found).length;
+  return {endpoint:"https://agent402.tools/api/find",registration,query_count:results.length,found_count:found,registered_ok:!!registration.ok,pass:found>0,note:found>0?"ANIME INTELLIGENCE is live in Agent402 search.":(registration.ok?"Agent402 registration was accepted/probed; search index may update on the crawler cycle. No additional seller-side code change is required for indexing itself.":"Agent402 registration failed; inspect registration.response/error."),results};
+}
+async function worldDiscoveryAudit(env,mode="all",origin="https://anime-intelligence.goodmy0312.workers.dev"){
+  const m=["internal","agent402","all"].includes(mode)?mode:"all",out={service:"ANIME INTELLIGENCE",version:VERSION,audit:"WORLD_DISCOVERY_AUDIT",mode:m,generated_at:new Date().toISOString()};
+  if(m==="internal"||m==="all")out.internal=await worldDiscoveryInternalAudit(env);
+  if(m==="agent402"||m==="all")out.agent402=await worldDiscoveryAgent402Audit(origin);
+  out.pass=(out.internal?out.internal.pass:true)&&(out.agent402?out.agent402.pass:true);
+  return out;
+}
+
+
+function compactPurchaseRouteAuditView(route){
+  if(!route)return null;
+  const pr=route.purchase_route||{};
+  return {
+    source:route.source||null,
+    seller:route.seller||null,
+    title:route.title||null,
+    total_price_jpy:route.total_price_jpy==null?null:(Number.isFinite(Number(route.total_price_jpy))?Number(route.total_price_jpy):null),
+    asking_price_jpy:route.asking_price_jpy==null?null:(Number.isFinite(Number(route.asking_price_jpy))?Number(route.asking_price_jpy):null),
+    shipping_jpy:route.shipping_jpy==null?null:Number(route.shipping_jpy),
+    shipping_known:route.shipping_known===true,
+    live_price:route.live_price===true,
+    price_freshness:route.price_freshness||null,
+    price_confidence:route.price_confidence||null,
+    price_evidence:route.price_evidence||null,
+    shipping_original:route.shipping_original==null?null:Number(route.shipping_original),
+    shipping_currency:route.shipping_currency||null,
+    reference_price_jpy:route.reference_price_jpy==null?null:Number(route.reference_price_jpy),
+    price_basis:route.price_basis||null,
+    url:route.url||null,
+    country_fit:pr.country_fit||null,
+    country_fit_score:pr.country_fit_score??null,
+    purchase_ease_score:pr.purchase_ease_score??null,
+    overall_score:pr.overall_score??null,
+    direct_shipping:pr.direct_shipping||null,
+    directness:pr.directness||null,
+    proxy_required:!!pr.proxy_required,
+    language_support:pr.language_support||null,
+    payment_compatibility:pr.payment_compatibility||null,
+    account_difficulty:pr.account_difficulty||null,
+    verification_blockers:pr.verification_blockers||[],
+    recommended_action:pr.recommended_action||null,
+    tradeoff:pr.tradeoff||null
+  };
+}
+
+function repairLikelyUtf8Mojibake(value=""){
+  const input=String(value||"");
+  if(!input)return input;
+  if(!/[\u0080-\u00ff]|(?:Ã|Â|ã|å|é|||||)/u.test(input))return input;
+  try{
+    const bytes=[];
+    for(const ch of input){const cp=ch.codePointAt(0);if(cp>255)return input;bytes.push(cp);}
+    const decoded=new TextDecoder("utf-8",{fatal:true}).decode(Uint8Array.from(bytes));
+    return decoded&&decoded!==input?decoded:input;
+  }catch{return input;}
+}
+
+async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
+  const raw=String(query||"").trim();
+  const q=repairLikelyUtf8Mojibake(raw)||"Hatsune Miku figure";
+  const u=new URL("https://audit.local/v1/best-place");
+  u.searchParams.set("query",q);
+  u.searchParams.set("buyer_country","JP");
+  const preflight=await preflightPaidProduct(env,u);
+  if(!preflight?.ok){
+    return {service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,query:q,all_pass:false,error:"product_resolution_failed",preflight:preflight?.body||null};
+  }
+  const product=preflight.product;
+  let obs=[];try{obs=await getObservations(env,product.id);}catch{}
+  let market_refresh_log=[];
+  try{market_refresh_log=await refreshLiveMarketForProduct(env,product,obs);}catch(e){market_refresh_log=[{source:"market_refresh",ok:false,error:safeError(e)}];}
+  try{obs=await getObservations(env,product.id);}catch{}
+  let rakuten;try{rakuten=await rakutenSearch(env,product);}catch(e){rakuten={configured:rakutenConfigured(env),mode:rakutenWebServiceConfigured(env)?"live_web_service_error":"affiliate_link_only",web_service_api:rakutenWebServiceConfigured(env),offers:[],best:null,live_returned:0,live_matches:0,live_attempts:[],error:safeError(e)};}
+  const fxInfo=await resolveUsdJpy(env),officialOffers=officialPurchaseOffersForProduct(product,fxInfo);
+  const countries=["JP","US","NL"];
+  const results=[];
+  for(const country of countries){
+    const routing=countryAwarePurchaseRouting(obs,rakuten,country,officialOffers,product);
+    const landed=landedCostView(routing.best_purchase_route,country,"");
+    const hasDirectAlternative=(routing.alternatives||[]).some(x=>!x?.purchase_route?.proxy_required&&(x?.purchase_route?.country_fit_score||0)>=60&&x?.purchase_route?.destination_confirmation_required===false);
+    const bestRouteType=routing.best_purchase_route?.purchase_route?.route_type||null;
+    const bestPracticalDirect=!!(routing.best_purchase_route&&!routing.best_purchase_route?.purchase_route?.proxy_required&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=70&&routing.best_purchase_route?.purchase_route?.destination_confirmation_required===false);
+    const bestVerifiedProxy=!!(routing.best_purchase_route&&bestRouteType==="verified_proxy_international"&&(routing.best_purchase_route?.purchase_route?.country_fit_score||0)>=80);
+    const bestExactIdentity=!!(!routing.best_purchase_route||String(routing.best_purchase_route?.source||"").toLowerCase()!=="ebay"||ebayStrongIdentityAnalysis(product,{title:routing.best_purchase_route?.title||""}).accepted);
+    const bestIsPractical=!routing.best_purchase_route||!hasDirectAlternative||bestPracticalDirect;
+    const noInventedCrossBorderTotal=country==="JP"||landed.estimated_landed_total_jpy==null;
+    const noInventedLandedTotal=landed.estimated_landed_total_jpy==null||landed.known_total_jpy!=null;
+    const hasCandidate=Number(routing.candidate_count||0)>0;
+    const overseasPractical=country==="JP"||bestPracticalDirect||bestVerifiedProxy;
+    results.push({
+      buyer_country:country,
+      candidate_count:routing.candidate_count,
+      practical_direct_candidate_count:routing.practical_direct_candidate_count||0,
+      verified_proxy_candidate_count:routing.verified_proxy_candidate_count||0,
+      practical_route_candidate_count:routing.practical_route_candidate_count||0,
+      selection_policy:routing.selection_policy,
+      checks:{has_candidate:hasCandidate,best_route_practical_when_direct_option_exists:bestIsPractical,overseas_best_route_is_practical:overseasPractical,best_route_is_verified_proxy:bestVerifiedProxy,exact_product_identity:bestExactIdentity,no_invented_cross_border_landed_total:noInventedCrossBorderTotal,no_invented_landed_total:noInventedLandedTotal},
+      cheapest_offer:compactPurchaseRouteAuditView(routing.cheapest_offer),
+      best_purchase_route:compactPurchaseRouteAuditView(routing.best_purchase_route),
+      easiest_purchase_route:compactPurchaseRouteAuditView(routing.easiest_purchase_route),
+      lowest_known_practical_route:compactPurchaseRouteAuditView(routing.lowest_known_practical_route),
+      landed_cost:landed,
+      alternatives:(routing.alternatives||[]).slice(0,5).map(compactPurchaseRouteAuditView)
+    });
+  }
+  const allPass=results.every(r=>r.selection_policy==="purchase_feasibility_then_ease_then_known_cost"&&r.checks.has_candidate&&r.checks.best_route_practical_when_direct_option_exists&&r.checks.overseas_best_route_is_practical&&r.checks.exact_product_identity&&r.checks.no_invented_cross_border_landed_total&&r.checks.no_invented_landed_total);
+  return {
+    service:"ANIME INTELLIGENCE",version:VERSION,audit:"COUNTRY_AWARE_PURCHASE_ROUTING_AUDIT",payment_required:false,real_payment_test_required:false,query:q,query_repaired_from_mojibake:q!==raw&&!!raw,
+    product:{id:product.id,name_ja:cleanOfficialTitle(product.canonical_name_ja),name_en:cleanOfficialTitle(product.canonical_name_en),franchise:product.franchise||null,characters:product.character_names||[],product_type:product.product_type||null},
+    observation_count:obs.length,rakuten_offer_count:(rakuten?.offers||[]).length,rakuten_market:{mode:rakuten?.mode||null,live_price_api_configured:!!rakuten?.live_price_api_configured,affiliate_only:!!rakuten?.affiliate_only,web_service_api:!!rakuten?.web_service_api,application_id_present:!!rakuten?.application_id_present,access_key_present:!!rakuten?.access_key_present,affiliate_id_present:!!rakuten?.affiliate_id_present,live_returned:rakuten?.live_returned||0,live_matches:rakuten?.live_matches||0,registered_offer_count:rakuten?.registered_offer_count||0,live_attempts:rakuten?.live_attempts||[],live_error:rakuten?.live_error||rakuten?.error||null,pricing_source:rakuten?.pricing_source||null,note:rakuten?.note||null},official_route_count:officialOffers.length,market_refresh_log,all_pass:allPass,results,
+    interpretation:"This audit refreshes Yahoo/eBay live market offers; Rakuten remains affiliate-only unless separately configured. It rejects sibling/variant mismatches and evaluates only destination-verified direct routes plus a verified multilingual proxy-assisted route for exact Japanese listings. cheapest_offer is the lowest observed exact-match listing price, while best_purchase_route additionally considers purchase feasibility, price evidence and shipping confidence. For Japan buyers, Yahoo/Rakuten compete without source preference. For overseas buyers, raw Japanese-only checkout is not considered sufficient. Unknown shipping, proxy fees, taxes and duties are never invented, and a landed total is not claimed when shipping remains unknown."
+  };
+}
+
+
+async function universalMerchantDueBacklog(env,limit=121){
+  const now=new Date().toISOString();
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&source_slug=like.offer-*&status=in.(pending,retry)&next_attempt_at=lte.${encodeURIComponent(now)}&limit=${Math.max(1,Math.min(500,Number(limit)||121))}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+
+function summarizeDiscoveryRows(rows=[],versionFilter=null){
+  const fps=new Set(),brands=new Set(),namespaces=new Set(),families=new Map(),domains=new Map(UNIVERSAL_GENERIC_DOMAINS.map(d=>[d,{domain:d,runs:0,candidates:0,unique:new Set(),gtins:0,canonical_new:0,canonical_upserted:0,canonical_quarantined:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0,provider_calls:0,elapsed_ms:0}])),providers=new Map(),providerRoles=new Map();
+  let candidates=0,gtins=0,canonicalNew=0,canonicalUpserted=0,canonicalQuarantined=0,newUnique=0,merchantEvidence=0,merchantTrust=0,purchaseReady=0,decisionReady=0,canonicalDecisionReady=0,crossProviderCorroborated=0,providerCalls=0,elapsedMs=0,batches=0;
+  for(const d of (Array.isArray(rows)?rows:[])){
+    const m=d?.metadata||{};if(versionFilter&&String(m.version||"")!==String(versionFilter))continue;batches++;
+    const domain=String(m.domain||"general_commerce"),family=String(m.query_family||universalQueryFamily(domain,m.query_text||"")),cs=Array.isArray(m.candidates)?m.candidates:[];
+    const hasRouteField=cs.some(c=>c&&"merchant_route_evidence_signal" in c),hasTrustField=cs.some(c=>c&&"merchant_trust_signal" in c),hasReadyField=cs.some(c=>c&&("offer_ready_signal" in c||"purchase_ready_signal" in c)),hasDecisionField=cs.some(c=>c&&"decision_ready_signal" in c),hasCanonicalDecisionField=cs.some(c=>c&&"canonical_decision_ready_signal" in c),hasCrossField=cs.some(c=>c&&"cross_provider_corroborated" in c);
+    const batchMerchantEvidence=hasRouteField?cs.filter(c=>c?.merchant_route_evidence_signal===true).length:Number(m.merchant_evidence_candidates||0)||0;
+    const batchMerchantTrust=hasTrustField?cs.filter(c=>c?.merchant_trust_signal===true).length:Number(m.merchant_trust_candidates||0)||0;
+    const batchPurchaseReady=hasReadyField?cs.filter(c=>c?.offer_ready_signal===true||c?.purchase_ready_signal===true).length:Number(m.purchase_ready_candidates||0)||0;
+    const batchDecisionReady=hasDecisionField?cs.filter(c=>c?.decision_ready_signal===true).length:Number(m.decision_ready_candidates||0)||0;
+    const batchCanonicalDecisionReady=hasCanonicalDecisionField?cs.filter(c=>c?.canonical_decision_ready_signal===true).length:Number(m.canonical_decision_ready_candidates||0)||0;
+    const batchCross=hasCrossField?cs.filter(c=>c?.cross_provider_corroborated===true).length:Number(m.cross_provider_corroborated_candidates||0)||0;
+    const q=families.get(family)||{family,domain,runs:0,candidates:0,unique:new Set(),gtins:0,canonical_new:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0,provider_calls:0,elapsed_ms:0};
+    q.runs++;q.candidates+=cs.length;q.canonical_new+=Number(m.canonical_new??m.canonical_promoted??0)||0;q.merchant_evidence+=batchMerchantEvidence;q.merchant_trust+=batchMerchantTrust;q.purchase_ready+=batchPurchaseReady;q.decision_ready+=batchDecisionReady;q.canonical_decision_ready+=batchCanonicalDecisionReady;q.cross_provider_corroborated+=batchCross;q.provider_calls+=Number(m.provider_calls_estimate||0)||0;q.elapsed_ms+=Number(m.search_elapsed_ms||0)||0;
+    canonicalNew+=Number(m.canonical_new??m.canonical_promoted??0)||0;canonicalUpserted+=Number(m.canonical_upserted||0)||0;canonicalQuarantined+=Number(m.canonical_quarantined||0)||0;newUnique+=Number(m.new_unique_candidates||0)||0;merchantEvidence+=batchMerchantEvidence;merchantTrust+=batchMerchantTrust;purchaseReady+=batchPurchaseReady;decisionReady+=batchDecisionReady;canonicalDecisionReady+=batchCanonicalDecisionReady;crossProviderCorroborated+=batchCross;providerCalls+=Number(m.provider_calls_estimate||0)||0;elapsedMs+=Number(m.search_elapsed_ms||0)||0;for(const ns of (m.identifier_namespaces||[]))namespaces.add(ns);
+    const dc=domains.get(domain)||{domain,runs:0,candidates:0,unique:new Set(),gtins:0,canonical_new:0,canonical_upserted:0,canonical_quarantined:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0,provider_calls:0,elapsed_ms:0};
+    dc.runs++;dc.candidates+=cs.length;dc.canonical_new+=Number(m.canonical_new??m.canonical_promoted??0)||0;dc.canonical_upserted+=Number(m.canonical_upserted||0)||0;dc.canonical_quarantined+=Number(m.canonical_quarantined||0)||0;dc.merchant_evidence+=batchMerchantEvidence;dc.merchant_trust+=batchMerchantTrust;dc.purchase_ready+=batchPurchaseReady;dc.decision_ready+=batchDecisionReady;dc.canonical_decision_ready+=batchCanonicalDecisionReady;dc.cross_provider_corroborated+=batchCross;dc.provider_calls+=Number(m.provider_calls_estimate||0)||0;dc.elapsed_ms+=Number(m.search_elapsed_ms||0)||0;
+    const role=String(m.provider_role||"balanced");providerRoles.set(role,(providerRoles.get(role)||0)+1);
+    for(const c of cs){
+      candidates++;const fp=String(c?.identity_fingerprint||c?.fingerprint||"");if(fp){fps.add(fp);q.unique.add(fp);dc.unique.add(fp);}if(c?.gtin){gtins++;q.gtins++;dc.gtins++;namespaces.add("gtin");}if(c?.brand)brands.add(normalize(c.brand));
+      const pr=String(c?.provider||"unknown"),ps=providers.get(pr)||{provider:pr,candidates:0,unique:new Set(),gtins:0,merchant_evidence:0,merchant_trust:0,purchase_ready:0,decision_ready:0,canonical_decision_ready:0,cross_provider_corroborated:0};ps.candidates++;if(fp)ps.unique.add(fp);if(c?.gtin)ps.gtins++;
+      if(c?.merchant_route_evidence_signal===true||(!hasRouteField&&Number(c?.merchant_evidence_score||0)>=45))ps.merchant_evidence++;if(c?.merchant_trust_signal===true)ps.merchant_trust++;if(c?.offer_ready_signal===true||c?.purchase_ready_signal===true)ps.purchase_ready++;if(c?.decision_ready_signal===true)ps.decision_ready++;if(c?.canonical_decision_ready_signal===true)ps.canonical_decision_ready++;if(c?.cross_provider_corroborated===true)ps.cross_provider_corroborated++;providers.set(pr,ps);
+    }
+    families.set(family,q);domains.set(domain,dc);
+  }
+  const familyStats=[...families.values()].map(q=>({family:q.family,domain:q.domain,runs:q.runs,candidates:q.candidates,unique_candidates:q.unique.size,unique_yield:q.candidates?Math.round(q.unique.size/q.candidates*1000)/1000:null,duplicate_ratio:q.candidates?Math.round((1-q.unique.size/q.candidates)*1000)/1000:null,gtin_yield:q.candidates?Math.round(q.gtins/q.candidates*1000)/1000:null,canonical_new:q.canonical_new,canonical_yield:q.candidates?Math.round(q.canonical_new/q.candidates*1000)/1000:null,merchant_evidence_yield:q.candidates?Math.round(q.merchant_evidence/q.candidates*1000)/1000:null,merchant_trust_yield:q.candidates?Math.round(q.merchant_trust/q.candidates*1000)/1000:null,purchase_ready_yield:q.candidates?Math.round(q.purchase_ready/q.candidates*1000)/1000:null,decision_ready_yield:q.candidates?Math.round(q.decision_ready/q.candidates*1000)/1000:null,canonical_decision_ready_yield:q.candidates?Math.round(q.canonical_decision_ready/q.candidates*1000)/1000:null,cross_provider_corroborated:q.cross_provider_corroborated||0,canonical_per_provider_call:q.provider_calls?Math.round(q.canonical_new/q.provider_calls*1000)/1000:null,avg_search_elapsed_ms:q.runs?Math.round(q.elapsed_ms/q.runs):null})).sort((a,b)=>(b.decision_ready_yield||0)-(a.decision_ready_yield||0)||(b.canonical_yield||0)-(a.canonical_yield||0)||(b.unique_yield||0)-(a.unique_yield||0));
+  const domainStats=[...domains.values()].map(d=>({domain:d.domain,runs:d.runs,candidates:d.candidates,unique_candidates:d.unique.size,unique_yield:d.candidates?Math.round(d.unique.size/d.candidates*1000)/1000:null,gtin_yield:d.candidates?Math.round(d.gtins/d.candidates*1000)/1000:null,canonical_new:d.canonical_new,canonical_yield:d.candidates?Math.round(d.canonical_new/d.candidates*1000)/1000:null,merchant_evidence_yield:d.candidates?Math.round(d.merchant_evidence/d.candidates*1000)/1000:null,merchant_trust_yield:d.candidates?Math.round(d.merchant_trust/d.candidates*1000)/1000:null,purchase_ready_yield:d.candidates?Math.round(d.purchase_ready/d.candidates*1000)/1000:null,decision_ready_yield:d.candidates?Math.round(d.decision_ready/d.candidates*1000)/1000:null,canonical_decision_ready_yield:d.candidates?Math.round(d.canonical_decision_ready/d.candidates*1000)/1000:null,cross_provider_corroborated:d.cross_provider_corroborated||0})).sort((a,b)=>a.runs-b.runs||a.unique_candidates-b.unique_candidates);
+  const providerStats=[...providers.values()].map(p=>({provider:p.provider,candidates:p.candidates,unique_candidates:p.unique.size,unique_yield:p.candidates?Math.round(p.unique.size/p.candidates*1000)/1000:null,gtin_yield:p.candidates?Math.round(p.gtins/p.candidates*1000)/1000:null,merchant_evidence_yield:p.candidates?Math.round(p.merchant_evidence/p.candidates*1000)/1000:null,merchant_trust_yield:p.candidates?Math.round(p.merchant_trust/p.candidates*1000)/1000:null,purchase_ready_yield:p.candidates?Math.round(p.purchase_ready/p.candidates*1000)/1000:null,decision_ready_yield:p.candidates?Math.round(p.decision_ready/p.candidates*1000)/1000:null,canonical_decision_ready_yield:p.candidates?Math.round(p.canonical_decision_ready/p.candidates*1000)/1000:null,cross_provider_corroborated:p.cross_provider_corroborated||0})).sort((a,b)=>b.candidates-a.candidates);
+  return {version:versionFilter||"all",batches,discovery_candidates:candidates,unique_discovery_candidates:fps.size,discovery_unique_yield:candidates?Math.round(fps.size/candidates*1000)/1000:null,duplicate_ratio:candidates?Math.round((1-fps.size/candidates)*1000)/1000:null,new_unique_candidates_reported:newUnique,gtin_candidates:gtins,gtin_yield:candidates?Math.round(gtins/candidates*1000)/1000:null,canonical_new:canonicalNew,canonical_upserted:canonicalUpserted,canonical_quarantined:canonicalQuarantined,canonical_promotion_yield:candidates?Math.round(canonicalNew/candidates*1000)/1000:null,merchant_evidence_candidates:merchantEvidence,merchant_evidence_yield:candidates?Math.round(merchantEvidence/candidates*1000)/1000:null,merchant_trust_candidates:merchantTrust,merchant_trust_yield:candidates?Math.round(merchantTrust/candidates*1000)/1000:null,purchase_ready_candidates:purchaseReady,purchase_ready_yield:candidates?Math.round(purchaseReady/candidates*1000)/1000:null,decision_ready_candidates:decisionReady,decision_ready_yield:candidates?Math.round(decisionReady/candidates*1000)/1000:null,canonical_decision_ready_candidates:canonicalDecisionReady,canonical_decision_ready_yield:candidates?Math.round(canonicalDecisionReady/candidates*1000)/1000:null,cross_provider_corroborated_candidates:crossProviderCorroborated,provider_calls_estimate:providerCalls,canonical_per_provider_call:providerCalls?Math.round(canonicalNew/providerCalls*1000)/1000:null,avg_search_elapsed_ms:batches?Math.round(elapsedMs/batches):null,brands_covered:brands.size,identifier_namespaces:[...namespaces],provider_role_counts:Object.fromEntries(providerRoles),query_family_metrics:familyStats.slice(0,40),lowest_coverage_domains:domainStats.slice(0,24),provider_metrics:providerStats};
+}
+async function universalGrowthStatus(env){
+  const now=Date.now(),since24=new Date(now-24*3600000).toISOString(),since7d=new Date(now-7*86400000).toISOString();
+  const safe=async(path)=>{try{const r=await sb(env,path,{timeout_ms:10000,retry_get:true});return Array.isArray(r)?r:[];}catch{return [];}};
+  const [products,parts,offers,merchants,demands24,demands7,snaps24,discovery24,frontier24,runs24]=await Promise.all([
+    safe("/products?select=id&limit=1000"),safe("/parts_catalog?select=id&limit=1000"),safe("/merchant_offers?select=id,active,stock_status,price,product_url,checkout_url,source_updated_at&limit=1000"),safe("/merchants?select=id,active,verified&limit=500"),
+    safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_product_demand&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_product_demand&occurred_at=gte.${encodeURIComponent(since7d)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_product_snapshot&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_discovery_batch&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/api_events?select=id,occurred_at,metadata&event_type=eq.universal_catalog_frontier&occurred_at=gte.${encodeURIComponent(since24)}&limit=1000`),safe(`/parts_ingest_runs?select=version,finished_at,pages_processed,candidates_inserted,metadata&finished_at=gte.${encodeURIComponent(since24)}&limit=300`)
+  ]);
+  const embedded=runs24.filter(r=>String(r?.version||"")==="collector-3.0.0"),legacy=runs24.filter(r=>/^collector-2\./.test(String(r?.version||""))),embeddedGrowth=embedded.reduce((a,r)=>a+Number(r?.candidates_inserted||0),0),embeddedOffers=embedded.reduce((a,r)=>a+Number(r?.metadata?.merchant_offers_upserted||0),0);
+  const identityKeys=new Set();for(const x of snaps24){const k=x?.metadata?.identity_key;if(k)identityKeys.add(k);}const allMetrics=summarizeDiscoveryRows(discovery24),currentMetrics=summarizeDiscoveryRows(discovery24,VERSION);const versions=[...new Set(discovery24.map(x=>String(x?.metadata?.version||"")).filter(Boolean))].filter(v=>v!==VERSION);const previous=versions.map(v=>summarizeDiscoveryRows(discovery24,v)).sort((a,b)=>b.batches-a.batches).slice(0,5);
+  const frontierTimes=frontier24.map(x=>Date.parse(x.occurred_at||x?.metadata?.observed_at||"")).filter(Number.isFinite),oldestFrontier=frontierTimes.length?Math.min(...frontierTimes):null,staleFrontierDepthHours=oldestFrontier?Math.round((now-oldestFrontier)/360000)/10:null;
+  const dueMerchantBacklog=await universalMerchantDueBacklog(env,121),activeOffers=offers.filter(x=>x?.active!==false),purchaseReadyOffers=activeOffers.filter(x=>Number.isFinite(Number(x?.price))&&!!(x?.product_url||x?.checkout_url)&&['in_stock','available','low_stock'].includes(String(x?.stock_status||'').toLowerCase()));
+  return {ok:true,service:PLATFORM_NAME,version:VERSION,build_id:BUILD_ID,window_hours:24,database:{products_sample_count:products.length,parts_sample_count:parts.length,merchant_offers_sample_count:offers.length,active_offers_sample:activeOffers.length,purchase_ready_offers_sample:purchaseReadyOffers.length,merchants_sample_count:merchants.length,active_merchants_sample:merchants.filter(x=>x?.active!==false).length,verified_merchants_sample:merchants.filter(x=>x?.verified===true).length},generic_growth:{demand_events_24h:demands24.length,demand_events_7d:demands7.length,market_snapshots_24h:snaps24.length,identity_keys_24h:identityKeys.size,discovery_batches_24h:allMetrics.batches,discovery_candidates_24h:allMetrics.discovery_candidates,unique_discovery_candidates_24h:allMetrics.unique_discovery_candidates,discovery_unique_yield_24h:allMetrics.discovery_unique_yield,duplicate_ratio_24h:allMetrics.duplicate_ratio,new_unique_candidates_reported_24h:allMetrics.new_unique_candidates_reported,gtin_candidates_24h:allMetrics.gtin_candidates,gtin_yield_24h:allMetrics.gtin_yield,canonical_new_24h:allMetrics.canonical_new,canonical_upserted_24h:allMetrics.canonical_upserted,canonical_quarantined_24h:allMetrics.canonical_quarantined,canonical_promotion_yield_24h:allMetrics.canonical_promotion_yield,merchant_evidence_yield_24h:allMetrics.merchant_evidence_yield,merchant_trust_yield_24h:allMetrics.merchant_trust_yield,purchase_ready_yield_24h:allMetrics.purchase_ready_yield,decision_ready_yield_24h:allMetrics.decision_ready_yield,canonical_decision_ready_yield_24h:allMetrics.canonical_decision_ready_yield,cross_provider_corroborated_candidates_24h:allMetrics.cross_provider_corroborated_candidates,canonical_per_provider_call_24h:allMetrics.canonical_per_provider_call,brands_covered_24h:allMetrics.brands_covered,identifier_namespaces_24h:allMetrics.identifier_namespaces,stale_frontier_depth_hours:staleFrontierDepthHours,query_family_metrics:allMetrics.query_family_metrics,lowest_coverage_domains:allMetrics.lowest_coverage_domains,provider_metrics:allMetrics.provider_metrics,current_version_metrics:currentMetrics,previous_version_baselines:previous,comparison_note:"Use current_version_metrics for post-deploy evaluation; all 24h fields may include earlier versions."},parts_growth:{embedded_v3_runs_24h:embedded.length,embedded_candidates_inserted_24h:embeddedGrowth,embedded_merchant_offers_upserted_24h:embeddedOffers,legacy_v2_runs_24h:legacy.length,authoritative_collector:"collector-3.0.0",legacy_detected:legacy.length>0},merchant_health:{due_queue_backlog:dueMerchantBacklog,soft_queue_budget:UNIVERSAL_MERCHANT_DUE_BUDGET,hard_queue_ceiling:UNIVERSAL_MERCHANT_DUE_HARD_CEILING,trickle_seed_max_rows:UNIVERSAL_MERCHANT_TRICKLE_SEED_MAX_ROWS,mode:dueMerchantBacklog==null?"unknown":(dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_HARD_CEILING?"hard_pause":(dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_BUDGET?"drain_priority_trickle_seed":"normal")),paused_by_due_backlog:dueMerchantBacklog!=null&&dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_HARD_CEILING,trickle_seed_active:dueMerchantBacklog!=null&&dueMerchantBacklog>=UNIVERSAL_MERCHANT_DUE_BUDGET&&dueMerchantBacklog<UNIVERSAL_MERCHANT_DUE_HARD_CEILING,future_cooldown_rows_do_not_block_seeding:true,monotaro_group_hub_discovery:true},monetization:{paid_endpoint:"/v1/purchase-decision",price_usdc:0.1,external_only_admin:true},note:"v20 preserves prior safety gates and canonical-offer joining, executes one-query checkpointed discovery directly at :40 and :50 without a lease, and adds authenticated discovery diagnostics: canonical promotion automatically triggers exact GTIN/MPN offer resolution, eBay GTIN uses the gtin filter, item detail re-verifies identity, verified offers persist to market_observations, and decision readiness is recomputed on the canonical-linked offer. Unknown evidence remains fail-closed.",generated_at:new Date().toISOString()};
+}
+
+async function universalProductionReadiness(env){
+  const [growth,revenue]=await Promise.all([universalGrowthStatus(env),revenueMetrics(env)]);const g=growth||{},r=revenue||{},blockers=[],warnings=[];
+  const v3runs=Number(g?.parts_growth?.embedded_v3_runs_24h||0),due=Number(g?.merchant_health?.due_queue_backlog||0),cv=g?.generic_growth?.current_version_metrics||{},useCurrent=Number(cv.discovery_candidates||0)>=50,uy=useCurrent?cv.discovery_unique_yield:g?.generic_growth?.discovery_unique_yield_24h,cy=useCurrent?cv.canonical_promotion_yield:g?.generic_growth?.canonical_promotion_yield_24h,my=useCurrent?cv.merchant_evidence_yield:g?.generic_growth?.merchant_evidence_yield_24h,mty=useCurrent?cv.merchant_trust_yield:g?.generic_growth?.merchant_trust_yield_24h,py=useCurrent?cv.purchase_ready_yield:g?.generic_growth?.purchase_ready_yield_24h,dy=useCurrent?cv.decision_ready_yield:g?.generic_growth?.decision_ready_yield_24h,cdy=useCurrent?cv.canonical_decision_ready_yield:g?.generic_growth?.canonical_decision_ready_yield_24h;
+  if(v3runs<1)blockers.push("embedded_collector_v3_no_recent_run");if(due>=UNIVERSAL_MERCHANT_DUE_HARD_CEILING)warnings.push("merchant_due_queue_hard_ceiling_seeding_paused");else if(due>=UNIVERSAL_MERCHANT_DUE_BUDGET)warnings.push("merchant_due_queue_soft_saturation_trickle_seed_active");if(g?.parts_growth?.legacy_detected)warnings.push("legacy_collector_2x_seen_in_rolling_window_verify_no_new_runs");if(Number(g?.generic_growth?.market_snapshots_24h||0)<1)warnings.push("generic_market_snapshot_growth_not_yet_observed");if(uy!=null&&Number(uy)<0.45)warnings.push("discovery_unique_yield_below_45pct");if(cy!=null&&Number(cy)<0.03&&Number(useCurrent?cv.discovery_candidates:g?.generic_growth?.discovery_candidates_24h||0)>=100)warnings.push("canonical_promotion_yield_below_3pct");if(my!=null&&Number(my)<0.20)warnings.push("merchant_route_evidence_yield_below_20pct");if(mty!=null&&Number(mty)<0.15)warnings.push("merchant_trust_yield_below_15pct");if(py!=null&&Number(py)<0.05)warnings.push("offer_ready_yield_below_5pct");if(dy!=null&&Number(dy)<0.10)warnings.push("decision_ready_yield_below_10pct");if(cdy!=null&&Number(cdy)<0.03&&Number(useCurrent?cv.discovery_candidates:g?.generic_growth?.discovery_candidates_24h||0)>=100)warnings.push("canonical_decision_ready_yield_below_3pct");if(Number(g?.database?.purchase_ready_offers_sample||0)<2)warnings.push("purchase_ready_merchant_offer_coverage_thin");if(Number(g?.database?.verified_merchants_sample||0)<1)warnings.push("no_verified_merchant_in_sample");if(Number(r?.external_paid_calls||0)<1)warnings.push("no_external_paid_call_yet");const systemReady=blockers.length===0;
+  return {ok:systemReady,service:PLATFORM_NAME,version:VERSION,build_id:BUILD_ID,readiness:systemReady?(warnings.length?"OPERATIONAL_WITH_WARNINGS":"PRODUCTION_READY"):"BLOCKED",blockers,warnings,metric_scope:useCurrent?"current_version":"rolling_24h",signals:{embedded_v3_runs_24h:v3runs,embedded_candidates_inserted_24h:Number(g?.parts_growth?.embedded_candidates_inserted_24h||0),generic_market_snapshots_24h:Number(g?.generic_growth?.market_snapshots_24h||0),discovery_unique_yield:uy??null,gtin_yield:useCurrent?cv.gtin_yield:g?.generic_growth?.gtin_yield_24h??null,canonical_promotion_yield:cy??null,merchant_evidence_yield:my??null,merchant_trust_yield:mty??null,purchase_ready_yield:py??null,decision_ready_yield:dy??null,canonical_decision_ready_yield:cdy??null,cross_provider_corroborated_candidates:useCurrent?cv.cross_provider_corroborated_candidates:g?.generic_growth?.cross_provider_corroborated_candidates_24h??null,canonical_per_provider_call:useCurrent?cv.canonical_per_provider_call:g?.generic_growth?.canonical_per_provider_call_24h??null,canonical_quarantined:useCurrent?cv.canonical_quarantined:g?.generic_growth?.canonical_quarantined_24h??null,brands_covered:useCurrent?cv.brands_covered:Number(g?.generic_growth?.brands_covered_24h||0),merchant_due_queue_backlog:due,purchase_ready_offers_sample:Number(g?.database?.purchase_ready_offers_sample||0),verified_merchants_sample:Number(g?.database?.verified_merchants_sample||0),external_paid_calls:Number(r?.external_paid_calls||0),external_revenue_usdc:Number(r?.external_revenue_usdc||0)},external_dependencies_note:"External merchant anti-bot controls, Cloudflare/Supabase availability and buyer demand cannot be guaranteed by Worker code.",generated_at:new Date().toISOString()};
+}
+
+function adminPage(env){return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>GLOBAL PURCHASE DECISION ADMIN ${VERSION}</title><style>
+:root{color-scheme:dark;--bg:#071019;--panel:#0d1722;--panel2:#111d2a;--line:#213244;--text:#f5f7fb;--muted:#94a3b8;--good:#44d17a;--warn:#f2c94c;--bad:#ff6b6b;--accent:#69a7ff}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#071019,#08131e 38%,#050a10);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1180px;margin:auto;padding:22px}.top{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap}.eyebrow{font-size:12px;letter-spacing:.12em;color:#8db5ff;font-weight:800}.title{font-size:29px;font-weight:900;margin:5px 0}.sub{color:var(--muted);line-height:1.5;max-width:780px}.badge{display:inline-flex;gap:7px;align-items:center;border:1px solid #27583d;background:#0e2419;color:#9af4b9;padding:8px 11px;border-radius:999px;font-size:12px;font-weight:800}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}.card{background:rgba(13,23,34,.93);border:1px solid var(--line);border-radius:14px;padding:14px;min-height:98px}.k{color:var(--muted);font-size:12px}.v{font-size:24px;font-weight:900;margin-top:7px;word-break:break-word}.v.small{font-size:16px}.section{margin-top:22px}.section h2{font-size:17px;margin:0 0 10px}.toolbar{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}.panel{background:rgba(13,23,34,.93);border:1px solid var(--line);border-radius:14px;padding:14px}.row{display:flex;gap:8px;flex-wrap:wrap}input,button{border-radius:10px;padding:12px 13px;font-size:14px}input{width:100%;background:#071019;border:1px solid #2a3b4d;color:#fff}button{border:1px solid #33506c;background:#13283c;color:#fff;font-weight:800;cursor:pointer}button.primary{background:#164d80;border-color:#2e7ec0}button.good{background:#124526;border-color:#24733e}button.warn{background:#5a4513;border-color:#96731f}button:hover{filter:brightness(1.08)}.statusline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dot{width:9px;height:9px;border-radius:50%;background:#6b7280}.dot.good{background:var(--good)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{white-space:pre-wrap;word-break:break-word;background:#050a10;border:1px solid #172535;border-radius:12px;padding:13px;max-height:430px;overflow:auto;color:#cfe3ff}.tabs{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}.tab{padding:9px 12px;background:#101c29;border:1px solid #26384a;border-radius:999px;font-size:12px;font-weight:800}.tab.active{background:#173b63;border-color:#3779b9}.metricwide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.hint{font-size:12px;color:var(--muted);line-height:1.55}.footer{margin:26px 0 10px;color:#708096;font-size:12px}@media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metricwide{grid-template-columns:1fr}.toolbar{grid-template-columns:1fr}}@media(max-width:520px){main{padding:14px}.grid{grid-template-columns:1fr 1fr}.title{font-size:23px}.v{font-size:20px}}
+</style></head><body><main>
+<div class="top"><div><div class="eyebrow">UNIVERSAL COMMERCE CONTROL PLANE</div><div class="title">GLOBAL PURCHASE DECISION</div><div class="sub">AIエージェント向け購買判断インフラの本番管理画面。収益、外部AI利用、DB自動成長、Merchant、Collector、Supabase、x402を一つの画面で監視します。Anime・Parts・一般商品は同じUniversal Coreのdomain adapterです。</div></div><div><div class="badge">● v${VERSION} / ${BUILD_ID}</div></div></div>
+<div class="section panel"><div class="toolbar"><input id="k" type="password" placeholder="REFRESH_KEY（管理KPI・運用操作に必要）"><button class="primary" onclick="refreshAll()">ダッシュボード更新</button><button onclick="deepHealth()">Deep Health</button></div><div class="hint">キーはsessionStorageだけに保持します。画面表示のために外部へ送信しません。通常監視は軽量エンドポイントを使用し、Deep Healthは手動実行です。</div></div>
+<div class="grid">
+<div class="card"><div class="k">SYSTEM</div><div class="v small" id="mSystem">確認中</div></div>
+<div class="card"><div class="k">x402 REVENUE</div><div class="v" id="mRevenue">—</div><div class="k">USDC</div></div>
+<div class="card"><div class="k">EXTERNAL PAID CALLS</div><div class="v" id="mPaid">—</div></div>
+<div class="card"><div class="k">UNIQUE PAYERS</div><div class="v" id="mPayers">—</div></div>
+<div class="card"><div class="k">PURCHASE DECISION CALLS</div><div class="v" id="mDecision">—</div></div>
+<div class="card"><div class="k">PRODUCT / CANONICAL DB</div><div class="v" id="mProducts">—</div></div>
+<div class="card"><div class="k">MERCHANT OFFERS</div><div class="v" id="mOffers">—</div></div>
+<div class="card"><div class="k">COLLECTOR / DB GROWTH</div><div class="v small" id="mCollector">—</div></div>
+</div>
+<div class="section"><h2>収益化ファネル</h2><div class="metricwide">
+<div class="panel"><div class="k">外部AIエージェント</div><div class="v" id="mAgentCalls">—</div><div class="hint">confirmed external shopping intent / external calls</div></div>
+<div class="panel"><div class="k">x402 PAYMENT ATTEMPTS</div><div class="v" id="mAttempts">—</div><div class="hint">PAYMENT-SIGNATURE retry</div></div>
+<div class="panel"><div class="k">CONVERSION</div><div class="v" id="mConversion">—</div><div class="hint">外部paid / shopping intent</div></div>
+</div></div>
+<div class="section"><h2>Universal Core</h2><div class="tabs"><span class="tab active">Universal</span><span class="tab">Parts</span><span class="tab">Anime Adapter</span><span class="tab">Generic Commerce</span><span class="tab">Merchant</span><span class="tab">x402</span></div><div class="panel"><div class="statusline"><span id="healthDot" class="dot"></span><b id="healthText">Loading…</b><span class="hint" id="healthSub"></span></div><div class="row" style="margin-top:12px"><button onclick="showPublic('/v1/universal/status')">Universal Status</button><button onclick="showPublic('/v1/system/routes')">Public Routes</button><button onclick="showPublic('/health')">Shallow Health</button><button onclick="showPublic('/openapi.json')">OpenAPI</button><button onclick="showPublic('/.well-known/x402')">x402 Discovery</button></div></div></div>
+<div class="section"><h2>DB自動拡張・更新</h2><div class="metricwide">
+<div class="panel"><div class="k">AUTONOMOUS PIPELINE</div><div class="v small" id="mPipeline">—</div><div class="hint">需要観測 → canonical化 → market refresh → 再利用</div></div>
+<div class="panel"><div class="k">PARTS COLLECTOR</div><div class="v small" id="mParts">—</div><div class="hint">メーカー公式・仕様・後継・Merchant evidence</div></div>
+<div class="panel"><div class="k">GENERIC COMMERCE</div><div class="v small" id="mGeneric">—</div><div class="hint">需要グラフ、market observation、GTIN/JAN昇格</div></div>
+</div><div class="panel" style="margin-top:12px"><div class="row"><button class="good" onclick="authRun('/admin/readiness','GET')">Production Readiness</button><button class="good" onclick="authRun('/admin/growth-status','GET')">Growth Status</button><button onclick="authRun('/admin/parts/ingest-status','GET')">Parts Ingest Status</button><button onclick="authRun('/admin/kpi','GET')">KPI Raw</button><button onclick="authRun('/admin/revenue-status','GET')">Revenue Raw</button><button onclick="authRun('/admin/final-check','GET')">Production Final Check</button></div><div class="hint">実売上は外部payerのみ表示。旧Anime固有操作はAdapters / Legacyへ隔離しています。</div></div></div>
+<div class="section"><h2>Merchant / Supply</h2><div class="metricwide">
+<div class="panel"><div class="k">ACTIVE MERCHANTS</div><div class="v" id="mMerchants">—</div></div>
+<div class="panel"><div class="k">NON-OMRON / CROSS-MERCHANT</div><div class="v small" id="mMerchantCoverage">—</div></div>
+<div class="panel"><div class="k">EVIDENCE POLICY</div><div class="v small">No paid placement</div><div class="hint">価格・在庫・納期・互換性を証拠なしで推定しません。</div></div>
+</div></div>
+<div class="section"><h2>詳細出力</h2><pre id="o">ダッシュボードを読み込みます…</pre></div>
+<div class="section"><details><summary><b>Adapters / Legacy operations</b></summary><div class="panel" style="margin-top:10px"><div class="hint">Universal Coreの後方互換として残している専門adapterです。通常運用では触る必要はありません。</div><div class="row" style="margin-top:10px"><button onclick="authRun('/admin/expand','POST')">Anime Adapter Safe Cycle</button><button onclick="authRun('/admin/quality-repair?auto=1','POST')">Anime Quality Repair</button><button onclick="authRun('/admin/world-discovery-audit?mode=all','GET')">Discovery Audit</button><button onclick="authRun('/admin/bazaar-compliance-audit','GET')">Bazaar Audit</button></div></div></details></div>
+<div class="footer">GLOBAL PURCHASE DECISION ${VERSION} · Universal Purchase Decision Engine · one paid decision layer for AI agents across physical products.</div>
+<script>
+const KEY_SESSION='global_purchase_decision_admin_key_v510';
+function key(){const e=document.getElementById('k');let v=String(e&&e.value||'').trim();if(v){try{sessionStorage.setItem(KEY_SESSION,v)}catch{}return v}try{v=String(sessionStorage.getItem(KEY_SESSION)||'').trim()}catch{}if(v&&e)e.value=v;return v}
+function initKey(){const e=document.getElementById('k');if(!e)return;try{const v=String(sessionStorage.getItem(KEY_SESSION)||'').trim();if(v)e.value=v}catch{}e.addEventListener('input',function(){try{const v=String(e.value||'').trim();if(v)sessionStorage.setItem(KEY_SESSION,v);else sessionStorage.removeItem(KEY_SESSION)}catch{}})}
+function n(v){if(v===null||v===undefined||v==='')return '—';if(typeof v==='number')return Number.isInteger(v)?String(v):String(Math.round(v*1000)/1000);return String(v)}
+function path(o,p){try{return p.split('.').reduce(function(a,k){return a==null?undefined:a[k]},o)}catch{return undefined}}
+function first(o,ps){for(const p of ps){const v=path(o,p);if(v!==undefined&&v!==null)return v}return null}
+function set(id,v){const e=document.getElementById(id);if(e)e.textContent=n(v)}
+async function req(p,auth){const h={'cache-control':'no-cache'};if(auth){const k=key();if(!k)throw new Error('REFRESH_KEY_REQUIRED');h['x-refresh-key']=k;h['x-anime-intelligence-test']='admin_ui'}const r=await fetch(p,{headers:h});const t=await r.text();let j;try{j=JSON.parse(t)}catch{j={raw:t}}if(!r.ok)throw new Error('HTTP '+r.status+' '+JSON.stringify(j).slice(0,500));return j}
+function show(j){document.getElementById('o').textContent=JSON.stringify(j,null,2)}
+function applyPublic(h,u){const ok=!!(h&&h.ok!==false&&h.status!=='offline');const d=document.getElementById('healthDot');d.className='dot '+(ok?'good':'bad');document.getElementById('healthText').textContent=ok?'ONLINE':'CHECK';document.getElementById('healthSub').textContent=(h&&h.service?h.service:'GLOBAL PURCHASE DECISION')+' / '+(h&&h.version?h.version:'${VERSION}');set('mSystem',ok?'ONLINE '+(h.version||'${VERSION}'):'CHECK');set('mPipeline',first(h,['autonomous_pipeline.current_stage','current_stage','architecture'])||'ACTIVE');set('mParts',first(h,['parts_intelligence.status'])||first(u,['database_growth.parts_catalog'])===true?'ACTIVE':'ACTIVE');set('mGeneric',first(u,['database_growth.scheduled_generic_refresh'])===true?'AUTO REFRESH ON':'ACTIVE')}
+function applyKpi(k){k=k&&k.kpi?k.kpi:k;set('mRevenue',first(k,['external_revenue_usdc','recent_history_external_revenue_usdc'])??0);set('mPaid',first(k,['external_paid_calls','recent_history_external_paid_calls'])??0);set('mPayers',first(k,['external_unique_payers','recent_history_external_unique_payers'])??0);set('mDecision',first(k,['purchase_decision_calls','confirmed_external_purchase_decision_calls','calls_by_endpoint./v1/purchase-decision','paid_calls_by_endpoint./v1/purchase-decision'])??0);set('mAgentCalls',first(k,['confirmed_external_shopping_intent_calls','real_shopping_intent_calls','external_shopping_intent_calls'])??0);set('mAttempts',first(k,['external_payment_attempts','payment_attempts','recent_history_payment_attempts'])??0);const a=Number(first(k,['confirmed_external_shopping_intent_calls','real_shopping_intent_calls','external_shopping_intent_calls'])||0),p=Number(first(k,['external_paid_calls','recent_history_external_paid_calls'])||0);set('mConversion',a>0?((p/a)*100).toFixed(1)+'%':'0%')}
+function applyParts(p){set('mProducts',first(p,['parts_sample_count','data_quality.sample_size','parts_total','canonical_parts']));set('mOffers',first(p,['merchant_offer_collection.offers_sample_count','merchant_offers_total','offers_count']));set('mMerchants',first(p,['merchant_offer_collection.active_merchants_seen','active_merchants','merchants_active']));const no=first(p,['merchant_offer_collection.non_omron_active_offers_sample','hardening.production_acceptance.non_omron_active_offer_seen_in_sample']);set('mMerchantCoverage',no===true?'NON-OMRON VERIFIED':no===false?'NEEDS COVERAGE':no);const c=first(p,['cron_health.status']);const v=first(p,['version','collector.version']);set('mCollector',(v?String(v)+' ':'')+(c||'ACTIVE'))}
+async function refreshAll(){const out={};try{const pair=await Promise.all([req('/health',false),req('/v1/universal/status',false)]);out.health=pair[0];out.universal=pair[1];applyPublic(pair[0],pair[1])}catch(e){out.public_error=String(e);document.getElementById('healthDot').className='dot bad';document.getElementById('healthText').textContent='CHECK'}if(key()){try{const r=await req('/admin/revenue-status',true);out.revenue=r;applyKpi(r)}catch(e){out.revenue_error=String(e)}try{const k=await req('/admin/kpi',true);out.kpi=k;applyKpi(k)}catch(e){out.kpi_error=String(e)}try{const p=await req('/admin/parts/ingest-status',true);out.parts=p;applyParts(p)}catch(e){out.parts_error=String(e)}}else{out.note='REFRESH_KEYを入力するとRevenue/KPI/Parts詳細まで表示します。'}show(out)}
+async function deepHealth(){try{const j=await req('/health/deep',false);show(j)}catch(e){show({error:String(e)})}}
+async function showPublic(p){try{show(await req(p,false))}catch(e){show({error:String(e),endpoint:p})}}
+async function authRun(p,m){const k=key();if(!k){show({error:'REFRESH_KEY_REQUIRED'});return}const h={'x-refresh-key':k,'cache-control':'no-cache','x-anime-intelligence-test':'admin_ui'};try{const r=await fetch(p,{method:m||'GET',headers:h}),t=await r.text();let j;try{j=JSON.parse(t)}catch{j={raw:t}}show(j)}catch(e){show({error:String(e),endpoint:p})}}
+window.addEventListener('pageshow',function(){initKey();refreshAll()});
+</script></main></body></html>`;}
+
+
+/* =========================================================
+   EMBEDDED PARTS COLLECTOR v3.0.0
+   Failover-only inside Global Purchase Decision.
+   It does not run when a recent external collector heartbeat exists.
+========================================================= */
+const EMBEDDED_PARTS_COLLECTOR=(()=>{
+// @ts-nocheck
+const VERSION="3.0.0";
+const BUILD_ID="20261026-300-consolidated-production-final-a1";
+const SERVICE="PARTS INTELLIGENCE COLLECTOR";
+
+
+const APPLICATION_TAXONOMY={
+  automotive:["ev","adas","powertrain","chassis","body","thermal","infotainment"],
+  humanoid:["joint_actuation","dexterous_hand","perception","proprioception","power","compute","thermal","connectivity","structure"],
+  physical_ai:["industrial_robot","cobot","amr","agv","drone","inspection_robot","construction_robot","agri_robot","evtOL_subsystem"],
+  component_domains:["motion","reducer","bearing","linear_motion","sensor","encoder","force_torque","vision","lidar","radar","imu","power_semiconductor","motor_driver","mcu_soc","connectivity","connector","battery_bms","thermal","emi_emc"]
+};
+
+const MANUFACTURER_UNIVERSE=[
+  {name:"OMRON",region:"JP",domains:["sensor","control","safety","relay"],applications:["industrial_robot","automotive","humanoid","amr"],official_root:"https://www.fa.omron.co.jp"},
+  {name:"Mitsubishi Electric",region:"JP",domains:["servo","plc","inverter","motor"],applications:["industrial_robot","amr","factory_automation"],official_root:"https://www.mitsubishielectric.co.jp/fa/"},
+  {name:"SMC",region:"JP",domains:["pneumatics","actuator","sensor"],applications:["industrial_robot","cobot","factory_automation"],official_root:"https://www.smcworld.com"},
+  {name:"Panasonic Industry",region:"JP",domains:["sensor","relay","motor","passive"],applications:["automotive","industrial_robot","humanoid"],official_root:"https://industry.panasonic.com"},
+  {name:"Yaskawa",region:"JP",domains:["servo","motor","drive","robotics"],applications:["industrial_robot","humanoid","amr"],official_root:"https://www.e-mechatronics.com"},

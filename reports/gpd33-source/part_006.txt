@@ -1,0 +1,300 @@
+  add(p?.msrp_jpy);
+  const m=p?.metadata||{};
+  for(const k of ["price_jpy","current_price_jpy","lowest_price_jpy","best_price_jpy","market_price_jpy","median_price_jpy"])add(m[k]);
+  for(const o of registeredRakutenAffiliateOffers(p)||[])add(o?.price_jpy);
+  return nums.length?Math.min(...nums):null;
+}
+function budgetConstraintStatus(p,intent){
+  const budget=Number(intent?.budget?.jpy_equivalent||0);
+  if(!budget||!intent?.budget?.limit)return {required:false,known:false,ok:true,price_jpy:null,budget_jpy:budget||null};
+  const price=candidateKnownPriceJpy(p);
+  if(!Number.isFinite(price))return {required:true,known:false,ok:false,price_jpy:null,budget_jpy:budget};
+  return {required:true,known:true,ok:price<=budget,price_jpy:price,budget_jpy:budget};
+}
+function timingNeedsExactIdentity(path,intent,query){
+  if(path!=="/v1/buy-wait")return false;
+  const jan=cleanJan(query),hasModel=/[A-Z]{1,5}[-_ ]?\d{2,}/i.test(String(query||""));
+  return !jan&&!hasModel;
+}
+function intentUnderstandingConfidence(intent){
+  let v=.48,reasons=[];if(intent?.characters?.length){v+=.18;reasons.push("character_recognized");}if(intent?.franchises?.length){v+=.14;reasons.push("franchise_recognized");}if(intent?.product_types?.length){v+=.12;reasons.push("product_type_recognized");}if(intent?.merch_subtypes?.length){v+=.06;reasons.push("merch_subtype_recognized");}if(intent?.budget){v+=.05;reasons.push("budget_recognized");}if(intent?.preferences?.length){v+=Math.min(.08,intent.preferences.length*.02);reasons.push("soft_preferences_recognized");}if(intent?.context_requirements?.length){v-=.20;reasons.push("external_context_missing");}v=Math.max(.25,Math.min(.98,v));return {score:Math.round(v*100)/100,label:v>=.84?"high":v>=.65?"medium":"low",reasons};
+}
+function recommendationConfidenceFromRanked(ranked=[],intent=null){
+  const top=ranked?.[0],second=ranked?.[1];if(!top)return {score:0,label:"low",reasons:["no_candidate"]};let v=.48,reasons=[];if(top?.breakdown?.intent_compatibility?.ok){v+=.18;reasons.push("explicit_constraints_match");}const gap=second?Number(top.score||0)-Number(second.score||0):12;if(gap>=15){v+=.12;reasons.push("clear_score_margin");}else if(gap>=7){v+=.07;reasons.push("moderate_score_margin");}const iq=Number(top?.product?.identification_confidence||0);if(iq>=.9){v+=.08;reasons.push("high_identity_confidence");}const u=intentUnderstandingConfidence(intent);v+=Math.max(-.12,(u.score-.6)*.25);if(intent?.context_requirements?.length){v-=.18;reasons.push("missing_external_context");}v=Math.max(.2,Math.min(.97,v));return {score:Math.round(v*100)/100,label:v>=.82?"high":v>=.62?"medium":"low",score_gap:Math.round(gap*10)/10,reasons};
+}
+
+function multilingualQueryHints(query=""){
+  const raw=repairUtf8Mojibake(String(query||"").trim()),normalized=normalizedSearchPhrase(raw),productTypes=[],franchiseGroups=[],characterGroups=[],asciiFallback=asciiSafeUnicodeIntentFallback(raw);
+  for(const [type,aliases] of Object.entries(MULTILINGUAL_PRODUCT_TYPE_ALIASES))if(aliases.some(a=>phraseIncludes(raw,a)))productTypes.push(type);
+  for(const type of directMultilingualProductTypeHints(raw))if(!productTypes.includes(type))productTypes.push(type);
+  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES))if(aliases.some(a=>strictEntityAliasMatch(raw,a)))franchiseGroups.push({canonical,aliases});
+  for(const canonical of directMultilingualFranchiseHints(raw))if(!franchiseGroups.some(g=>g.canonical===canonical))franchiseGroups.push({canonical,aliases:MULTILINGUAL_FRANCHISE_ALIASES[canonical]||[canonical]});
+  for(const group of MULTILINGUAL_CHARACTER_ALIASES){
+    if(group.aliases.some(a=>strictEntityAliasMatch(normalized,a))){
+      characterGroups.push(group);
+      if(group.franchise&&!franchiseGroups.some(g=>g.canonical===group.franchise))franchiseGroups.push({canonical:group.franchise,aliases:MULTILINGUAL_FRANCHISE_ALIASES[group.franchise]||[group.franchise]});
+    }
+  }
+  for(const c of asciiFallback.characters){const g=MULTILINGUAL_CHARACTER_ALIASES.find(x=>x.character===c);if(g&&!characterGroups.some(x=>x.character===c))characterGroups.push(g);}
+  for(const f of asciiFallback.franchises)if(!franchiseGroups.some(g=>g.canonical===f))franchiseGroups.push({canonical:f,aliases:MULTILINGUAL_FRANCHISE_ALIASES[f]||[f]});
+  const merchSubtypes=[...new Set([...merchSubtypeHints(raw),...asciiFallback.subtypes])];
+  // Merch subtype recognition is more robust than language-specific apparel words.
+  // Always promote a recognized apparel subtype to product_type=apparel so that
+  // Vietnamese/Turkish/Polish/Indic/etc. cannot lose the category after deployment.
+  if(merchSubtypes.some(x=>["tshirt","hoodie","jacket","sweatshirt","swimsuit"].includes(x))&&!productTypes.includes("apparel"))productTypes.push("apparel");
+  let onePieceContext=onePieceQueryContext(raw,productTypes,merchSubtypes,characterGroups);
+  const asciiSafeOnePiece=asciiFallback.franchises.includes("ONE PIECE");
+  // If the ASCII-safe multilingual fallback has already established ONE PIECE from
+  // a strong non-Latin franchise signal, do not let the secondary ambiguity pass
+  // erase it. Japanese garment-only ワンピース never sets asciiSafeOnePiece.
+  if(asciiSafeOnePiece&&!onePieceContext.franchise)onePieceContext={mentioned:true,franchise:true,reason:"ascii_safe_franchise_signal"};
+  if(!onePieceContext.franchise){for(let i=franchiseGroups.length-1;i>=0;i--)if(franchiseGroups[i].canonical==="ONE PIECE")franchiseGroups.splice(i,1);}
+  let residual=` ${normalized} `;
+  const removable=[...MULTILINGUAL_GENERIC_TERMS,...Object.values(MULTILINGUAL_PRODUCT_TYPE_ALIASES).flat()];
+  for(const term of removable){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
+  for(const g of franchiseGroups)for(const term of g.aliases){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
+  for(const g of characterGroups)for(const term of g.aliases){const n=normalizedSearchPhrase(term);if(n)residual=residual.split(n).join(" ");}
+  const residualTerms=[...new Set(residual.replace(/\s+/g," ").trim().split(" ").filter(x=>x.length>=2))].slice(0,4);
+  const generic_intent=GLOBAL_VAGUE_INTENT_TERMS.some(t=>phraseIncludes(normalized,t))||MULTILINGUAL_GENERIC_TERMS.some(t=>normalizedSearchPhrase(t)===normalized);
+  return {language:detectSearchLanguage(raw),product_types:[...new Set(productTypes)],franchises:franchiseGroups.map(g=>g.canonical),franchise_aliases:[...new Set(franchiseGroups.flatMap(g=>g.aliases))].slice(0,12),characters:characterGroups.map(g=>g.character),character_aliases:[...new Set(characterGroups.flatMap(g=>g.aliases))].slice(0,12),merch_subtypes:merchSubtypes,one_piece_context:onePieceContext,residual_terms:residualTerms,ambiguous_category_search:productTypes.length>0&&franchiseGroups.length===0&&characterGroups.length===0&&residualTerms.length===0,generic_intent};
+}
+function safeSearchTerm(v){return String(v||"").replace(/[,%()]/g," ").replace(/\s+/g," ").trim().slice(0,80);}
+function mergeUniqueProducts(groups=[],limit=10){const out=[],seen=new Set();for(const rows of groups){for(const p of (Array.isArray(rows)?rows:[])){if(!p?.id||seen.has(p.id))continue;seen.add(p.id);out.push(p);if(out.length>=limit)return out;}}return out;}
+
+function cleanNullishValue(v){const s=String(v??"").trim();return !s||s.toLowerCase()==="null"||s.toLowerCase()==="undefined"?null:v;}
+function cleanNullableTitle(v){const x=cleanNullishValue(v);return x===null?null:cleanOfficialTitle(x);}
+function discoveryTitle(p){return `${cleanNullishValue(p?.canonical_name_ja)||""} ${cleanNullishValue(p?.canonical_name_en)||""}`.trim();}
+function discoveryClassifier(p){return classifyProduct(discoveryTitle(p));}
+const DISCOVERY_FRANCHISE_HINTS=[
+  ["JoJo's Bizarre Adventure",["\u30b8\u30e7\u30b8\u30e7\u306e\u5947\u5999\u306a\u5192\u967a","jojo","steel ball run","\u30b9\u30c6\u30a3\u30fc\u30eb\u30fb\u30dc\u30fc\u30eb\u30fb\u30e9\u30f3"]],
+  ["Rurouni Kenshin",["\u308b\u308d\u3046\u306b\u5263\u5fc3","rurouni kenshin"]],
+  ["Monster Hunter",["monster hunter","\u30e2\u30f3\u30b9\u30bf\u30fc\u30cf\u30f3\u30bf\u30fc","\u602a\u7269\u730e\u4eba","\u602a\u7269\u7375\u4eba"]],
+  ["Sword Art Online",["sword art online","\u30bd\u30fc\u30c9\u30a2\u30fc\u30c8\u30fb\u30aa\u30f3\u30e9\u30a4\u30f3","sao"]],
+  ["Chainsaw Man",["chainsaw man","\u30c1\u30a7\u30f3\u30bd\u30fc\u30de\u30f3","\u94fe\u952f\u4eba","\u93c8\u92f8\u4eba"]],
+  ["Blue Lock",["blue lock","\u30d6\u30eb\u30fc\u30ed\u30c3\u30af"]],
+  ["Spy x Family",["spy x family","spy\u00d7family","\u30b9\u30d1\u30a4\u30d5\u30a1\u30df\u30ea\u30fc"]],
+  ["Oshi no Ko",["oshi no ko","\u3010\u63a8\u3057\u306e\u5b50\u3011","\u63a8\u3057\u306e\u5b50"]],
+  ["Re:ZERO",["re:zero","re zero","\u30ea\u30bc\u30ed"]],
+  ["Puella Magi Madoka Magica",["madoka magica","\u9b54\u6cd5\u5c11\u5973\u307e\u3069\u304b\u2606\u30de\u30ae\u30ab","\u307e\u3069\u30de\u30ae"]],
+  ["Pretty Cure",["pretty cure","precure","\u30d7\u30ea\u30ad\u30e5\u30a2"]]
+];
+function titleLooksLikeGarmentOnePiece(rawTitle=""){
+  const raw=String(rawTitle||"").normalize("NFKC");
+  // "one-piece / ワンピース" is also an ordinary clothing term. Fashion cues must win
+  // over a stored ONE PIECE franchise label unless a real character/IP cue is present.
+  return /(?:\u79c1\u670d|\u8863\u88c5|\u6d0b\u670d|\u30c9\u30ec\u30b9|\u6c34\u7740|\u30dc\u30c7\u30a3\u30b9\u30fc\u30c4|\u30b5\u30a4\u30af\u30eb|\u30bb\u30d1\u30ec\u30fc\u30c8|\u30ec\u30c7\u30a3\u30fc\u30b9|\u30a6\u30a3\u30e1\u30f3|\u30d5\u30a1\u30c3\u30b7\u30e7\u30f3|\u304a\u6d12\u843d|bodysuit|dress|swimsuit|cycling|fashion|ladies|women(?:'s)?|two[- ]piece|one[- ]piece\s*(?:dress|gown|skirt|style|fashion)|\u30ef\u30f3\u30d4\u30fc\u30b9\s*(?:ver\.?|version|\u30d0\u30fc\u30b8\u30e7\u30f3|\u670d|\u30b9\u30bf\u30a4\u30eb|\u30b3\u30fc\u30c7)|(?:\u30b5\u30de\u30fc|\u30ab\u30b8\u30e5\u30a2\u30eb|\u304a\u3067\u304b\u3051).*\u30ef\u30f3\u30d4\u30fc\u30b9)/i.test(raw);
+}
+function titleInferredDiscoveryFranchise(p){
+  const rawTitle=discoveryTitle(p),title=normalizedSearchPhrase(rawTitle);
+  // Prefer explicit franchise names such as SPY x FAMILY before broad aliases that can also be ordinary Japanese words.
+  for(const [canonical,aliases] of DISCOVERY_FRANCHISE_HINTS)if(aliases.some(a=>phraseIncludes(title,a)))return canonical;
+  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES)){
+    if(canonical==="ONE PIECE"&&titleLooksLikeGarmentOnePiece(rawTitle)){
+      const explicit=/one\s*piece|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\u30eb\u30d5\u30a3|\u9ea6\u308f\u3089/i.test(rawTitle);
+      if(!explicit)continue;
+    }
+    if(aliases.some(a=>phraseIncludes(title,a)))return canonical;
+  }
+  return null;
+}
+function storedDiscoveryFranchiseIsFalsePositive(p,stored){
+  const f=String(stored||"").trim(),title=String(cleanNullishValue(p?.canonical_name_ja)||"");
+  if(f.toUpperCase()==="ONE PIECE"){
+    const strongIp=/(?:\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\u30eb\u30d5\u30a3|\u30be\u30ed|\u30b5\u30f3\u30b8|\u30ca\u30df|\u30c1\u30e7\u30c3\u30d1\u30fc|\u30ed\u30d3\u30f3|\u30a8\u30fc\u30b9|\u30b7\u30e3\u30f3\u30af\u30b9|\u9ea6\u308f\u3089|monkey\s*d\.?\s*luffy|roronoa\s*zoro)/i.test(title);
+    const garment=titleLooksLikeGarmentOnePiece(title);
+    if(garment&&!strongIp)return true;
+  }
+  return false;
+}
+function inferredDiscoveryFranchise(p){
+  const stored=cleanNullishValue(p?.franchise);
+  if(stored&&!storedDiscoveryFranchiseIsFalsePositive(p,stored))return stored;
+  return titleInferredDiscoveryFranchise(p);
+}
+function broadDiscoveryEligible(p){
+  if(!p?.id)return false;
+  const quality=Number(marketIdentityQuality(p)||0),stored=String(p.product_type||""),cls=discoveryClassifier(p),franchise=discoverySafeFranchise(p),title=normalizedSearchPhrase(discoveryTitle(p));
+  if(quality<30)return false;
+  if(/(?:\bcd\b|dvd|blu[ -]?ray|soundtrack|\u30b5\u30f3\u30c8\u30e9|\u521d\u56de\u751f\u7523\u9650\u5b9a\u76e4)/i.test(title)&&!franchise)return false;
+  // Apparel and sneakers are noisy marketplace categories. Broad discovery only keeps them when a recognizable character/IP is present.
+  if((stored==="apparel"||stored==="sneaker")&&!franchise)return false;
+  if((stored==="apparel"||stored==="sneaker")&&/(?:cosplay|\u30b3\u30b9\u30d7\u30ec|\u4eee\u88c5|\u8863\u88c5\s*(?:\u30a6\u30a3\u30c3\u30b0|\u9774)|halloween)/i.test(title))return false;
+  if((stored==="apparel"||stored==="sneaker")&&cls.type==="other"&&!franchise)return false;
+  if(cls.confidence>=.94&&cls.type!=="other"&&stored&&cls.type!==stored&&!["figure","nendoroid","figma"].includes(stored))return false;
+  return true;
+}
+function broadDiscoveryScore(p){
+  let score=Number(marketIdentityQuality(p)||0);const cls=discoveryClassifier(p),stored=String(p?.product_type||"");
+  if(cleanNullishValue(p?.franchise))score+=12;
+  if(cleanNullishValue(p?.canonical_name_en))score+=8;
+  if(p?.official_url)score+=6;
+  if(p?.official_image_url)score+=6;
+  if(p?.jan_code)score+=4;
+  if(p?.original_release_date)score+=3;
+  if(p?.msrp_jpy)score+=2;
+  if(cls.type===stored&&cls.confidence>=.94)score+=10;
+  if(cls.confidence>=.94&&cls.type!=="other"&&stored&&cls.type!==stored)score-=25;
+  return score;
+}
+function discoveryEffectiveType(p){const cls=discoveryClassifier(p),stored=String(p?.product_type||"other");return cls.confidence>=.94&&cls.type!=="other"?cls.type:stored;}
+function discoverySafeFranchise(p){
+  const f=cleanNullishValue(p?.franchise);
+  if(f&&!storedDiscoveryFranchiseIsFalsePositive(p,f))return f;
+  return titleInferredDiscoveryFranchise(p);
+}
+function diversifyBroadDiscoveryProducts(rows=[],limit=10){
+  const ranked=[...(Array.isArray(rows)?rows:[])].filter(broadDiscoveryEligible).sort((a,b)=>broadDiscoveryScore(b)-broadDiscoveryScore(a));
+  const out=[],seenIds=new Set(),seenTypes=new Set(),seenFranchises=new Set(),franchiseCounts=new Map();
+  const add=p=>{if(!p?.id||seenIds.has(p.id))return false;const t=discoveryEffectiveType(p),f=discoverySafeFranchise(p),fk=normalizedSearchPhrase(f||"");seenIds.add(p.id);seenTypes.add(t);if(fk){seenFranchises.add(fk);franchiseCounts.set(fk,(franchiseCounts.get(fk)||0)+1);}out.push(p);return true;};
+  // Pass 1: maximize both category and IP diversity. Do not spend several category slots on one franchise.
+  for(const p of ranked){const t=discoveryEffectiveType(p),f=discoverySafeFranchise(p),fk=normalizedSearchPhrase(f||"");if(seenTypes.has(t))continue;if(fk&&seenFranchises.has(fk))continue;add(p);if(out.length>=limit)return out;}
+  // Pass 2: add unseen franchises even when the product category repeats.
+  for(const p of ranked){if(seenIds.has(p.id))continue;const fk=normalizedSearchPhrase(discoverySafeFranchise(p)||"");if(!fk||seenFranchises.has(fk))continue;add(p);if(out.length>=limit)return out;}
+  // Pass 3: fill missing product categories, but cap any one franchise at two results.
+  for(const p of ranked){if(seenIds.has(p.id))continue;const t=discoveryEffectiveType(p),fk=normalizedSearchPhrase(discoverySafeFranchise(p)||"");if(seenTypes.has(t))continue;if(fk&&(franchiseCounts.get(fk)||0)>=2)continue;add(p);if(out.length>=limit)return out;}
+  // Pass 4: quality fill with a hard two-result cap per franchise to prevent JoJo/Pokemon/etc. domination.
+  for(const p of ranked){if(seenIds.has(p.id))continue;const fk=normalizedSearchPhrase(discoverySafeFranchise(p)||"");if(fk&&(franchiseCounts.get(fk)||0)>=2)continue;add(p);if(out.length>=limit)return out;}
+  // Last resort only if the catalog slice is unusually narrow.
+  for(const p of ranked){if(seenIds.has(p.id))continue;add(p);if(out.length>=limit)return out;}
+  return out;
+}
+async function broadCatalogDiscovery(env,limit=10){
+  const clusters=[
+    "figure,nendoroid,figma,model_kit",
+    "plush,trading_card",
+    "acrylic_goods,keychain,badge,lottery_prize",
+    "sneaker,apparel"
+  ];
+  const groups=[];
+  for(const cluster of clusters){
+    const rows=await sbOptional(env,`/products?select=*&product_type=in.(${cluster})&official_image_url=not.is.null&limit=160`);
+    groups.push(Array.isArray(rows)?rows:[]);
+  }
+  return diversifyBroadDiscoveryProducts(groups.flat(),limit);
+}
+
+/* =========================================================
+   PRODUCT SEARCH
+========================================================= */
+
+
+function canonicalizeDiscoveryFranchise(v){
+  const n=normalizedSearchPhrase(v);
+  if(!n)return null;
+  for(const [canonical,aliases] of Object.entries(MULTILINGUAL_FRANCHISE_ALIASES)){
+    if(normalizedSearchPhrase(canonical)===n||aliases.some(a=>normalizedSearchPhrase(a)===n))return canonical;
+  }
+  return String(v||"").trim()||null;
+}
+function discoveryTypeMatchesHint(actual,hint){
+  const a=String(actual||"").toLowerCase(),h=String(hint||"").toLowerCase();
+  if(!a||!h)return false;
+  if(a===h)return true;
+  const equivalents=new Set((PRODUCT_TYPE_SEARCH_EQUIVALENTS[h]||[h]).map(x=>String(x).toLowerCase()));
+  return equivalents.has(a);
+}
+function discoveryProductFitScore(p,hints,query=""){
+  let score=broadDiscoveryScore(p);
+  const actualType=discoveryEffectiveType(p),actualFranchise=canonicalizeDiscoveryFranchise(discoverySafeFranchise(p));
+  const wantedTypes=hints?.product_types||[],wantedFranchises=(hints?.franchises||[]).map(canonicalizeDiscoveryFranchise),wantedCharacters=hints?.characters||[];
+  if(wantedTypes.length)score+=wantedTypes.some(t=>discoveryTypeMatchesHint(actualType,t))?140:-220;
+  if(wantedFranchises.length)score+=wantedFranchises.some(f=>String(f||"").toLowerCase()===String(actualFranchise||"").toLowerCase())?160:-260;
+  if(wantedCharacters.length)score+=candidateMatchesIntentCharacters(p,wantedCharacters)?170:-320;
+  const title=normalizedSearchPhrase(discoveryTitle(p));
+  for(const term of (hints?.residual_terms||[]))if(phraseIncludes(title,term))score+=24;
+  const qn=normalizedSearchPhrase(query);
+  if(qn&&phraseIncludes(title,qn))score+=80;
+  return score;
+}
+function rankAndFilterDiscoveryProducts(rows=[],hints={},query="",limit=10){
+  const structured=(hints.product_types?.length||0)+(hints.franchises?.length||0)+(hints.characters?.length||0)+(hints.merch_subtypes?.length||0)>0;
+  const scored=(Array.isArray(rows)?rows:[]).filter(p=>p?.id).map(p=>({
+    p,
+    score:discoveryProductFitScore(p,hints,query),
+    type_ok:!hints.product_types?.length||hints.product_types.some(t=>discoveryTypeMatchesHint(discoveryEffectiveType(p),t)),
+    franchise_ok:!hints.franchises?.length||hints.franchises.map(canonicalizeDiscoveryFranchise).some(f=>String(f||"").toLowerCase()===String(canonicalizeDiscoveryFranchise(discoverySafeFranchise(p))||"").toLowerCase()),
+    character_ok:!hints.characters?.length||candidateMatchesIntentCharacters(p,hints.characters),
+    merch_subtype_ok:!hints.merch_subtypes?.length||candidateMatchesMerchSubtype(p,hints.merch_subtypes)
+  }));
+  const filtered=structured?scored.filter(x=>x.type_ok&&x.franchise_ok&&x.character_ok&&x.merch_subtype_ok):scored;
+  // Never leak incompatible products for an explicit franchise/character/type/subtype intent.
+  // If nothing compatible is in this slice, return [] so the caller can run a targeted fallback.
+  return (structured?filtered:scored).sort((a,b)=>b.score-a.score).slice(0,limit).map(x=>x.p);
+}
+
+
+function preferredFranchiseSearchAlias(franchise=""){
+  const preferred={
+    "ONE PIECE":"\u30ef\u30f3\u30d4\u30fc\u30b9",
+    "Pokemon":"\u30dd\u30b1\u30e2\u30f3",
+    "Hatsune Miku":"\u521d\u97f3\u30df\u30af",
+    "Gundam":"\u30ac\u30f3\u30c0\u30e0",
+    "Dragon Ball":"\u30c9\u30e9\u30b4\u30f3\u30dc\u30fc\u30eb",
+    "Demon Slayer":"\u9b3c\u6ec5\u306e\u5203",
+    "Jujutsu Kaisen":"\u546a\u8853\u5efb\u6226",
+    "NARUTO":"\u30ca\u30eb\u30c8",
+    "BLEACH":"BLEACH",
+    "My Hero Academia":"\u50d5\u306e\u30d2\u30fc\u30ed\u30fc\u30a2\u30ab\u30c7\u30df\u30a2",
+    "Attack on Titan":"\u9032\u6483\u306e\u5de8\u4eba",
+    "Evangelion":"\u30a8\u30f4\u30a1\u30f3\u30b2\u30ea\u30aa\u30f3"
+  };
+  return preferred[franchise]||franchise||"";
+}
+
+function intentCharacterGroups(chars=[]){
+  const wanted=new Set((Array.isArray(chars)?chars:[chars]).map(x=>normalize(x||"")).filter(Boolean));
+  return MULTILINGUAL_CHARACTER_ALIASES.filter(g=>wanted.has(normalize(g.character||"")));
+}
+function candidateCharacterText(p){
+  const chars=Array.isArray(p?.character_names)?p.character_names.join(" "):(p?.character_names||"");
+  return normalizedSearchPhrase([discoveryTitle(p),chars,p?.series,p?.brand,p?.manufacturer].filter(Boolean).join(" "));
+}
+function candidateMatchesIntentCharacters(p,chars=[]){
+  const groups=intentCharacterGroups(chars);
+  if(!groups.length)return false;
+  const raw=[discoveryTitle(p),Array.isArray(p?.character_names)?p.character_names.join(" "):(p?.character_names||""),p?.series,p?.brand,p?.manufacturer].filter(Boolean).join(" ").normalize("NFKC");
+  const text=candidateCharacterText(p);
+  for(const g of groups){
+    const c=String(g.character||"");
+    // ASCII-safe direct patterns protect CJK/Korean character matching from copy/deploy encoding issues.
+    if(c==="Pikachu"&&/(?:pikachu|\u30d4\u30ab\u30c1\u30e5\u30a6|\u76ae\u5361\u4e18|\ud53c\uce74\uce04)/i.test(raw))return true;
+    if(c==="Monkey D. Luffy"&&/(?:monkey\s*d\.?\s*luffy|(?<![a-z])luffy(?![a-z])|\u30e2\u30f3\u30ad\u30fc[\s\u30fb]*d[\s\u30fb]*\u30eb\u30d5\u30a3|(?<![\u30a1-\u30f6\u30fc])\u30eb\u30d5\u30a3|\u30ef\u30f3\u30d4\u30fc\u30b9\s*\u30eb\u30d5\u30a3|\u8def\u98de|\u9b6f\u592b|\ub8e8\ud53c)/i.test(raw))return true;
+    if(c==="Roronoa Zoro"&&/(?:roronoa\s*zoro|(?<![a-z])zoro(?![a-z])|\u30ed\u30ed\u30ce\u30a2[\s\u30fb]*\u30be\u30ed|\u30be\u30ed|\u7d22\u9686|\uc870\ub85c)/i.test(raw))return true;
+    if(c==="Naruto Uzumaki"&&/(?:naruto\s*uzumaki|uzumaki\s*naruto|\u3046\u305a\u307e\u304d\s*\u30ca\u30eb\u30c8|\u6f29\u6da1\u9cf4\u4eba|\u6f29\u6e26\u9cf4\u4eba)/i.test(raw))return true;
+    if(c==="Sasuke Uchiha"&&/(?:sasuke(?:\s*uchiha)?|\u3046\u3061\u306f\s*\u30b5\u30b9\u30b1|\u30b5\u30b9\u30b1|\u4f50\u52a9|\uc0ac\uc2a4\ucf00)/i.test(raw))return true;
+    if(c==="Hatsune Miku"&&/(?:hatsune\s*miku|\u521d\u97f3\u30df\u30af|\u521d\u97f3\u672a\u6765|\u521d\u97f3\u672a\u4f86|\ud558\uce20\ub124\s*\ubbf8\ucfe0)/i.test(raw))return true;
+    if(g.aliases.some(a=>strictEntityAliasMatch(text,a)))return true;
+  }
+  return false;
+}
+function candidateMatchesIntentFranchises(p,franchises=[]){
+  const title=String(discoveryTitle(p)||"").normalize("NFKC");
+  const actual=canonicalizeDiscoveryFranchise(discoverySafeFranchise(p));
+  if(String(actual||"").toUpperCase()==="ONE PIECE"&&titleLooksLikeGarmentOnePiece(title)){
+    const explicit=/\bONE\s*PIECE\b|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\u30eb\u30d5\u30a3|\u30be\u30ed|\u30b5\u30f3\u30b8|\u30a8\u30fc\u30b9|\u30c1\u30e7\u30c3\u30d1\u30fc|\u30ed\u30fc|\u30ca\u30df|\u30ed\u30d3\u30f3|\u30b7\u30e3\u30f3\u30af\u30b9/i.test(title);
+    if(!explicit)return false;
+  }
+  const wanted=(franchises||[]).map(canonicalizeDiscoveryFranchise);
+  if(wanted.some(f=>String(f||"").toLowerCase()===String(actual||"").toLowerCase()))return true;
+  // Marketplace-derived rows can have a missing or stale franchise column. For a small
+  // set of high-confidence IP tokens, allow title evidence to rescue the franchise.
+  // ONE PIECE keeps the garment false-positive guard above.
+  for(const f of wanted){
+    if(f==="NARUTO"&&/(?:\bNARUTO\b|\u30ca\u30eb\u30c8)/i.test(title))return true;
+    if(f==="Pokemon"&&/(?:\bPokemon\b|\bPok[eé]mon\b|\u30dd\u30b1\u30e2\u30f3|\u30d4\u30ab\u30c1\u30e5\u30a6)/i.test(title))return true;
+    if(f==="Hatsune Miku"&&/(?:Hatsune\s*Miku|\u521d\u97f3\u30df\u30af)/i.test(title))return true;
+    if(f==="ONE PIECE"&&!titleLooksLikeGarmentOnePiece(title)&&/(?:\bONE\s*PIECE\b|\u6d77\u8cca\u738b|\u822a\u6d77\u738b|\u30ef\u30f3\u30d4\u30fc\u30b9|\u30eb\u30d5\u30a3|\u30be\u30ed)/i.test(title))return true;
+  }
+  return false;
+}
+function candidateMatchesIntentTypes(p,types=[]){
+  const actual=discoveryEffectiveType(p);
+  if((types||[]).some(t=>discoveryTypeMatchesHint(actual,t)))return true;
+  // Marketplace/catalog rows are sometimes misclassified even though the title clearly
+  // identifies an apparel subtype. Treat an explicit T-shirt/hoodie/jacket/etc. title
+  // as apparel so natural shopping requests are not rejected by stale product_type data.
+  if((types||[]).includes("apparel")){
+    const subs=merchSubtypeHints(discoveryTitle(p));
+    if(subs.some(x=>["tshirt","hoodie","jacket","sweatshirt","swimsuit"].includes(x)))return true;
+  }
+  return false;

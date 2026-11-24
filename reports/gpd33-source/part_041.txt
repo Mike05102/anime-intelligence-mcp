@@ -1,0 +1,300 @@
+  const stock=stockQty!=null?(stockQty>0?"in_stock":"out_of_stock"):(nonStocked?"backorder":"unknown");
+  return [{
+    part_number:pn.trim(),price:active?price:null,reference_price:null,
+    availability_label:nonStocked?"Non-Stocked":(stockQty!=null?`stock:${stockQty}`:null),stock_status:stock,stock_quantity:Number.isFinite(stockQty)?stockQty:null,active,
+    tax_included:false,lead_time_days:null,merchant_sku:sku,currency:"USD",
+    identity_evidence:"mouser_mfr_part_number",
+    status_evidence:nonStocked?"mouser_non_stocked":(stockQty!=null?"mouser_stock_quantity":(price!=null?"mouser_public_price":"no_positive_purchase_evidence")),
+    commerce_window_chars:text.length,segment:text.slice(0,1400)
+  }];
+}
+
+function collectorSelfTest(){
+  const pure=[
+    ["discontinued_not_active",classifyMonotaroCommerce({discontinued:true,salePrice:6500,leadDays:0}).active===false],
+    ["discontinued_out_of_stock",classifyMonotaroCommerce({discontinued:true,salePrice:6500,leadDays:0}).stock_status==="out_of_stock"],
+    ["live_active",classifyMonotaroCommerce({discontinued:false,salePrice:6998,leadDays:0}).active===true],
+    ["live_in_stock",classifyMonotaroCommerce({discontinued:false,salePrice:6998,leadDays:0}).stock_status==="in_stock"],
+    ["live_price",classifyMonotaroCommerce({discontinued:false,salePrice:6998,leadDays:0}).price===6998],
+    ["uncertain_fail_closed",classifyMonotaroCommerce({discontinued:false,salePrice:null,leadDays:null}).active===false]
+  ];
+  const deadPrint=`\u53d6\u308a\u6271\u3044\u7d42\u4e86 \u5927\u5909\u7533\u3057\u8a33\u3054\u3056\u3044\u307e\u305b\u3093\u304c\u3001\u3053\u306e\u5546\u54c1\u306f\u53d6\u308a\u6271\u3044\u3092\u7d42\u4e86\u3044\u305f\u3057\u307e\u3057\u305f\u3002 \u6ce8\u6587\u30b3\u30fc\u30c9 02087872 \u54c1\u756a E2E-X5ME1 \u5185\u5bb9\u91cf 1\u500b \u53c2\u8003\u57fa\u6e96\u4fa1\u683c(\u7a0e\u5225) \uffe56,500`;
+  const livePrint=`\u5f53\u65e5\u51fa\u8377\u3068\u306f \u6ce8\u6587\u30b3\u30fc\u30c9 63696353 \u54c1\u756a E2E-X2MC18 2M \u5185\u5bb9\u91cf 1\u500b \u53c2\u8003\u57fa\u6e96\u4fa1\u683c(\u7a0e\u5225) \uffe57,300 \u5358\u4fa1(\u7a0e\u5225) \uffe56,998`;
+  const dead=parseMonotaroEvidenceText(deadPrint,"https://www.monotaro.com/p/0208/7872/print/");
+  const live=parseMonotaroEvidenceText(livePrint,"https://www.monotaro.com/p/6369/6353/print/");
+  const misumiText=`\u578b\u756a : E2E-X2C28 2M \u901a\u5e38\u5358\u4fa1(\u7a0e\u5225) 6,735\u5186 \u901a\u5e38\u51fa\u8377\u65e5\uff1a\u5728\u5eab\u54c11\u65e5\u76ee\u5f53\u65e5\u51fa\u8377\u53ef\u80fd`;
+  const misumi=parseMisumiOffers({slug:"offer-misumi-omron"},{url:"https://jp.misumi-ec.com/vona2/detail/221006389865/?HissuCode=E2E-X2C28+2M",text:misumiText,html:""})[0];
+  const dkText=`DigiKey\u88fd\u54c1\u756a E2E-X2MC182M-ND \u30e1\u30fc\u30ab\u30fc\u88fd\u54c1\u756a E2E-X2MC18 2M \u90e8\u54c1\u72b6\u6cc1 \u30a2\u30af\u30c6\u30a3\u30d6 \u5728\u5eab\uff1a6\u500b \u5358\u4fa1\uff08\u6d88\u8cbb\u7a0e\u629c\u304d\uff09: \uffe515,806.00000`;
+  const dk=parseDigiKeyOffers({slug:"offer-digikey-omron"},{url:"https://www.digikey.jp/ja/products/detail/omron-automation-and-safety/E2E-X2MC18-2M/10221642",text:dkText,html:""})[0];
+  const mouserText=`Mouser #: 653-E2EX2MC182M Mfr. #: E2E-X2MC18 2M Availability Stock: Non-Stocked Pricing (USD) Qty. Unit Price Ext. Price 1 $88.09 $88.09`;
+  const mouser=parseMouserOffers({slug:"offer-mouser-omron"},{url:"https://www.mouser.com/ProductDetail/Omron-Automation-and-Safety/E2E-X2MC18-2M",text:mouserText,html:""})[0];
+  const parserChecks=[
+    ["print_dead_parser",dead?.active===false&&dead?.stock_status==="out_of_stock"&&dead?.reference_price===6500],
+    ["print_live_parser",live?.active===true&&live?.stock_status==="in_stock"&&live?.price===6998&&live?.part_number==="E2E-X2MC18 2M"],
+    ["misumi_parser",misumi?.active===true&&misumi?.price===6735&&misumi?.stock_status==="in_stock"],
+    ["digikey_parser",dk?.active===true&&dk?.price===15806&&dk?.stock_quantity===6],
+    ["mouser_parser",mouser?.active===true&&mouser?.price===88.09&&mouser?.currency==="USD"&&mouser?.stock_status==="backorder"]
+  ];
+  const universeChecks=[
+    ["manufacturer_universe_60_plus",MANUFACTURER_UNIVERSE.length>=60],
+    ["official_watch_all_manufacturers",new Set(OFFICIAL_WATCH_SOURCES.filter(x=>x.collection_enabled!==false).map(x=>x.manufacturer)).size===MANUFACTURER_UNIVERSE.length],
+    ["merchant_adapter_all_manufacturers",new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&["monotaro-japan","misumi-japan","digikey-japan","mouser"].includes(x.merchant_slug)).map(x=>x.manufacturer)).size===MANUFACTURER_UNIVERSE.length],
+    ["merchant_adapter_four_channels",["monotaro-japan","misumi-japan","digikey-japan","mouser"].every(ms=>new Set(OFFER_SOURCES.filter(x=>x.collection_enabled!==false&&x.merchant_slug===ms).map(x=>x.manufacturer)).size===MANUFACTURER_UNIVERSE.length)],
+    ["merchant_search_builder",!!merchantSearchUrl({merchant_slug:"misumi-japan"},"E2E-X2MC18 2M")&&!!merchantSearchUrl({merchant_slug:"digikey-japan"},"E2E-X2MC18 2M")],
+    ["application_taxonomy_present",APPLICATION_TAXONOMY.humanoid.includes("joint_actuation")&&APPLICATION_TAXONOMY.automotive.includes("ev")]
+  ];
+  const hardeningChecks=[
+    ["rotation_window_wraps",rotateWindow([{slug:"a"},{slug:"b"},{slug:"c"}],1,2).map(x=>x.slug).join(",")==="c,a"],
+    ["generated_search_page_rejected",merchantEvidenceGate({generated_adapter:true,merchant_slug:"digikey-japan",manufacturer:"OMRON"},{part_number:"E2E-X2MC18 2M",active:true,status_evidence:"x"},"OMRON E2E-X2MC18 2M","https://www.digikey.jp/ja/products/result?keywords=E2E-X2MC18%202M").ok===false],
+    ["generated_detail_brand_gate_pass",merchantEvidenceGate({generated_adapter:true,merchant_slug:"digikey-japan",manufacturer:"OMRON"},{part_number:"E2E-X2MC18 2M",active:true,status_evidence:"x"},"OMRON manufacturer part number E2E-X2MC18 2M","https://www.digikey.jp/ja/products/detail/omron-automation-and-safety/E2E-X2MC18-2M/10221642").ok===true],
+    ["generated_detail_wrong_brand_rejected",merchantEvidenceGate({generated_adapter:true,merchant_slug:"digikey-japan",manufacturer:"ROHM"},{part_number:"E2E-X2MC18 2M",active:true,status_evidence:"x"},"OMRON E2E-X2MC18 2M","https://www.digikey.jp/ja/products/detail/omron-automation-and-safety/E2E-X2MC18-2M/10221642").ok===false],
+    ["retry_429_cooldown",retryPolicy("HTTP_429;JINA_HTTP_429",1).delay_hours===24],
+    ["retry_403_cooldown",retryPolicy("HTTP_403",1).delay_hours===72],
+    ["retry_db_timeout_short",retryPolicy("Supabase 504: upstream request timeout",1).delay_hours===1],
+    ["offer_detail_detection_monotaro",isLikelyMerchantDetailUrl({merchant_slug:"monotaro-japan"},"https://www.monotaro.com/p/6369/6353/")===true],
+    ["offer_search_detection_monotaro",isLikelyMerchantDetailUrl({merchant_slug:"monotaro-japan"},"https://www.monotaro.com/s/q-E2E-X2MC18/")===false],
+    ["bounded_offer_run",MAX_OFFER_ITEMS_PER_RUN<=4],
+    ["queue_budget_enabled",QUEUE_ACTIVE_BUDGET>=200&&QUEUE_ACTIVE_BUDGET<=1000],
+    ["relation_status_schema_contract",RELATION_STATUS_DIAGNOSTIC_PATH.includes("observed_at")&&!RELATION_STATUS_DIAGNOSTIC_PATH.includes("created_at")],
+    ["catalog_fallback_attempt_budget",MAX_CATALOG_ITEMS_PER_RUN>=2&&MAX_CATALOG_ITEMS_PER_RUN<=4],
+    ["watch_fallback_attempt_budget",MAX_WATCH_ITEMS_PER_RUN>=2&&MAX_WATCH_ITEMS_PER_RUN<=4],
+    ["offer_fallback_attempt_budget",MAX_OFFER_ITEMS_PER_RUN>=2&&MAX_OFFER_ITEMS_PER_RUN<=4],
+    ["daily_seed_guard_below_global_budget",DAILY_SEED_PAUSE_THRESHOLD<QUEUE_ACTIVE_BUDGET],
+    ["merchant_queue_budget_isolated",MERCHANT_QUEUE_BUDGET<DAILY_SEED_PAUSE_THRESHOLD],
+    ["hard_queue_ceiling_above_normal_budget",HARD_QUEUE_CEILING>QUEUE_ACTIVE_BUDGET],
+    ["external_source_error_classifier",isExpectedExternalSourceError("HTTP_403;FALLBACK_JINA_HTTP_429:https://example.com")&&!isExpectedExternalSourceError("Supabase 504: upstream request timeout")],
+    ["merchant_global_drain_enabled",MERCHANT_GLOBAL_DRAIN_LIMIT>0&&MERCHANT_GLOBAL_DRAIN_LIMIT<=MAX_OFFER_ITEMS_PER_RUN],
+    ["merchant_soft_budget_below_hard_ceiling",MERCHANT_QUEUE_BUDGET<MERCHANT_QUEUE_HARD_CEILING],
+    ["merchant_trickle_seed_bounded",MERCHANT_TRICKLE_SEED_MAX_ROWS===1],
+    ["merchant_due_backlog_excludes_future_cooldown",activeMerchantQueueBacklog.toString().includes("next_attempt_at=lte")],
+    ["monotaro_group_hub_discovery",merchantDetailCandidates.toString().includes("isMerchantDiscoveryHubUrl")&&MERCHANT_ADAPTER_TEMPLATES.find(x=>x.merchant_slug==="monotaro-japan")?.allowPrefixes?.some(x=>x.includes("/g/"))],
+    ["merchant_disabled_queue_cleanup_enabled",OFFER_SOURCES.some(x=>x.collection_enabled===false)],
+    ["official_watch_canonical_enrichment_enabled",contextualOfficialModels("OMRON","型番 E2E-X2MC18 2M","OMRON sensor").length>0],
+    ["engineering_spec_extraction_enabled",(()=>{const m=extractEngineeringSpecs("定格トルク: 2.5 N·m 定格回転数: 3000 rpm", "https://example.invalid");const tq=m.find(x=>x.key==="torque"),sp=m.find(x=>x.key==="speed");return !!tq&&tq.value===2.5&&String(tq.unit).includes("N")&&!!sp&&sp.value===3000&&String(sp.unit).toLowerCase()==="rpm";})()],
+    ["relation_auto_verification_guard_enabled",true],
+    ["merchant_non_omron_priority_enabled",NON_OMRON_MERCHANT_PRIORITY.length>=20]
+  ];
+  const exactFixture=canonicalEvidenceForModel({manufacturer:"OMRON"},"品番 E2E-X2MC18 2M 定格トルク 2.5 N·m","E2E-X2MC18 2M","https://example.com/product/detail/E2E-X2MC18-2M","E2E-X2MC18 2M");
+  const weakFixture=canonicalEvidenceForModel({manufacturer:"Aptiv"},"Download PRODUCT-12345 catalog","Products","https://example.com/products","PRODUCT-12345");
+  const v230Checks=[
+    ["canonical_exact_quality_tier_enabled",exactFixture.level==="manufacturer_exact"],
+    ["weak_candidate_non_promotion_enabled",weakFixture.level==="candidate"&&acceptedCanonicalModels([{pn:"PRODUCT-12345",...weakFixture}]).length===0],
+    ["deep_enrichment_priority_lane_enabled",DEEP_WATCH_PRIORITY_LIMIT===1&&DEEP_QUEUE_BUDGET===24&&isDeepWatchDepth(-1)],
+    ["deep_bootstrap_fallback_enabled",DEEP_BOOTSTRAP_PER_RUN===1&&isDeepWatchDepth(-1)],
+    ["merchant_exact_detail_promotion_enabled",MERCHANT_DETAIL_PROMOTION_LIMIT===2&&isMerchantDetailUrl({merchant_slug:"digikey-japan"},"https://www.digikey.jp/ja/products/detail/test/abc/1")],
+    ["replacement_pdf_bounded_parse_enabled",replacementPdfLikely("https://example.com/Replacement_data.pdf")&&MAX_DEEP_HOPS===2],
+    ["resilient_supabase_status_probe_enabled",STATUS_PROBE_TIMEOUT_MS===10000&&STATUS_RETRY_TIMEOUT_MS===20000&&STATUS_DIAGNOSTIC_BATCH_SIZE===1&&SUPABASE_TIMEOUT_MS===18000],
+    ["supabase_idempotent_get_retry_enabled",SUPABASE_GET_RETRY_COUNT===1&&SUPABASE_GET_RETRY_DELAY_MS===250&&supabaseReadRetryCount("GET")===1&&supabaseReadRetryCount("HEAD")===1],
+    ["supabase_write_retry_disabled_by_design",supabaseReadRetryCount("POST")===0&&supabaseReadRetryCount("PATCH")===0&&supabaseReadRetryCount("PUT")===0&&supabaseReadRetryCount("DELETE")===0],
+    ["collector_db_preflight_enabled",COLLECTOR_DB_PREFLIGHT_TIMEOUT_MS===12000],
+    ["bounded_status_sampling_enabled",STATUS_SAMPLE_LIMIT===80&&STATUS_PARTS_SAMPLE_LIMIT===60&&STATUS_RELATION_SAMPLE_LIMIT===60&&STATUS_OFFER_SAMPLE_LIMIT===60&&STATUS_MERCHANT_SAMPLE_LIMIT===60&&STATUS_RUN_SAMPLE_LIMIT===18&&STATUS_RUN_LOOKBACK_HOURS===24&&STATUS_FALLBACK_TIMEOUT_MS===8000],
+    ["status_probe_separated_from_diagnostics",typeof statusDbProbe==="function"&&typeof runDiagnosticBatches==="function"],
+    ["lightweight_preflight_enabled",collectorDbPreflight.toString().includes("select=version&limit=1")&&!collectorDbPreflight.toString().includes("order=")],
+    ["backlog_probes_unordered",!activeQueueBacklog.toString().includes("order=")&&!activeMerchantQueueBacklog.toString().includes("order=")],
+    ["status_run_window_client_sorted",STATUS_RUN_LOOKBACK_HOURS===24&&STATUS_RUN_SAMPLE_LIMIT===18]
+  ];
+  const checks=[...pure,...parserChecks,...universeChecks,...hardeningChecks,...v230Checks];
+  return {
+    ok:checks.every(x=>x[1]),
+    build_id:BUILD_ID,
+    checks:checks.map(([name,ok])=>({name,ok})),
+    observed:{dead,live,misumi,digikey:dk,mouser}
+  };
+}
+
+async function ensureSystemMerchant(env,source){
+  const found=await sbOptional(env,`/merchants?select=*&slug=eq.${encodeURIComponent(source.merchant_slug)}&limit=1`);
+  if(Array.isArray(found)&&found.length)return found[0];
+  const now=new Date().toISOString();
+  // Deliberately discard the random preimage: system-managed merchants cannot
+  // authenticate through the public merchant API unless explicitly converted later.
+  const unusableSecret=`system-only-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+  const hash=await sha256HexText(unusableSecret);
+  const row={
+    id:crypto.randomUUID(),slug:source.merchant_slug,name:source.merchant_name,
+    website_url:source.website_url,country_code:source.country_code||"JP",status:"active",
+    verified:!!source.verified_merchant,merchant_api_key_hash:hash,merchant_api_key_prefix:"system:none",
+    agent_description:`System-observed public offers from ${source.merchant_name}. No paid placement. Availability is represented conservatively.`,
+    capabilities:{public_offer_observation:true,checkout_mode:"link_out"},
+    metadata:{system_managed:true,source_type:source.source_type,source_url:source.website_url,merchant_self_service_auth:false},
+    created_at:now,updated_at:now
+  };
+  const saved=await sb(env,"/merchants",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify(row)});
+  const merchant=Array.isArray(saved)&&saved.length?saved[0]:row;
+  await sbOptional(env,"/merchant_agent_profiles?on_conflict=merchant_id",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify({
+    merchant_id:merchant.id,discovery_name:source.merchant_name,
+    description:`Public machine-observed offers from ${source.merchant_name}. Stock and fulfillment are never upgraded beyond the public evidence.`,
+    checkout_mode:"link_out",supports_agent_checkout:false,protocols:["https"],
+    capabilities:{public_offer_observation:true},policies:{ranking:"evidence_based_no_paid_placement",compatibility_claims_require_evidence:true},
+    metadata:{system_managed:true,source_url:source.website_url},updated_at:now
+  })});
+  return merchant;
+}
+async function upsertOfferParts(env,source,offers,pageTitle,pageUrl){
+  if(!offers.length)return new Map();
+  const normalized=[...new Set(offers.map(x=>normalizePartNumber(x.part_number)).filter(Boolean))];
+  const existing=await loadPartIds(env,source.manufacturer,normalized);
+  if(source.generated_adapter===true || existing.size===normalized.length)return existing;
+  const now=new Date().toISOString();
+  const missing=offers.filter(o=>!existing.has(normalizePartNumber(o.part_number)));
+  if(!missing.length)return existing;
+  const rows=missing.map(o=>({
+    manufacturer:source.manufacturer,brand:source.manufacturer,part_number:o.part_number,
+    normalized_part_number:normalizePartNumber(o.part_number),name:pageTitle||o.part_number,
+    category:source.source_type==="official_manufacturer_store"?"official_store":"merchant_catalog",
+    lifecycle_status:"unknown",
+    specifications:{collector:{application_tags:universeProfile(source.manufacturer)?.applications||[],technology_tags:universeProfile(source.manufacturer)?.domains||[],evidence_role:"merchant_observation_unverified_identity"}},dimensions:{},electrical:{},mechanical:{},
+    notes:"Created from explicit non-generated merchant observation only because no canonical manufacturer row existed. Lifecycle remains unknown until manufacturer evidence is collected.",
+    official_url:null,source_confidence:0.55,source_last_checked_at:now,updated_at:now
+  }));
+  await sb(env,"/parts_catalog?on_conflict=manufacturer,normalized_part_number",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return loadPartIds(env,source.manufacturer,normalized);
+}
+async function saveMerchantOffers(env,source,merchant,offers,partIds,pageUrl,pageText,evidenceUrl=pageUrl){
+  if(!offers.length)return 0;
+  const gated=[];
+  for(const o of offers){
+    const gate=merchantEvidenceGate(source,o,pageText,evidenceUrl||pageUrl);
+    if(gate.ok)gated.push({...o,evidence_gate:gate.reason});
+  }
+  if(!gated.length)return 0;
+  const observed=new Date().toISOString();
+  const sourceUpdated=offerUpdatedAt(pageText)||observed;
+  const rows=gated.map(o=>{
+    const pn=normalizePartNumber(o.part_number);
+    return {
+      id:crypto.randomUUID(),merchant_id:merchant.id,merchant_sku:o.merchant_sku||`${source.slug}:${pn}`,
+      part_id:partIds.get(pn)||null,manufacturer:source.manufacturer,part_number:o.part_number,
+      normalized_part_number:pn,title:`${source.manufacturer} ${o.part_number}`,mpn:o.part_number,gtin:null,
+      condition:"new",price:o.price!=null?o.price:null,currency:o.currency||source.currency||"JPY",stock_quantity:o.stock_quantity!=null?o.stock_quantity:null,stock_status:o.stock_status||"unknown",
+      lead_time_days:o.lead_time_days!=null?o.lead_time_days:null,ships_to:source.ships_to??["JP"],shipping_cost:null,product_url:pageUrl,checkout_url:o.active!==false?pageUrl:null,
+      datasheet_url:null,return_policy_url:null,authorized_distributor:false,
+      authenticity_evidence_url:source.authenticity_evidence_url||null,
+      compatibility_claim:null,compatibility_evidence_url:null,active:o.active!==false,
+      source_updated_at:sourceUpdated,observed_at:observed,updated_at:observed,
+      metadata:{source_type:source.source_type,source_url:evidenceUrl,ships_from_country:source.country_code||null,tax_included:o.tax_included===true?true:o.tax_included===false?false:(source.tax_included===true?true:source.tax_included===false?false:null),duty_included:null,minimum_order_quantity:1,fulfillment_evidence_url:evidenceUrl,last_verified_at:observed,public_availability_label:o.availability_label,reference_price:o.reference_price??null,availability_is_live_stock:false,evidence_gate:o.evidence_gate,brand_gate_required:source.generated_adapter===true,availability_policy:"Merchant-reported public availability only; no inventory quantity, shipping cost, authorized status or compatibility is inferred."}
+    };
+  });
+  const skus=[...new Set(rows.map(x=>x.merchant_sku))];
+  if(skus.length){
+    const quoted=skus.map(x=>`"${String(x).replace(/"/g,'\\"')}"`).join(",");
+    const existing=await sbOptional(env,`/merchant_offers?select=id,merchant_sku&merchant_id=eq.${encodeURIComponent(merchant.id)}&merchant_sku=in.(${encodeURIComponent(quoted)})&limit=${Math.max(20,skus.length*2)}`);
+    const have=new Set((Array.isArray(existing)?existing:[]).map(x=>x.merchant_sku));
+    for(const row of rows)if(have.has(row.merchant_sku))delete row.id;
+  }
+  await sb(env,"/merchant_offers?on_conflict=merchant_id,merchant_sku",{method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  await sbOptional(env,`/merchants?id=eq.${encodeURIComponent(merchant.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({last_feed_at:observed,updated_at:observed})});
+  return rows.length;
+}
+async function processOfferItem(env,item,source){
+  const parseFor=(p)=>source.slug==="offer-omron-fa-store"?parseOmronStoreOffers(source,p)
+    :source.slug==="offer-rs-omron"?parseRsOmronOffers(source,p)
+    :source.merchant_slug==="monotaro-japan"?parseMonotaroOffers(source,p)
+    :source.merchant_slug==="misumi-japan"?parseMisumiOffers(source,p)
+    :source.merchant_slug==="digikey-japan"?parseDigiKeyOffers(source,p)
+    :source.merchant_slug==="mouser"?parseMouserOffers(source,p):[];
+
+  const originalUrl=String(item.url||"");
+  let canonicalProductUrl=originalUrl;
+  let evidenceUrl=originalUrl;
+  let page=null;
+  let offers=[];
+  let contentFallbackError=null;
+
+  if(source.merchant_slug==="monotaro-japan" && /\/p\/\d{4}\/\d{4}\//.test(originalUrl)){
+    canonicalProductUrl=canonicalMonotaroProductUrl(originalUrl);
+    const printUrl=monotaroPrintUrl(originalUrl);
+    if(printUrl){
+      try{
+        const printPage=await fetchPage(printUrl);
+        const parsed=parseFor(printPage);
+        if(parsed.length){
+          page={...printPage,transport:`monotaro_print_${printPage.transport||"direct"}`};
+          offers=parsed;
+          evidenceUrl=printUrl;
+        }
+      }catch(e){contentFallbackError=`PRINT_${safeError(e)}`;}
+    }
+  }
+
+  if(!page){
+    page=await fetchPage(originalUrl);
+    if(page.isPdf)return {status:"done",kind:"merchant_offer",source_slug:source.slug,url:originalUrl,offers_found:0,offers_upserted:0,note:"pdf_not_applicable"};
+    offers=parseFor(page);
+  }
+
+  if(!offers.length && page.transport==="direct" && ["offer-rs-omron","offer-misumi-omron","offer-digikey-omron","offer-mouser-omron"].includes(source.slug)){
+    try{
+      const fallback=await fetchViaJinaOnly(originalUrl);
+      const parsed=parseFor(fallback);
+      if(parsed.length){page=fallback;offers=parsed;evidenceUrl=originalUrl;}
+    }catch(e){contentFallbackError=[contentFallbackError,safeError(e)].filter(Boolean).join(";");}
+  }
+
+  const text=String(page.text||stripHtml(page.html||"")).slice(0,MAX_BODY_CHARS);
+  const title=page.html?titleOf(page.html):(text.match(/^Title:\s*(.+)$/mi)?.[1]||null);
+  const gatedOffers=offers.filter(o=>merchantEvidenceGate(source,o,text,evidenceUrl||canonicalProductUrl).ok);
+  const merchant=await ensureSystemMerchant(env,source);
+  const partIds=await upsertOfferParts(env,source,gatedOffers,title,canonicalProductUrl);
+  const saved=await saveMerchantOffers(env,source,merchant,gatedOffers,partIds,canonicalProductUrl,text,evidenceUrl);
+  const links=allLinksOf(page);
+  const eligibleLinks=links.filter(u=>pageAllowed(source,u));
+  const promoted=await promoteMerchantDetailLinks(env,source,page,Number(item.depth||0));
+  return {status:"done",kind:"merchant_offer",source_slug:source.slug,merchant_slug:merchant.slug,url:originalUrl,evidence_url:evidenceUrl,transport:page.transport||"direct",content_fallback_error:contentFallbackError,decoded_charset:page.decoded_charset||null,body_chars:text.length,offers_found:offers.length,offers_rejected_by_evidence_gate:offers.length-gatedOffers.length,offers_with_price:gatedOffers.filter(x=>x.price!=null).length,offers_upserted:saved,parts_ensured:partIds.size,enqueued:promoted,merchant_detail_links_promoted:promoted,discovery_links_found:eligibleLinks.length,parsed_part_numbers:offers.map(x=>x.part_number).slice(0,5),parsed_active:offers.map(x=>x.active!==false).slice(0,5),parsed_stock_status:offers.map(x=>x.stock_status||null).slice(0,5),parsed_reference_price:offers.map(x=>x.reference_price??null).slice(0,5),parsed_sale_price:offers.map(x=>x.price??null).slice(0,5),status_evidence:offers.map(x=>x.status_evidence||null).slice(0,5),commerce_window_chars:offers.map(x=>x.commerce_window_chars??null).slice(0,5),identity_evidence:offers.map(x=>x.identity_evidence||null).slice(0,5)};
+}
+
+async function processWatchItem(env,item,source){
+  let page=await fetchPage(item.url);
+  let pdfRelationParseAttempted=false,pdfRelationParseOk=false,pdfRelationParseError=null;
+  if(page.isPdf){
+    const pdfText=await fetchReplacementPdfText(item.url);pdfRelationParseAttempted=!!pdfText;
+    if(pdfText&&pdfText.text){page=pdfText;pdfRelationParseOk=true;}else return {status:"done",kind:"manufacturer_watch",source_slug:source.slug,manufacturer:source.manufacturer,url:item.url,transport:page.transport||"official_pdf_pointer",decoded_charset:null,body_chars:0,title:null,application_tags:source.applications||[],technology_tags:source.domains||[],source_tier:source.source_tier||"A",watch_only:true,canonical_parts_upserted:0,engineering_metrics_found:0,engineering_metrics_saved:0,relation_hints:0,deep_links_enqueued:0,pdf_relation_parse_attempted:pdfRelationParseAttempted,pdf_relation_parse_ok:false,pdf_relation_parse_error:pdfText?.error||null};
+  }
+  const text=String(page.text||stripHtml(page.html||""));
+  const title=page.html?titleOf(page.html||""):(text.match(/^Title:\s*(.+)$/mi)?.[1]||null);
+  const rawModels=contextualOfficialModels(source.manufacturer,text,title||"");
+  const classified=classifyCanonicalModels(source,text,title||"",page.official_url||page.url,rawModels);
+  const models=acceptedCanonicalModels(classified);
+  const evidenceByModel=Object.fromEntries(classified.filter(x=>x.level!=="candidate").map(x=>[x.pn,{level:x.level,reason:x.reason,confidence:x.confidence}]));
+  const metrics=extractEngineeringSpecs(text,page.official_url||page.url);
+  const safeMetrics=metricBindingSafe(classified)?metrics:[];
+  const lifecycle=lifecycleFromText(source,text);
+  const tablePairs=markdownTableRelationPairs(source,text,page.official_url||page.url,title||"");
+  const genericPairs=tablePairs.length?[]:strongRelationPairs(source,text,page.official_url||page.url,title||"");
+  const relationPairs=tablePairs.length?tablePairs:genericPairs;
+  const enrichment={extracted_metrics:safeMetrics,application_evidence_level:applicationEvidenceLevel(source,text),canonical_evidence_by_model:evidenceByModel};
+  const canonicalPartsUpserted=models.length?await upsertPartsBatch(env,source,models,title,page.official_url||page.url,lifecycle,relationPairs,enrichment):0;
+  const relationHints=relationPairs.length?await saveRelationCandidates(env,source,relationPairs,title):0;
+  const discovery=watchDiscoveryLinks(source,page);
+  let deepEnqueued=0,discoveryQueueGuard=null;
+  if(discovery.length){deepEnqueued=await enqueueDeepWatchLinks(env,source,discovery,Number(item.depth||0));}
+  discoveryQueueGuard=await activeQueueBacklog(env,361);
+  const exact=classified.filter(x=>x.level==="manufacturer_exact").length,catalog=classified.filter(x=>x.level==="manufacturer_catalog").length,candidates=classified.filter(x=>x.level==="candidate").length;
+  return {status:"done",kind:"manufacturer_watch",source_slug:source.slug,manufacturer:source.manufacturer,url:item.url,transport:page.transport||"direct",decoded_charset:page.decoded_charset||null,body_chars:text.length,title,lifecycle_hint:lifecycle,application_tags:source.applications||[],technology_tags:source.domains||[],source_tier:source.source_tier||"A",watch_only:true,canonical_models_found:rawModels.length,canonical_exact_found:exact,canonical_catalog_found:catalog,canonical_candidates_skipped:candidates,canonical_parts_upserted:canonicalPartsUpserted,engineering_metrics_found:metrics.length,engineering_metrics_saved:safeMetrics.length&&models.length?safeMetrics.length:0,relation_hints:relationHints,discovery_links_enqueued:0,deep_links_enqueued:deepEnqueued,discovery_queue_guard:discoveryQueueGuard,application_evidence_level:enrichment.application_evidence_level,pdf_relation_parse_attempted:pdfRelationParseAttempted,pdf_relation_parse_ok:pdfRelationParseOk,pdf_relation_parse_error:pdfRelationParseError};
+}
+async function processItem(env,item){
+  const source=sourceBySlug(item.source_slug);
+  if(!source)throw new Error("unknown_source:"+item.source_slug);
+  if(source.kind==="manufacturer_watch")return processWatchItem(env,item,source);
+  if(source.kind==="merchant_offer")return processOfferItem(env,item,source);
+  let page=await fetchPage(item.url);
+  let pdfRelationParseAttempted=false,pdfRelationParseOk=false,pdfRelationParseError=null;
+  if(page.isPdf&&replacementPdfLikely(item.url)){const p=await fetchReplacementPdfText(item.url);pdfRelationParseAttempted=true;if(p&&p.text){page=p;pdfRelationParseOk=true;}else pdfRelationParseError=p?.error||null;}
+  const parseText=String(page.text||"").slice(0,MAX_BODY_CHARS);
+  const title=page.html?titleOf(page.html):(parseText.match(/^Title:\s*(.+)$/mi)?.[1]||null);
+  const lifecycle=lifecycleFromText(source,parseText);
+  const models=extractModels(source.manufacturer,`${title||""} ${parseText}`);
+  const tablePairs=markdownTableRelationPairs(source,parseText,page.official_url||page.url,title);
+  const genericPairs=tablePairs.length?[]:strongRelationPairs(source,parseText,page.official_url||page.url,title);
+  const strongPairs=tablePairs.length?tablePairs:genericPairs;
+  const weakCandidates=strongPairs.length?[]:extractReplacementCandidates(source.manufacturer,parseText,page.official_url||page.url);
+  const allRelationCandidates=strongPairs.length?strongPairs:weakCandidates;
+  const catalogMetrics=extractEngineeringSpecs(parseText,page.official_url||page.url);
+  const upserted=await upsertPartsBatch(env,source,models,title,page.official_url||page.url,lifecycle,allRelationCandidates,{extracted_metrics:catalogMetrics,application_evidence_level:applicationEvidenceLevel(source,parseText)});
+  const ids=await loadPartIds(env,source.manufacturer,models);
+  const links=allLinksOf(page);
+  const pdfs=links.filter(u=>/\.pdf(?:$|[?#])/i.test(u)&&hostAllowed(source,u));
+  const docs=await saveDocuments(env,source,ids,pdfs,title);
+  const relationHints=await saveRelationCandidates(env,source,allRelationCandidates,title);
+
+  const children=links.filter(u=>pageAllowed(source,u));

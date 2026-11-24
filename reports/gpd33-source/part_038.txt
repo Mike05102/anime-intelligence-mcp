@@ -1,0 +1,300 @@
+  if(source?.merchant_slug==="monotaro-japan")return /\/p\/\d{4}\/\d{4}(?:\/|$)/.test(u);
+  if(source?.merchant_slug==="misumi-japan")return /\/vona2\/detail\//.test(u);
+  if(source?.merchant_slug==="digikey-japan")return /\/products\/detail\//.test(u);
+  if(source?.merchant_slug==="mouser")return /\/ProductDetail\//i.test(u);
+  return source?.generated_adapter!==true;
+}
+function manufacturerAliases(name=""){
+  const base=String(name||"").normalize("NFKC");
+  const manual={
+    "OMRON":["OMRON","OMRON AUTOMATION","オムロン"],
+    "Mitsubishi Electric":["MITSUBISHI ELECTRIC","三菱電機"],
+    "Harmonic Drive Systems":["HARMONIC DRIVE SYSTEMS","HARMONIC DRIVE","ハーモニックドライブ"],
+    "Texas Instruments":["TEXAS INSTRUMENTS","TI.COM","TEXAS INSTRUMENT"],
+    "Analog Devices":["ANALOG DEVICES","ANALOG.COM","ADI"],
+    "STMicroelectronics":["STMICROELECTRONICS","STMICRO","ST.COM"],
+    "TE Connectivity":["TE CONNECTIVITY","TE.COM"],
+    "Bosch Sensortec":["BOSCH SENSORTEC"],
+    "Sony Semiconductor Solutions":["SONY SEMICONDUCTOR","SONY-SEMICON"]
+  };
+  return [...new Set([base,...(manual[base]||[])].map(x=>String(x).normalize("NFKC").toUpperCase()).filter(Boolean))];
+}
+function merchantEvidenceGate(source,offer,pageText="",pageUrl=""){
+  const pn=normalizePartNumber(offer?.part_number||"");
+  if(!pn)return {ok:false,reason:"missing_mpn"};
+  const hay=`${String(pageText||"")} ${String(pageUrl||"")}`.normalize("NFKC").toUpperCase();
+  const compactHay=normalizePartNumber(hay);
+  if(!compactHay.includes(pn))return {ok:false,reason:"mpn_not_visible"};
+  if(source?.generated_adapter===true && !isLikelyMerchantDetailUrl(source,pageUrl))return {ok:false,reason:"generated_adapter_search_page_not_evidence"};
+  if(source?.generated_adapter===true){
+    const brandOk=manufacturerAliases(source.manufacturer).some(a=>hay.includes(a));
+    if(!brandOk)return {ok:false,reason:"manufacturer_not_corroborated"};
+  }
+  const hasPositiveCommerce=offer?.active===true || offer?.active===false || offer?.price!=null || offer?.stock_status && offer.stock_status!=="unknown" || !!offer?.status_evidence;
+  if(!hasPositiveCommerce)return {ok:false,reason:"no_commerce_evidence"};
+  return {ok:true,reason:"evidence_gate_pass"};
+}
+function retryPolicy(error,attempts){
+  const e=String(error||"");
+  if(/HTTP_429|JINA_HTTP_429/.test(e))return {status:attempts>=6?"failed":"retry",delay_hours:24,reason:"rate_limited"};
+  if(/HTTP_403/.test(e))return {status:attempts>=4?"failed":"retry",delay_hours:72,reason:"blocked"};
+  if(/Supabase 504|Supabase timeout|upstream request timeout/i.test(e))return {status:attempts>=6?"failed":"retry",delay_hours:1,reason:"database_timeout"};
+  const h=Math.min(24,Math.pow(2,Math.max(1,attempts)));
+  return {status:attempts>=6?"failed":"retry",delay_hours:h,reason:"exponential"};
+}
+
+
+
+function decodeHttpBodyBytes(bytes,contentType=""){
+  const labels=[];
+  const m=String(contentType||"").match(/charset\s*=\s*["']?([^;"'\s]+)/i);
+  if(m?.[1])labels.push(m[1].toLowerCase());
+  for(const x of ["utf-8","shift_jis"])if(!labels.includes(x))labels.push(x);
+  const candidates=[];
+  for(const label of labels){
+    try{
+      const t=new TextDecoder(label,{fatal:false}).decode(bytes);
+      candidates.push({label,text:t,score:textDecodeScore(t)});
+    }catch{}
+  }
+  if(!candidates.length)return {text:"",charset:"unknown"};
+  candidates.sort((a,b)=>b.score-a.score);
+  return {text:candidates[0].text,charset:candidates[0].label};
+}
+function textDecodeScore(text=""){
+  const s=String(text);
+  let jp=0,bad=0;
+  for(const ch of s){
+    const c=ch.codePointAt(0);
+    if((c>=0x3040&&c<=0x30ff)||(c>=0x3400&&c<=0x9fff)||(c>=0xff00&&c<=0xffef))jp++;
+    if(ch==="\ufffd")bad+=8;
+  }
+  const moj=(s.match(/[\u00c3\u00c2\u00e2\u00e5\u00e3]/g)||[]).length;
+  return jp*3-bad-moj*2;
+}
+
+async function fetchPage(url){
+  // PDFs are retained as first-party evidence pointers instead of repeatedly
+  // fetching binary bodies through Cloudflare/Jina. This avoids 403->429 retry
+  // loops while preserving the official manufacturer URL for provenance.
+  if(isPdfUrl(url)){
+    return {
+      url,
+      official_url:url,
+      isPdf:true,
+      html:"",
+      text:"",
+      status:200,
+      transport:"official_pdf_pointer",
+      body_fetched:false,
+      pointer_only:true,
+      note:"Official PDF URL retained as evidence pointer; body parsing deferred."
+    };
+  }
+
+  let directError=null;
+  try{
+    const r=await fetch(url,{headers:crawlerHeaders(),redirect:"follow"});
+    const ct=String(r.headers.get("content-type")||"").toLowerCase();
+    if(r.ok && !ct.includes("application/pdf")){
+      const bytes=new Uint8Array(await r.arrayBuffer());
+      const decoded=decodeHttpBodyBytes(bytes,ct);
+      const html=decoded.text.slice(0,MAX_BODY_CHARS);
+      return {url:r.url||url,official_url:url,isPdf:false,html,text:stripHtml(html),status:r.status,transport:"direct",body_fetched:true,decoded_charset:decoded.charset};
+    }
+    if(!r.ok)directError=`HTTP_${r.status}`;
+    else if(ct.includes("application/pdf")){
+      return {
+        url:r.url||url,
+        official_url:url,
+        isPdf:true,
+        html:"",
+        text:"",
+        status:r.status,
+        transport:"official_pdf_pointer",
+        body_fetched:false,
+        pointer_only:true,
+        note:"Official endpoint returned PDF; body parsing deferred."
+      };
+    }
+  }catch(e){directError=safeError(e);}
+
+  // HTML/text fallback transport only. Provenance remains the original
+  // manufacturer URL. Jina is never used for PDF bodies in v1.3.2.
+  try{
+    const jr=await fetch(jinaReaderUrl(url),{headers:{"accept":"text/plain,text/markdown;q=0.9,*/*;q=0.8"},redirect:"follow"});
+    if(!jr.ok)throw new Error(`JINA_HTTP_${jr.status}`);
+    const body=(await jr.text()).slice(0,MAX_BODY_CHARS);
+    return {url,official_url:url,isPdf:false,html:"",text:body,status:200,transport:"jina_reader",direct_error:directError,body_fetched:true};
+  }catch(e){
+    throw new Error(`${directError||"DIRECT_FETCH_FAILED"};FALLBACK_${safeError(e)}:${url}`);
+  }
+}
+
+async function fetchViaJinaOnly(url){
+  const jr=await fetch(jinaReaderUrl(url),{headers:{"accept":"text/plain,text/markdown;q=0.9,*/*;q=0.8"},redirect:"follow"});
+  if(!jr.ok)throw new Error(`JINA_HTTP_${jr.status}`);
+  const body=(await jr.text()).slice(0,MAX_BODY_CHARS);
+  return {url,official_url:url,isPdf:false,html:"",text:body,status:200,transport:"jina_reader_content_fallback",body_fetched:true};
+}
+
+function modelPatterns(manufacturer){
+  if(manufacturer==="OMRON")return [/\b(?:CJ1|CJ2|CP1|CP2|CS1|NX1|NX7|NJ1|NJ3|NJ5|NY5|E2E|E2B|E3Z|E3X|E3S|G2R|G3NA|MY|LY|S8VK|S8FS|R88D|R88M|3G3MX2|3G3RX2|FQ2|FQ-)[A-Z0-9\-\/\.\u25a1]{1,30}\b/gi];
+  if(manufacturer==="Mitsubishi Electric")return [/\b(?:QJ71|Q\d{2,4}|FX1|FX2|FX3|FX5|R\d{2,4}|RJ71|RD\d{2,4}|MR-J2|MR-J3|MR-J4|MR-J5|MR-JE|HG-[A-Z]|HF-[A-Z]|FR-[A-Z]|GT\d{3,5}|AJ65|A1S|A2S)[A-Z0-9\-\/\.]{0,30}\b/gi];
+  if(manufacturer==="SMC")return [/\b(?:SY3|SY5|SY7|VQ|CQ2|CDQ2|C85|C96|MGPM|MXS|MXQ|KQ2|AS\d|AR\d|AW\d|ZSE|ISE|LE[A-Z]|PFM|PF3W)[A-Z0-9\-\/\.]{1,32}\b/gi];
+  if(manufacturer==="Panasonic Industry")return [/\b(?:FX-|CX-|EX-|EQ-|PM-|HG-|AFP|FP0R|FP-X|GT\d|A5|A6)[A-Z0-9\-\/\.]{1,30}\b/gi];
+  if(manufacturer==="Yaskawa")return [/\b(?:SGDM|SGDH|SGDS|SGDV|SGD7S|SGM[A-Z]|SGLC|SGT[A-Z0-9]|CACR|CPCR|JUSP|SJDE|CEPT|SSR|SST|EMR|EMT|EMG|DR[A-Z0-9])[A-Z0-9\-\/\.]{0,32}\b/gi];
+  if(manufacturer==="THK")return [/\b(?:HSR|SRS|SRG|RSR|SBN|BNS|LTR|FBL|BTK|KSH|CCM|LXA|LXT|LM(?:E|JK|R)?|LBS)[A-Z0-9\-\/\.]{0,28}\b/gi];
+  if(manufacturer==="IDEC")return [/\b(?:HW1|HW4|XW1E|XW5E|HS5D|FC6A|FT1A|KW2D|PS5R|RJ|RU|RH|LBW|AP22|BN)[A-Z0-9\-\/\.]{1,28}\b/gi];
+  if(manufacturer==="Oriental Motor")return [/\b(?:PKP|AZX|AZ|BLM|BXM|MSD|MACK|MAC-|EP|EPUA|EPR|CS[25]|CC20|PAES|PAVR|FD|FGB|LXD)[A-Z0-9\-\/\.]{1,32}\b/gi];
+  if(manufacturer==="Azbil")return [/\b(?:JTD|JTG|JTA|JTC|ATT|SPC|RHS|SES|HP|H1L|CML|MVF|AF)[A-Z0-9\-\/\.\u25a1]{0,28}\b/gi];
+  return [];
+}
+function genericModels(text=""){
+  const out=[];
+  const rx=/\b(?=[A-Z0-9\-\/\.]{5,30}\b)(?=[A-Z0-9\-\/\.]*[A-Z])(?=[A-Z0-9\-\/\.]*\d)[A-Z][A-Z0-9]{0,8}(?:[-\/\.][A-Z0-9]{1,12}){0,4}\b/g;
+  for(const m of String(text).toUpperCase().matchAll(rx))out.push(m[0]);
+  return out;
+}
+function extractModels(manufacturer,text){
+  const out=[];
+  const raw=String(text||"").normalize("NFKC");
+  for(const rx of modelPatterns(manufacturer)){rx.lastIndex=0;for(const m of raw.matchAll(rx))out.push(m[0]);}
+  for(const x of genericModels(raw))out.push(x);
+  const bad=/^(?:HTTPS?|HTML|UTF-8|JAPAN|DOWNLOAD|PRODUCT|PRODUCTS|CATALOG|MANUAL|SUPPORT|CONTACT|COPYRIGHT|WIDTH|HEIGHT|PAGE|PDF)$/i;
+  return [...new Set(out.map(normalizePartNumber).filter(x=>x.length>=4&&x.length<=34&&!bad.test(x)))].slice(0,MAX_MODELS_PER_PAGE);
+}
+
+function occurrenceCount(text,token){
+  const t=String(text||"").toUpperCase(),q=String(token||"").toUpperCase();
+  if(!q)return 0;let n=0,pos=0;while((pos=t.indexOf(q,pos))>=0){n++;pos+=q.length;if(n>=4)break;}return n;
+}
+function contextualOfficialModels(manufacturer,text,title=""){
+  const raw=String(`${title||""} ${text||""}`).normalize("NFKC");
+  const specific=[];
+  for(const rx of modelPatterns(manufacturer)){rx.lastIndex=0;for(const m of raw.matchAll(rx))specific.push(normalizePartNumber(m[0]));}
+  const contextCue=/(?:品番|型番|形式|形名|製品番号|モデル|model|part\s*(?:no\.?|number)|mfr\.?\s*part|order\s*code|product\s*code)/i;
+  const generic=genericModels(raw).map(normalizePartNumber).filter(pn=>{
+    if(pn.length<5||pn.length>34)return false;
+    if(occurrenceCount(raw,pn)>=2)return true;
+    const i=raw.toUpperCase().indexOf(pn.toUpperCase());
+    if(i<0)return false;
+    return contextCue.test(raw.slice(Math.max(0,i-90),Math.min(raw.length,i+pn.length+90)));
+  });
+  return [...new Set([...specific,...generic])].slice(0,WATCH_ENRICHMENT_MAX_PARTS);
+}
+function metricExcerpt(text,index,len=120){const t=String(text||"").replace(/\s+/g," ");return t.slice(Math.max(0,index-45),Math.min(t.length,index+len)).trim();}
+function findMetricAfterLabels(text,labels,units,sourceUrl,key){
+  const t=String(text||"").normalize("NFKC");
+  const lower=t.toLowerCase();
+  for(const label of labels){
+    const ll=String(label).normalize("NFKC").toLowerCase();
+    let pos=0;
+    while((pos=lower.indexOf(ll,pos))>=0){
+      const tail=t.slice(pos+ll.length,pos+ll.length+80).replace(/^\s*[:：]?\s*/,"");
+      const nm=tail.match(/^-?\d+(?:\.\d+)?/);
+      if(nm){
+        const value=Number(nm[0]);
+        const after=tail.slice(nm[0].length).trimStart();
+        for(const u of units){
+          const nu=String(u).normalize("NFKC");
+          if(after.toLowerCase().startsWith(nu.toLowerCase())) return {key,value,unit:u,source_url:sourceUrl,evidence:metricExcerpt(t,pos)};
+        }
+      }
+      pos+=Math.max(1,ll.length);
+    }
+  }
+  return null;
+}
+function extractEngineeringSpecs(text,sourceUrl){
+  const defs=[
+    ["voltage",["rated voltage","supply voltage","operating voltage","定格電圧","電源電圧","使用電圧"],["mV","V","kV"]],
+    ["current",["rated current","supply current","current consumption","定格電流","消費電流"],["uA","µA","mA","A"]],
+    ["power",["rated power","power consumption","output power","定格出力","消費電力","出力"],["mW","W","kW"]],
+    ["torque",["rated torque","maximum torque","max torque","continuous torque","定格トルク","最大トルク","許容トルク"],["mN·m","mN・m","mN m","N·m","N・m","N m","Nm"]],
+    ["speed",["rated speed","maximum speed","max speed","回転速度","定格回転数","最高回転数"],["rpm","r/min","min-1"]],
+    ["mass",["mass","weight","質量","重量"],["mg","g","kg"]],
+    ["backlash",["backlash","バックラッシ","バックラッシュ"],["arcmin","arc-min","°","deg"]],
+    ["reduction_ratio",["reduction ratio","gear ratio","減速比"],[""]],
+    ["resolution",["resolution","分解能"],["bit","bits","ppr","cpr","pulse/rev","パルス/回転",""]],
+    ["pitch",["pitch","ピッチ"],["mm","um","µm"]],
+    ["travel",["stroke","travel","ストローク","移動量"],["mm","cm","m"]],
+    ["load",["rated load","maximum load","max load","load capacity","定格荷重","許容荷重","最大荷重"],["N","kN","kgf"]],
+    ["pressure",["pressure","圧力","使用圧力","定格圧力"],["Pa","kPa","MPa","bar"]],
+    ["frequency",["frequency","周波数","応答周波数"],["Hz","kHz","MHz","GHz"]],
+    ["rdson",["RDS(ON)","RDSon","on-state resistance","オン抵抗"],["mΩ","mohm","Ω","ohm"]]
+  ];
+  const out=[]; const seen=new Set();
+  for(const [key,labels,units] of defs){
+    const m=findMetricAfterLabels(text,labels,units,sourceUrl,key);
+    if(!m) continue;
+    const k=`${m.key}|${m.value}|${m.unit||""}`;
+    if(!seen.has(k)){seen.add(k);out.push(m);}
+    if(out.length>=SPEC_METRIC_LIMIT) break;
+  }
+  return out;
+}
+function canonicalEvidenceForModel(source,text,title,url,pn){
+  const raw=String(`${title||""} ${text||""}`).normalize("NFKC");
+  const norm=normalizePartNumber(pn);
+  const upper=raw.toUpperCase();
+  const idx=upper.indexOf(norm);
+  const explicitCue=/(?:品番|型番|形式|形名|製品番号|モデル|model|part\s*(?:no\.?|number)|mfr\.?\s*part|order\s*code|product\s*code)/i;
+  const detailUrl=/(?:\/detail(?:\/|$)|\/product(?:\/|$)|\/products\/[^/?#]+(?:\/[^/?#]+)?$|\/p\/|\/item\/|\/model\/|datasheet|spec(?:ification)?)/i.test(String(url||""));
+  const titleHit=normalizePartNumber(title||"").includes(norm);
+  const context=idx>=0?raw.slice(Math.max(0,idx-120),Math.min(raw.length,idx+norm.length+120)):"";
+  const specific=modelPatterns(source.manufacturer).some(rx=>{rx.lastIndex=0;return rx.test(norm);});
+  if((detailUrl&&(titleHit||explicitCue.test(context))) || (titleHit&&explicitCue.test(raw)))return {level:"manufacturer_exact",reason:"official_detail_identity",confidence:0.92};
+  if(specific && (occurrenceCount(raw,norm)>=2 || explicitCue.test(context)))return {level:"manufacturer_catalog",reason:"official_catalog_identity",confidence:0.80};
+  return {level:"candidate",reason:"weak_or_pagewide_identifier",confidence:0.50};
+}
+function classifyCanonicalModels(source,text,title,url,models){
+  return (models||[]).map(pn=>({pn,...canonicalEvidenceForModel(source,text,title,url,pn)}));
+}
+function acceptedCanonicalModels(classified){return (classified||[]).filter(x=>x.level!=="candidate").map(x=>x.pn);}
+function metricBindingSafe(classified){const accepted=(classified||[]).filter(x=>x.level!=="candidate");return accepted.length===1 || (accepted.length<=2&&accepted.every(x=>x.level==="manufacturer_exact"));}
+function isDeepWatchDepth(depth){return Number(depth||0)<0;}
+function deepHop(depth){return Math.abs(Math.min(0,Number(depth||0)));}
+function detailLikeOfficialUrl(url=""){return /(?:\/detail(?:\/|$)|\/products?\/[^/?#]+(?:\/[^/?#]+)?$|\/item\/|\/model\/|datasheet|spec(?:ification)?|replacement|successor|discontinued|renew|\.pdf(?:$|[?#]))/i.test(String(url));}
+function rankOfficialDiscoveryUrl(url=""){
+  const u=String(url||"");let score=0;
+  if(/replacement|successor|renew|discontinued/i.test(u))score+=8;
+  if(/\.pdf(?:$|[?#])/i.test(u))score+=6;
+  if(/\/detail|\/item|\/model|datasheet|spec/i.test(u))score+=5;
+  if(/[?&](?:page|p|sort|filter|rv|si|pf|pt|attr_)=/i.test(u))score-=8;
+  return score;
+}
+function rankedWatchDiscoveryLinks(source,page){
+  return allLinksOf(page).filter(u=>pageAllowed(source,u)&&u!==page.url&&detailLikeOfficialUrl(u)).sort((a,b)=>rankOfficialDiscoveryUrl(b)-rankOfficialDiscoveryUrl(a)).slice(0,WATCH_DISCOVERY_LINK_LIMIT);
+}
+async function deepQueueBacklog(env){
+  const rows=await sbOptional(env,`/parts_collector_queue?select=id&source_slug=like.watch-*&status=in.(pending,retry)&depth=lt.0&limit=${DEEP_QUEUE_BUDGET+1}`);
+  return Array.isArray(rows)?rows.length:null;
+}
+async function enqueueDeepWatchLinks(env,source,links,itemDepth){
+  const hop=isDeepWatchDepth(itemDepth)?deepHop(itemDepth)+1:1;
+  if(hop>MAX_DEEP_HOPS)return 0;
+  const backlog=await deepQueueBacklog(env);if(backlog!=null&&backlog>=DEEP_QUEUE_BUDGET)return 0;
+  const clean=[...new Set((links||[]).filter(u=>pageAllowed(source,u)&&detailLikeOfficialUrl(u)))].slice(0,Math.max(1,DEEP_WATCH_PRIORITY_LIMIT*2));
+  if(!clean.length)return 0;
+  const now=new Date().toISOString(),depth=-hop;
+  const rows=clean.map(u=>({id:crypto.randomUUID(),source_slug:source.slug,url:u,status:"pending",depth,attempts:0,next_attempt_at:now,created_at:now,updated_at:now}));
+  await sbOptional(env,"/parts_collector_queue?on_conflict=source_slug,url",{method:"POST",headers:{Prefer:"resolution=ignore-duplicates,return=minimal"},body:JSON.stringify(rows)});
+  return rows.length;
+}
+function isMerchantDetailUrl(source,url=""){
+  const u=String(url||"");
+  if(source.merchant_slug==="monotaro-japan")return /\/p\/\d{4}\/\d{4}\//.test(u);
+  if(source.merchant_slug==="misumi-japan")return /\/vona2\/detail\//.test(u);
+  if(source.merchant_slug==="digikey-japan")return /\/products\/detail\//i.test(u);
+  if(source.merchant_slug==="mouser")return /\/ProductDetail\//i.test(u);
+  return false;
+}
+function isMerchantDiscoveryHubUrl(source,url=""){
+  const u=String(url||"");
+  if(source?.merchant_slug==="monotaro-japan")return /\/g\/\d+\/?/.test(u);
+  return false;
+}
+function merchantDetailCandidates(source,page){
+  const links=allLinksOf(page).filter(u=>pageAllowed(source,u));
+  const exact=links.filter(u=>isMerchantDetailUrl(source,u));

@@ -1,0 +1,300 @@
+        try{
+          const more=await findProducts(env,pq,12);
+          if(Array.isArray(more)&&more.length){
+            candidateRows=mergeUniqueProducts([candidateRows,more],40);
+            compatibleRows=candidateRows.filter(automaticCompatible);
+          }
+          let current=preferenceEvidenceSummary(compatibleRows,shoppingIntent);
+          if(current.best_matched>=current.required)break;
+          if(PIPELINE.selfDiscoveryEnabled){
+            const discovered=await selfDiscoverProduct(env,pq);
+            if(discovered&&automaticCompatible(discovered)){
+              candidateRows=mergeUniqueProducts([candidateRows,[discovered]],40);
+              compatibleRows=candidateRows.filter(automaticCompatible);
+              current=preferenceEvidenceSummary(compatibleRows,shoppingIntent);
+              if(current.best_matched>=current.required)break;
+            }
+          }
+        }catch{}
+      }
+    }
+  }
+  if(explicitIntent&&!compatibleRows.length){
+    return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found_for_explicit_intent",charged:false,hard_constraints_resolved:false,detail:"No catalog candidate satisfied the explicit franchise / character / product-type / subtype intent. No payment is requested.",free_search_url:`${url.origin}/v1/search?query=${encodeURIComponent(query)}`}};
+  }
+  let rankingRows=compatibleRows.length?compatibleRows:candidateRows;
+  if(shoppingIntent?.budget?.limit&&Number(shoppingIntent?.budget?.jpy_equivalent||0)>0){
+    const priced=rankingRows.map(p=>({p,b:budgetConstraintStatus(p,shoppingIntent)})).filter(x=>x.b.known);
+    const within=priced.filter(x=>x.b.ok).map(x=>x.p);
+    if(within.length)rankingRows=within;
+    else if(priced.length){
+      return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"no_verified_product_within_budget",charged:false,budget_jpy:shoppingIntent.budget.jpy_equivalent,detail:"Candidates were found, but every candidate with verifiable price evidence exceeded the requested maximum budget. No payment is requested."}};
+    }else{
+      return {ok:false,status:409,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"budget_evidence_unavailable",charged:false,budget_jpy:shoppingIntent.budget.jpy_equivalent,detail:"A maximum budget was specified, but no compatible candidate has verifiable price evidence yet. ANIME INTELLIGENCE will not charge for an unverified budget match."}};
+    }
+  }
+  const strictPrefs=strictCatalogPreferences(shoppingIntent);
+  if(strictPrefs.length&&rankingRows.length){
+    const strictEvidence=rankingRows.map(p=>({p,fit:candidatePreferenceFit(p,strictPrefs)}));
+    const fullStrict=strictEvidence.filter(x=>x.fit.matched.length===strictPrefs.length);
+    if(fullStrict.length)rankingRows=fullStrict.map(x=>x.p);
+    else{
+      const unresolved=strictPrefs.map(p=>`${p.facet}:${p.value}`).filter(k=>!strictEvidence.some(x=>x.fit.matched.includes(k)));
+      return {ok:false,status:409,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"preference_evidence_unavailable",charged:false,hard_constraints_resolved:true,unresolved_preferences:unresolved.length?unresolved:strictPrefs.map(p=>`${p.facet}:${p.value}`),deferred_live_preferences:deferredPreferenceKeys(shoppingIntent),recommended_verification_endpoint:naturalPaidRoute(shoppingIntent,query),detail:"Compatible products exist, but no candidate has verified evidence for every requested product attribute. ANIME INTELLIGENCE will not pretend that a generic item satisfies color/size/age/exclusivity/premium constraints and will not request payment for an unverified match."}};
+    }
+  }
+  const decisionPrefs=rankingPreferences(shoppingIntent);
+  if(decisionPrefs.length&&rankingRows.length){
+    const evidence=rankingRows.map(p=>({p,fit:candidatePreferenceFit(p,decisionPrefs)}));
+    const maxMatched=Math.max(0,...evidence.map(x=>x.fit.matched.length));
+    if(maxMatched>0)rankingRows=evidence.filter(x=>x.fit.matched.length===maxMatched).map(x=>x.p);
+  }
+  const ranked=rankPaidCandidates(retrievalQuery,rankingRows,shoppingIntent),winner=ranked[0];
+  if(!winner?.product)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false}};
+  const winnerCompatibility=intentCompatibility(winner.product,shoppingIntent);
+  const winnerCharacterEvidence=directCharacterTitleEvidence(winner.product,shoppingIntent);
+  if(explicitIntent&&(!winnerCompatibility.ok||!winnerCharacterEvidence)){
+    return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found_for_explicit_intent",charged:false,detail:"No catalog candidate satisfied the explicit franchise / character / product-type intent strongly enough. No payment is requested.",free_search_url:`${url.origin}/v1/search?query=${encodeURIComponent(query)}`}};
+  }
+
+  // v3.7.41 commercial default:
+  // Keep the one-call commercial-default flow, but never let an explicit franchise/character/type request fall through to an unrelated product.
+  const autoResolution=broadAutoSelection?"broad_query_auto_recommendation":"commercial_default_recommendation";
+  return {
+    ok:true,
+    product:winner.product,
+    resolution:autoResolution,
+    selection:{
+      method:autoResolution,
+      automatic:true,
+      commercial_default:true,
+      broad_query_auto_selection:broadAutoSelection,
+      policy_version:"3.7.91",
+      policy:"Select the strongest compatible candidate using hard franchise/character/type/subtype constraints first. Canonical product attributes such as color, size, age, exclusivity and premium must have evidence or the request stops before payment. Seller/listing attributes such as shipping, sealed/new/used condition and live availability are deferred to live purchase-route verification rather than guessed from the canonical catalog. Affiliate readiness never substitutes for semantic or preference relevance.",
+      shopping_intent:shoppingIntent,
+      recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),
+      selected:paidRankedView(winner,shoppingIntent),
+      deferred_live_preferences:deferredPreferenceKeys(shoppingIntent),
+      live_verification_endpoint:deferredPreferenceKeys(shoppingIntent).length?naturalPaidRoute(shoppingIntent,query):null,
+      alternatives:ranked.slice(1,5).map(x=>paidRankedView(x,shoppingIntent))
+    }
+  };
+}
+
+function affiliateSourcesInResponse(value){
+  const out=new Set(),seen=new Set();
+  const walk=v=>{
+    if(!v||typeof v!=="object"||seen.has(v))return;seen.add(v);
+    if(v.affiliate===true){const src=String(v.source||v.affiliate_source||"").toLowerCase();if(src.includes("rakuten"))out.add("rakuten");else if(src.includes("ebay"))out.add("ebay");else out.add("unknown");}
+    if(v.purchase_url&&String(v.purchase_url).includes("/r/rakuten"))out.add("rakuten");
+    for(const x of Object.values(v))walk(x);
+  };walk(value);return [...out];
+}
+
+function recommendationEnvelope(path,preflight,intel,url){
+  const selection=preflight?.selection||{},intent=selection.shopping_intent||naturalShoppingIntent(url?.searchParams?.get("query")||"",url,null);
+  const tier={
+    "/v1/identify":["recommended canonical product","ranked alternatives","official image","product identity and edition evidence"],
+    "/v1/market":["recommended canonical product","current low/median/high asking prices","matched market snapshot","best observed listing"],
+    "/v1/rarity":["recommended canonical product","rarity score","scarcity signals","rerelease/replenishment risk"],
+    "/v1/authenticity":["recommended canonical product","counterfeit/bootleg risk","listing mismatch signals"],
+    "/v1/buy-wait":["recommended canonical product","BUY/WAIT/WATCH/AVOID decision","price and scarcity context"],
+    "/v1/best-place":["recommended canonical product","best current matched seller route","current price and purchase URL"],
+    "/v1/listing-match":["canonical product","listing-to-edition match verdict"],
+    "/v1/deadline":["canonical product","verified preorder/lottery/sales deadline"],
+    "/v1/landed-cost":["recommended canonical product","buyer-country-aware known total","shipping/purchase route"],
+    "/v1/price-history":["recommended canonical product","7/30/90/180-day asking-price context","current percentile/trend"],
+    "/v1/full-intelligence":["recommended canonical product","ranked alternatives","official image","current market and price history","rarity/rerelease risk","authenticity risk","BUY/WAIT decision","deadline","buyer-country-aware landed cost","best purchase route"]
+  }[path]||[];
+  return {
+    interpreted_shopping_request:intent,
+    recommendation:{
+      status:"recommended_from_natural_language_or_exact_identity",
+      selected:selection.selected||paidCandidateView(preflight?.product||{}),
+      alternatives:selection.alternatives||[],
+      buyer_country:intent?.buyer_country||url?.searchParams?.get("buyer_country")||"JP",
+      included_at_this_price:tier,
+      suggested_endpoint_for_original_request:selection.recommended_paid_endpoint||naturalPaidRoute(intent,intent?.raw_query||""),
+      current_endpoint:path
+    }
+  };
+}
+
+async function paidApi(request,env,url,ctx=null){
+  const rp=routePrice(url.pathname);if(!rp)return null;
+  const query=url.searchParams.get("query")||"",lang=detectLanguage(query,url.searchParams.get("lang")||"",request.headers.get("accept-language")||"");
+  deferTelemetry(ctx,logRequestStage(env,request,"api_call",{metadata:{route_type:"paid",intent_query:query?query.slice(0,180):null,intent_id:url.searchParams.get("id")||null,nonblocking_telemetry:true}}));
+  if(query||url.searchParams.get("id"))deferTelemetry(ctx,logRequestStage(env,request,"product_intent",{metadata:{route_type:"paid",query_text:query?query.slice(0,180):null,nonblocking_telemetry:true}}));
+
+  // v3.7.1 discovery compatibility:
+  // A standards-compliant x402 resource must advertise Payment Required on a bare unauthenticated probe.
+  // Discovery/indexing services such as 402 Index probe the registered endpoint without product input.
+  // Do not reject those probes with HTTP 400 before the x402 gate.
+  // Conversely, never accept or settle a payment retry that omits both query and canonical id.
+  const canonicalId=String(url.searchParams.get("id")||"").trim();
+  const hasProductInput=!!(String(query||"").trim()||canonicalId);
+  const hasPaymentHeader=!!(request.headers.get("payment-signature")||request.headers.get("x-payment"));
+  if(!hasProductInput){
+    if(hasPaymentHeader){
+      await logRequestStage(env,request,"identity_preflight_failed",{metadata:{response_status:400,charged:false,reason:"product_identity_required_after_payment_retry"}});
+      return json({
+        service:"ANIME INTELLIGENCE",
+        version:VERSION,
+        error:"product_identity_required",
+        charged:false,
+        detail:"Supply query or canonical product id before retrying with a payment signature. Bare unauthenticated requests receive 402 only for x402 discovery and capability negotiation.",
+        input_schema:bazaarInfoSchema()
+      },400,{"cache-control":"no-store"});
+    }
+    return x402Gate(request,env,rp[0],rp[1],async()=>{
+      const e=new Error("product_identity_required");
+      e.code="PRODUCT_IDENTITY_REQUIRED";
+      throw e;
+    },ctx);
+  }
+
+  let preflight;
+  try{preflight=await preflightPaidProduct(env,url);}catch(e){deferTelemetry(ctx,logRequestStage(env,request,"identity_preflight_failed",{metadata:{response_status:500,error:safeError(e)}}));return json({service:"ANIME INTELLIGENCE",version:VERSION,error:"identity_preflight_failed",charged:false,detail:safeError(e)},500);}
+  if(!preflight.ok){deferTelemetry(ctx,logRequestStage(env,request,preflight.status===409?"disambiguation_required":"product_not_found",{metadata:{response_status:preflight.status,charged:false}}));return json(preflight.body,preflight.status,{"cache-control":"no-store"});}
+  const product=preflight.product;
+  // v3.7.32 — once identity is resolved, the commercial path goes straight to x402.
+  // KPI writes are intentionally backgrounded so a slow Supabase write cannot consume the payment opportunity.
+  deferTelemetry(ctx,logRequestStage(env,request,"canonical_product_selected",{product_id:product.id,metadata:{resolution:preflight.resolution,canonical_product_id:product.id,product_type:product.product_type||null,automatic:!!preflight.selection?.automatic,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??registeredRakutenAffiliateOffers(product).length>0,fast_gate_v3732:true}}));
+  if(preflight.resolution==="ranked_recommendation"||preflight.resolution==="commercial_default_recommendation"||preflight.resolution==="broad_query_auto_recommendation")deferTelemetry(ctx,logRequestStage(env,request,"ranked_product_auto_selected",{product_id:product.id,metadata:{routing_policy:preflight.selection?.policy_version||null,commercial_default:!!preflight.selection?.commercial_default,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??false,alternative_ids:(preflight.selection?.alternatives||[]).map(x=>x.id).filter(Boolean),fast_gate_v3732:true}}));
+  return x402Gate(request,env,rp[0],rp[1],async()=>{
+    deferTelemetry(ctx,logEvent(env,"product_requested",{endpoint:url.pathname,product_id:product.id,metadata:{product_type:product.product_type||null,jan_present:!!product.jan_code,identity_resolution:preflight.resolution,version:VERSION}}));
+    const livePaths=new Set(["/v1/market","/v1/rarity","/v1/authenticity","/v1/buy-wait","/v1/best-place","/v1/listing-match","/v1/landed-cost","/v1/price-history","/v1/full-intelligence","/v1/shopping-intelligence"]);
+    const intel=await buildIntelligence(env,product,url.searchParams.get("refresh")==="1",lang,{autoRefresh:livePaths.has(url.pathname),buyerCountry:url.searchParams.get("buyer_country")||preflight.selection?.shopping_intent?.buyer_country||"JP",postalCode:url.searchParams.get("postal_code")||"",listingUrl:url.searchParams.get("listing_url")||"",listingTitle:url.searchParams.get("listing_title")||""});
+    let shaped=shapePaidResponse(url.pathname,intel);shaped=sanitizeAffiliateRouting(shaped,url.origin,product.id);
+    for(const source of affiliateSourcesInResponse(shaped))deferTelemetry(ctx,logEvent(env,"affiliate_link_served",{endpoint:url.pathname,product_id:product.id,metadata:{source,version:VERSION}}));
+    return {service:"ANIME INTELLIGENCE",version:VERSION,price_usdc_atomic:rp[0],price_usdc:Number(rp[0])/1000000,identity_resolution:{status:"resolved_before_payment",method:preflight.resolution,canonical_product_id:product.id,automatic:!!preflight.selection?.automatic,selection:preflight.selection||null},...recommendationEnvelope(url.pathname,preflight,intel,url),...shaped,monetization:monetizationFunnel(url.origin,product,url.pathname)};
+  },ctx);
+}
+
+
+async function searchDiagnosticFetch(env,label,path){
+  const started=Date.now();
+  let response=null,raw="",data=null,error=null;
+  try{
+    response=await fetch(sbBase(env)+path,{method:"GET",headers:sbHeaders(env)});
+    raw=await response.text();
+    try{data=raw?JSON.parse(raw):null;}catch{data=null;}
+    if(!response.ok)error=raw.slice(0,1500)||`HTTP ${response.status}`;
+  }catch(e){error=safeError(e);}
+  const rows=Array.isArray(data)?data:[];
+  return {
+    label,
+    path,
+    http_status:response?.status||null,
+    ok:!!response?.ok,
+    elapsed_ms:Date.now()-started,
+    row_count:rows.length,
+    content_range:response?.headers?.get("content-range")||null,
+    error,
+    sample:rows.slice(0,5).map(p=>({
+      id:p?.id||null,
+      canonical_name_ja:p?.canonical_name_ja||null,
+      canonical_name_en:p?.canonical_name_en||null,
+      franchise:p?.franchise||null,
+      product_type:p?.product_type||null,
+      jan_code:p?.jan_code||null,
+      official_image_url:p?.official_image_url||null
+    }))
+  };
+}
+
+async function searchDiagnostic(env,query="One Piece figure"){
+  const q=String(query||"One Piece figure").trim();
+  const hints=multilingualQueryHints(q);
+  const dbTypes=[...new Set((hints.product_types||[]).flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]))];
+  const semanticTerms=[...new Set([...(hints.franchise_aliases||[]),...(hints.residual_terms||[])].map(safeSearchTerm).filter(Boolean))].slice(0,12);
+  const select="id,canonical_name_ja,canonical_name_en,franchise,product_type,jan_code,official_image_url";
+  const tests=[];
+
+  // 1) Prove the products table and selected columns are readable.
+  tests.push(await searchDiagnosticFetch(env,"table_probe",`/products?select=${select}&limit=3`));
+
+  // 2) Prove the requested product type exists without text matching.
+  if(dbTypes.length){
+    tests.push(await searchDiagnosticFetch(env,"product_type_probe",`/products?select=${select}&product_type=in.(${dbTypes.map(x=>encodeURIComponent(x)).join(",")})&limit=10`));
+  }
+
+  // 3) Reproduce the exact primary semantic query used by findProducts().
+  if(dbTypes.length||semanticTerms.length){
+    let path=`/products?select=${select}`;
+    if(dbTypes.length)path+=`&product_type=in.(${dbTypes.map(x=>encodeURIComponent(x)).join(",")})`;
+    if(semanticTerms.length){
+      const fields=["canonical_name_ja","canonical_name_en","franchise","manufacturer","brand","series"];
+      const clauses=[];
+      for(const term of semanticTerms.slice(0,8))for(const field of fields)clauses.push(`${field}.ilike.*${term}*`);
+      path+=`&or=(${encodeURIComponent(clauses.join(","))})`;
+    }
+    path+="&limit=40";
+    tests.push(await searchDiagnosticFetch(env,"findProducts_primary_semantic",path));
+  }
+
+  // 4) Test the narrow franchise alias against each searchable identity field separately.
+  const franchise=hints.franchises?.[0]||"";
+  const alias=safeSearchTerm(preferredFranchiseSearchAlias(franchise));
+  if(alias){
+    for(const field of ["canonical_name_ja","canonical_name_en","franchise"]){
+      const typeFilter=dbTypes.length?`&product_type=in.(${dbTypes.map(x=>encodeURIComponent(x)).join(",")})`:"";
+      const path=`/products?select=${select}${typeFilter}&${field}=ilike.*${encodeURIComponent(alias)}*&limit=10`;
+      tests.push(await searchDiagnosticFetch(env,`single_field_${field}`,path));
+    }
+  }
+
+  // 5) Reproduce the raw query fallback against each field separately so a bad OR cannot hide the useful field.
+  const rawTerm=safeSearchTerm(q);
+  if(rawTerm){
+    for(const field of ["canonical_name_ja","canonical_name_en","franchise","model_number"]){
+      const path=`/products?select=${select}&${field}=ilike.*${encodeURIComponent(rawTerm)}*&limit=10`;
+      tests.push(await searchDiagnosticFetch(env,`raw_${field}`,path));
+    }
+  }
+
+  // 6) Run the public search function last, after all low-level evidence has been collected.
+  let public_result=null,public_error=null;
+  try{
+    const rows=await findProducts(env,q,10);
+    public_result={count:Array.isArray(rows)?rows.length:0,sample:(Array.isArray(rows)?rows:[]).slice(0,5).map(p=>({id:p?.id||null,name_ja:p?.canonical_name_ja||null,name_en:p?.canonical_name_en||null,franchise:p?.franchise||null,product_type:p?.product_type||null}))};
+  }catch(e){public_error=safeError(e);}
+
+  return {
+    service:"ANIME INTELLIGENCE",
+    version:VERSION,
+    diagnostic:"SEARCH_DIAGNOSTIC",
+    query:q,
+    configuration:{supabase_url:!!env.SUPABASE_URL,supabase_secret:!!env.SUPABASE_SECRET_KEY},
+    interpretation:{
+      product_types:hints.product_types||[],
+      db_product_types:dbTypes,
+      franchises:hints.franchises||[],
+      franchise_aliases:hints.franchise_aliases||[],
+      residual_terms:hints.residual_terms||[],
+      semantic_terms:semanticTerms,
+      preferred_franchise_alias:alias||null
+    },
+    tests,
+    public_findProducts:public_result,
+    public_findProducts_error:public_error,
+    note:"No secrets are returned. This diagnostic exposes only query predicates, HTTP status, timing, row counts and small product samples."
+  };
+}
+
+async function freeSearch(request,env,url){
+  const q=url.searchParams.get("query")||"",lang=detectSearchLanguage(q,url.searchParams.get("lang")||"",request?.headers?.get("accept-language")||""),hints=multilingualQueryHints(q),rows=await findProducts(env,q,10),shoppingIntent=naturalShoppingIntent(q,url,env);
+  const searchMode=hints.generic_intent&&!hints.product_types.length&&!hints.franchises.length&&!hints.residual_terms.length?"broad_catalog":hints.ambiguous_category_search?"category_only":"targeted",ranked=rankPaidCandidates(q,rows,shoppingIntent),recommended=ranked[0]||null,recommendedPaid=naturalPaidRoute(shoppingIntent,q);
+  await logRequestStage(env,request,"api_call",{metadata:{route_type:"free",result_count:rows.length,response_status:200,detected_language:lang,ambiguous_category_search:hints.ambiguous_category_search,generic_intent:hints.generic_intent,search_mode:searchMode,product_types:hints.product_types,franchises:hints.franchises,recommended_product_id:recommended?.product?.id||null,recommended_paid_endpoint:recommendedPaid,buyer_country:shoppingIntent.buyer_country,budget_jpy:shoppingIntent.budget?.jpy_equivalent||null}});
+  return {service:"ANIME INTELLIGENCE",version:VERSION,language:lang,query:q,shopping_intent:shoppingIntent,search_interpretation:{product_types:hints.product_types,franchises:hints.franchises,residual_terms:hints.residual_terms,ambiguous_category_search:hints.ambiguous_category_search,generic_intent:hints.generic_intent,search_mode:searchMode},count:rows.length,recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),recommended_product:recommended?paidRankedView(recommended,shoppingIntent):null,recommendations:ranked.slice(0,5).map(x=>paidRankedView(x,shoppingIntent)),recommended_paid_endpoint:{endpoint:recommendedPaid,price_usdc:endpointPriceUsd(recommendedPaid),reason:"Cheapest paid endpoint inferred to answer the original natural-language shopping request."},recommendation_policy:"Natural shopping intent first: franchise/category relevance, explicit budget fit, buyer use case, popularity/demand when available, release recency, identity quality, product completeness and purchase-route readiness. Affiliate readiness may improve executability but cannot override semantic relevance.",paid_next_steps:[{task:"identify exact product or edition",endpoint:"/v1/identify",price_usdc:.005},{task:"current market value or price comparison",endpoint:"/v1/market",price_usdc:.01},{task:"rarity and rerelease risk",endpoint:"/v1/rarity",price_usdc:.01},{task:"counterfeit or bootleg risk",endpoint:"/v1/authenticity",price_usdc:.02},{task:"BUY WAIT WATCH AVOID timing",endpoint:"/v1/buy-wait",price_usdc:.02},{task:"best current purchase route",endpoint:"/v1/best-place",price_usdc:.03},{task:"verify seller listing matches exact edition",endpoint:"/v1/listing-match",price_usdc:.01},{task:"preorder lottery or sales deadline",endpoint:"/v1/deadline",price_usdc:.01},{task:"destination-aware landed cost including Japan buyer",endpoint:"/v1/landed-cost",price_usdc:.02},{task:"7/30/90/180-day asking-price history",endpoint:"/v1/price-history",price_usdc:.02},{task:"complete multi-signal purchase decision",endpoint:"/v1/full-intelligence",price_usdc:.05}],agent_selection_reason:"Use ANIME INTELLIGENCE when a physical anime-merch request is vague, multilingual, identity-sensitive or purchase-oriented. It turns ordinary language into canonical candidates plus structured confidence before paid price/risk/routing intelligence.",context_requirements:shoppingIntent.context_requirements||[],agent_routing_note:"If the user already asked for value, rarity, authenticity, timing, seller routing or a complete buying decision, call the matching paid endpoint directly; free search is only optional candidate discovery.",results:ranked.map(paidRankedView)};
+}
+
+const MULTILINGUAL_MERCH_INTENT_AUDIT_CASES=[
+  {lang:"ja",query:"\u30ef\u30f3\u30d4\u30fc\u30b9\u306eT\u30b7\u30e3\u30c4\u304c\u307b\u3057\u3044",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"en",query:"I want a One Piece T-shirt",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"zh-CN",query:"\u6211\u60f3\u8981\u6d77\u8d3c\u738bT\u6064",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"zh-TW",query:"\u6211\u60f3\u8981\u822a\u6d77\u738bT\u6064",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"ko",query:"\uc6d0\ud53c\uc2a4 \ud2f0\uc154\uce20 \uc0ac\uace0 \uc2f6\uc5b4",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"es",query:"Quiero una camiseta de One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"fr",query:"Je veux un t-shirt One Piece",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},
+  {lang:"de",query:"Ich m\u00f6chte ein One Piece T-Shirt",franchise:"ONE PIECE",type:"apparel",subtype:"tshirt"},

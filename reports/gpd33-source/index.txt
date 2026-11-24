@@ -1,0 +1,833 @@
+168: function safeError(e){
+172: function corsHeaders(extra={}){
+181: function b64(value){
+187: function unb64(value){
+194: function json(data,status=200,extra={}){
+201: function text(data,status=200,extra={}){
+208: function htmlResponse(data,status=200,extra={}){
+215: function decodeHtml(v=""){
+225: function stripHtml(v=""){
+229: function cleanOfficialTitle(v=""){
+236: function normalize(v=""){
+248: function tokens(v=""){
+252: function clamp(n,min=0,max=100){
+256: function median(values=[]){
+263: function daysSince(v){
+268: function hoursSince(v){
+273: function cleanJan(v=""){
+278: function isoDate(v=""){
+285: function normalizeStage(stage=""){
+290: function deterministicWindow(items=[],count=1,timeMs=Date.now(),salt=0){
+296: function labelSimilarityScore(a="",b=""){
+305: function sourceEvidence(source,observedAt=new Date().toISOString(),extra={}){
+309: function latestObservationMap(rows=[]){
+325: function detectLanguage(query="",explicit="",accept=""){
+342: function foldLatinForSearch(v=""){
+346: function detectSearchLanguage(query="",explicit="",accept=""){
+401: function msg(lang,key){
+409: function sbBase(env){
+414: function sbHeaders(env,extra={}){
+424: async function sb(env,path,options={}){
+437: async function sbOptional(env,path,options={}){
+441: async function sbCount(env,filters="",options={}){
+457: async function loadProductCandidates(env,limit=500){
+462: async function loadBackfillCandidates(env,limit=500){
+467: async function loadProductsByJans(env,jans=[]){
+474: async function loadProductsBySourceKeys(env,keys=[]){
+484: function stableHash32(v=""){
+490: function canonicalCollectibleIdentity(name="",productType="other_collectible"){
+499: function apparelBrand(name=""){
+515: function apparelCollaboration(name=""){
+539: function apparelItemType(name=""){
+555: function apparelStyleCode(name=""){
+574: function apparelObservedSize(name=""){
+580: function normalizeApparelCanonicalName(name=""){
+590: function apparelHasCollabSignal(name=""){
+597: function apparelIdentity(name=""){
+618: function apparelClassifierOverride(name="",classification=null){
+628: function sneakerBrand(name=""){
+646: function sneakerStyleCode(name=""){
+654: function sneakerObservedSize(name=""){
+663: function sneakerCollaboration(name=""){
+676: function sneakerModelFamily(name="",brand=null){
+690: function normalizeSneakerCanonicalName(name=""){
+702: function sneakerIdentity(name=""){
+731: function firstMatch(v,re,group=1){const m=String(v||"").normalize("NFKC").match(re);return m?String(m[group]||m[0]).trim():null;}
+732: function upperOrNull(v){return v?String(v).trim().toUpperCase():null;}
+734: function tradingCardGame(name=""){
+745: function tradingCardSetCode(name=""){
+748: function tradingCardNumber(name=""){
+757: function tradingCardRarity(name=""){
+761: function tradingCardGrade(name=""){
+766: function tradingCardLanguage(name=""){
+774: function tradingCardCondition(name=""){
+782: function tradingCardProfile(name=""){
+797: function lotteryPrizeProfile(name=""){
+803: function modelKitProfile(name=""){
+809: function plushProfile(name=""){
+813: function acrylicProfile(name=""){
+817: function smallGoodsProfile(name=""){
+821: function figureProfile(name=""){
+827: function apparelProfile(name=""){
+832: function sneakerProfile(name=""){
+837: function specialistProfile(name="",productType="other"){
+850: function productSpecialistProfile(product){
+855: function specialistIdentityAnalysis(product,title=""){
+873: function categoryMarketThreshold(product){
+880: function specialistIntelligenceSelfTest(){
+895: function collectibleIdentityKey(name,productType,jan=null){
+909: function noJanCanonicalKey(name,productType){
+914: async function getObservations(env,productId){
+923: async function loadSources(env){
+928: function sourceIdBySlugOrName(sources=[],slug,names=[]){
+934: async function ensureSource(env,{slug,name,type="marketplace",base_url=null}){
+955: async function ensureYahooSource(env){
+963: function classifyProduct(v=""){
+1006: function catalogClassificationRegressionSelfTest(){
+1030: function normalizedManufacturer(v=""){
+1041: function identityQualityReasons(p){
+1060: function marketIdentityQuality(p){return identityQualityReasons(p).score;}
+1062: function identificationConfidenceFor(p){
+1072: function productTypeConflict(product,title=""){
+1086: function janNameCompatible(a,b){return labelSimilarityScore(a,b)>=30;}
+1088: function detectRerelease(v=""){
+1096: function htmlMeta(html,key){
+1106: function htmlTitle(html){
+1110: function parsePriceJpy(html){
+1116: function parseJanFromText(v=""){
+1121: function parseReleaseDate(html){
+1127: async function fetchOfficial(url){
+1133: function canonicalOfficialUrl(url){
+1137: function sourceKeyFromOfficial(connector,url,jan=null){
+1141: function discoverOfficialLinks(html,baseUrl,regex){
+1152: function goodSmileEnglishUrl(url){
+1157: function parseOfficial(connector,url,html){
+1178: function parseGoodSmileCalendar(html,lang="ja"){
+1202: function mergeBilingualCalendar(ja=[],en=[]){
+1212: async function fetchGoodSmileCalendars(){
+1222: function goodSmileReleaseSeedPayload(rec,now=new Date().toISOString()){
+1233: async function saveGoodSmileReleaseSeed(env,rec){
+1240: async function massDiscoverGoodSmile(env,limit=20,options={}){
+1279: function officialFeedAnchorCandidates(html,feed){
+1304: function officialFeedSeedPayload(feed,x,now=new Date().toISOString()){
+1308: async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,options={}){
+1331: function htmlTextCompact(x){return decodeHtml(String(x||"").replace(/<[^>]+>/g," ")).replace(/\s+/g," ").trim();}
+1333: function discoverGoodSmileArchiveCards(html,baseUrl){
+1350: function archiveSeedPayload(card,category,page,now=new Date().toISOString()){
+1355: async function archiveDiscoverGoodSmile(env,categoryId=6,page=1,limit=40){
+1378: function invalidOfficialProductPage(connector,url,parsed){
+1386: async function saveOfficialProduct(env,connector,url,parsed){
+1425: async function refreshOfficialBatch(env,limit=2,options={}){
+1456: async function cleanupKnownBadOfficialRows(env){
+1471: function recentBackfillFailure(p){
+1476: async function backfillOfficialDetails(env,limit=1){
+1537: function repairUtf8Mojibake(v=""){
+1550: function normalizedUnicodePhrase(v){return String(v||"").normalize("NFKC").toLowerCase().replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
+1551: function normalizedSearchPhrase(v){return foldLatinForSearch(String(v||"").normalize("NFKC")).replace(/[-\u2010-\u2015_\/\|,.;:!?()[\]{}\'"`~@#$%^&*+=<>]/g," ").replace(/\s+/g," ").trim();}
+1552: function phraseIncludes(haystack,needle){
+1558: function strictEntityAliasMatch(haystack,needle){
+1567: function directMultilingualProductTypeHints(raw=""){
+1581: function directMultilingualFranchiseHints(raw=""){
+1590: function asciiSafeUnicodeIntentFallback(raw=""){
+1653: function merchSubtypeHints(query=""){
+1662: function onePieceQueryContext(raw="",productTypes=[],merchSubtypes=[],characterGroups=[]){
+1681: function candidateMatchesMerchSubtype(p,subtypes=[]){
+1712: function ambiguousPreferenceHints(query=""){
+1719: function intentContextRequirements(preferences=[]){
+1725: function preferenceText(p){return normalizedSearchPhrase([discoveryTitle(p),p?.franchise,p?.series,p?.brand,p?.manufacturer,p?.product_type,p?.product_status,JSON.stringify(p?.metadata||{})].filter(Bo
+1726: function candidatePreferenceFit(p,preferences=[]){
+1778: function listingNoiseScore(p){
+1789: function canonicalDisplayName(p){
+1798: function candidateKnownPriceJpy(p){
+1807: function budgetConstraintStatus(p,intent){
+1814: function timingNeedsExactIdentity(path,intent,query){
+1819: function intentUnderstandingConfidence(intent){
+1822: function recommendationConfidenceFromRanked(ranked=[],intent=null){
+1826: function multilingualQueryHints(query=""){
+1861: function safeSearchTerm(v){return String(v||"").replace(/[,%()]/g," ").replace(/\s+/g," ").trim().slice(0,80);}
+1862: function mergeUniqueProducts(groups=[],limit=10){const out=[],seen=new Set();for(const rows of groups){for(const p of (Array.isArray(rows)?rows:[])){if(!p?.id||seen.has(p.id))continue;seen.add(p.id);o
+1864: function cleanNullishValue(v){const s=String(v??"").trim();return !s||s.toLowerCase()==="null"||s.toLowerCase()==="undefined"?null:v;}
+1865: function cleanNullableTitle(v){const x=cleanNullishValue(v);return x===null?null:cleanOfficialTitle(x);}
+1866: function discoveryTitle(p){return `${cleanNullishValue(p?.canonical_name_ja)||""} ${cleanNullishValue(p?.canonical_name_en)||""}`.trim();}
+1867: function discoveryClassifier(p){return classifyProduct(discoveryTitle(p));}
+1881: function titleLooksLikeGarmentOnePiece(rawTitle=""){
+1887: function titleInferredDiscoveryFranchise(p){
+1900: function storedDiscoveryFranchiseIsFalsePositive(p,stored){
+1909: function inferredDiscoveryFranchise(p){
+1914: function broadDiscoveryEligible(p){
+1926: function broadDiscoveryScore(p){
+1939: function discoveryEffectiveType(p){const cls=discoveryClassifier(p),stored=String(p?.product_type||"other");return cls.confidence>=.94&&cls.type!=="other"?cls.type:stored;}
+1940: function discoverySafeFranchise(p){
+1945: function diversifyBroadDiscoveryProducts(rows=[],limit=10){
+1961: async function broadCatalogDiscovery(env,limit=10){
+1981: function canonicalizeDiscoveryFranchise(v){
+1989: function discoveryTypeMatchesHint(actual,hint){
+1996: function discoveryProductFitScore(p,hints,query=""){
+2009: function rankAndFilterDiscoveryProducts(rows=[],hints={},query="",limit=10){
+2026: function preferredFranchiseSearchAlias(franchise=""){
+2044: function intentCharacterGroups(chars=[]){
+2048: function candidateCharacterText(p){
+2052: function candidateMatchesIntentCharacters(p,chars=[]){
+2070: function candidateMatchesIntentFranchises(p,franchises=[]){
+2090: function candidateMatchesIntentTypes(p,types=[]){
+2102: function explicitIntentPresent(intent){
+2109: function intentRequiresCharacterConstraint(intent){
+2118: function deferredLivePreference(pref){
+2121: function strictCatalogPreference(pref){
+2126: function strictCatalogPreferences(intent){return (intent?.preferences||[]).filter(strictCatalogPreference);}
+2127: function rankingPreferences(intent){return (intent?.preferences||[]).filter(p=>p.facet!=="reference"&&!deferredLivePreference(p));}
+2128: function deferredPreferenceKeys(intent){return (intent?.preferences||[]).filter(deferredLivePreference).map(p=>`${p.facet}:${p.value}`);}
+2129: function intentCompatibility(p,intent){
+2140: function preferredCharacterSearchAlias(character=""){
+2151: function preferenceSearchTerms(intent){
+2175: function preferredTypeSearchAlias(intent){
+2185: function canonicalIntentRetrievalQuery(intent,originalQuery=""){
+2206: function preferenceTargetedQueries(intent,originalQuery=""){
+2236: function preferenceEvidenceSummary(rows=[],intent=null){
+2244: function targetedIntentQuery(intent,originalQuery=""){
+2253: async function lightweightStructuredFallback(env,hints,query,limit=10){
+2291: async function findProducts(env,q="",limit=10){
+2335: async function resolveProduct(env,url){
+2350: function marketEligible(p){
+2356: function marketPriority(p,history=[],source="yahoo"){
+2372: async function selectMarketProducts(env,history=[],limit=2,products=null,source="yahoo"){
+2377: async function markMarketAttempt(env,p,source,detail={}){
+2386: function isYahoo403Error(error){return /(?:^|\b)Yahoo\s+403\b/i.test(safeError(error));}
+2388: async function yahooCatalogCooldownState(env){
+2395: async function setYahooCatalogCooldown(env,error,minutes=YAHOO_CATALOG_COOLDOWN_MINUTES){
+2402: async function yahooRequest(env,params={},results=20){
+2427: function yahooIdentityAnalysis(product,item){
+2447: async function yahooSearch(env,product,limit=30){
+2472: async function recentYahooObservations(env){
+2477: async function saveYahooObservations(env,product,hits,recent=[],sourceId=null){
+2501: async function refreshYahooBatch(env,limit=2,options={}){
+2531: function ebayBasicAuth(clientId,clientSecret){
+2535: async function ebayAccessToken(env){
+2544: function ebaySafeQuery(v=""){
+2552: function ebayIdentityTokens(v=""){return [...new Set(tokens(v).filter(t=>!EBAY_GENERIC_IDENTITY_TOKENS.has(t)&&!/^\d+$/.test(t)))];}
+2553: function identityAnchors(v=""){
+2563: function identityAnchorMatched(anchor,text=""){
+2570: function ebayVariantMarkers(product){
+2599: function ebayVariantIdentityAnalysis(product,title=""){
+2609: function ebayStrongIdentityAnalysis(product,item){
+2627: function ebaySearchCandidates(product){
+2640: function ebayEpnConfigured(env){return !!String(env.EBAY_EPN_CAMPAIGN_ID||"").trim();}
+2641: function ebayEndUserContext(env,reference=""){
+2648: function ebayRequestHeaders(env,token,reference=""){
+2654: async function ebayBrowseRequest(env,params){
+2661: async function ebayItemDetail(env,itemId){
+2665: function ebayDetailText(detail){
+2669: function ebayDetailGtins(detail){return [...new Set([...String(ebayDetailText(detail)).matchAll(/\b(\d{14}|\d{13}|\d{12}|\d{8})\b/g)].map(x=>x[1]).filter(validGtin))];}
+2671: async function ebaySearch(env,product,limit=20){
+2698: async function recentEbayObservations(env){const rows=await sbOptional(env,"/market_observations?select=*&metadata->>market_source=eq.ebay&order=observed_at.desc&limit=1000");return Array.isArray(rows
+2700: function ebayShipping(item){
+2704: function envUsdJpyRate(env){const n=Number(env.EBAY_USDJPY||env.USDJPY||0);return Number.isFinite(n)&&n>50&&n<300?n:null;}
+2706: async function resolveUsdJpy(env){
+2711: function originalToJpy(value,currency,fxRate=null){const n=Number(value);if(!Number.isFinite(n))return null;if(currency==="JPY")return Math.round(n);if(currency==="USD"&&fxRate)return Math.round(n*fxR
+2713: async function saveEbayObservations(env,product,hits,recent=[],sourceId=null,fxInfo={rate:null,source:"unavailable"}){
+2727: async function refreshEbayBatch(env,limit=1,options={}){
+2737: async function sha256Hex(value=""){
+2741: async function logEvent(env,eventType,detail={}){
+2759: function getNested(obj,path=[]){let cur=obj;for(const key of path){if(cur==null||typeof cur!=="object")return null;cur=cur[key];}return cur??null;}
+2760: function extractPaymentPayer(payload,settlement=null){const candidates=[["payload","authorization","from"],["payload","authorization","payer"],["payload","from"],["authorization","from"],["authorizati
+2761: function extractSettlementTx(settlement){for(const p of [["transaction"],["transactionHash"],["txHash"],["tx"],["signature"],["receipt","transactionHash"],["receipt","signature"]]){const v=getNested(s
+2762: async function payerHashFromPayment(payload,settlement){const payer=extractPaymentPayer(payload,settlement);return payer?sha256Hex(`anime-intelligence:${payer}`):null;}
+2764: function configuredTestPayerHashes(env){
+2774: function isLegacySelfTestFingerprintEvent(x){
+2781: function isAdminE2ETestEvent(x,env){
+2797: function isKnownSelfTestSignatureEvent(x){
+2806: async function kpiApiEventsCount(env){
+2817: async function readKpiEvents(env,funnelTypes){
+2845: function isContextlessSyntheticShoppingCall(x){
+2856: async function readAffiliateTelemetry(env){
+2865: async function revenueMetrics(env){
+2971: async function monetizationStatus(env,origin,{checkBazaar=false}={}){
+2994: function rakutenConfigured(env){return !!String(env.RAKUTEN_AFFILIATE_ID||"").trim()||rakutenWebServiceConfigured(env);}
+2995: function rakutenWebServiceConfigured(env){return !!String(env.RAKUTEN_APPLICATION_ID||"").trim()&&!!String(env.RAKUTEN_ACCESS_KEY||"").trim();}
+2997: function rakutenSearchQuery(product){
+3000: function rakutenSearchQueries(product){
+3007: function rakutenPublicSearchUrl(product){
+3012: function isOfficialRakutenAffiliateUrl(v){
+3016: function normalizeRakutenAffiliateOffer(raw,product){
+3020: function registeredRakutenAffiliateOffers(product){
+3029: function rakutenApiItems(body){
+3034: function normalizeRakutenLiveOffer(item,product,analysis,affiliateIdPresent){
+3044: async function rakutenApiSearch(env,product){
+3072: async function rakutenSearch(env,product){
+3083: function base64UrlEncode(v=""){const bytes=new TextEncoder().encode(String(v));let s="";for(const b of bytes)s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$
+3084: function base64UrlDecode(v=""){const normalized=String(v).replace(/-/g,"+").replace(/_/g,"/");const padded=normalized+"=".repeat((4-normalized.length%4)%4);const bin=atob(padded);return new TextDecode
+3085: function affiliateRedirectUrl(origin,offer,productId){if(!offer?.affiliate_url||!isOfficialRakutenAffiliateUrl(offer.affiliate_url))return null;const u=new URL(`${origin}/r/rakuten`);u.searchParams.se
+3086: function isAllowedAffiliateUrl(v){return isOfficialRakutenAffiliateUrl(v);}
+3087: async function handleRakutenRedirect(request,env,url){const encoded=url.searchParams.get("u")||"";let target;try{target=base64UrlDecode(encoded);}catch{return json({error:"invalid_affiliate_url"},400)
+3148: function buildCollectibleCatalogQueries(){
+3172: function dynamicSeedSafe(v){
+3182: function dynamicSeedLearnable(v,field,count=1){
+3191: async function loadDynamicCatalogPool(env){
+3199: async function refreshDynamicCatalogPool(env){
+3213: async function dynamicCatalogProgress(env){
+3219: async function runDynamicCatalogBatch(env,batches=2){
+3241: function tradingCardAccessoryReason(name=""){
+3248: function tradingCardForm(name=""){
+3256: function tradingCardQuality(name,classification){
+3261: function tradingCardFilterSelfTest(){
+3276: function collectibleCatalogHitAccepted(hit){
+3287: function normalizeCatalogDate(value){
+3300: function yahooCatalogSeedPayload(x,query,start,sourceId,now){
+3307: function legacyCatalogCleanupClassification(name="",productType=""){
+3316: function legacyIdentityVersion(sourceKey=""){
+3322: async function loadCatalogSeedRowsForCleanup(env){
+3336: async function deleteProductsByIdsChunked(env,ids=[]){
+3346: async function catalogCleanupPlan(env,{apply=false}={}){
+3384: async function seedCollectibleCatalogYahoo(env,queryIndex=0,page=1,options={}){
+3472: async function runCatalogCategoryTest(env,category,page=1){
+3480: async function catalogProgress(env){
+3488: async function saveCatalogProgress(env,state){await logEvent(env,"catalog_seed_progress",{endpoint:"/admin/catalog-run",metadata:state});return state;}
+3490: async function catalogAutoStatus(env){
+3506: async function runCatalogBatch(env,batches=10){
+3528: async function officialFallbackProgress(env){
+3534: async function saveOfficialFallbackProgress(env,state){
+3538: async function runGoodSmileFallbackSweep(env,scheduledTime=Date.now(),maxAttempts=OFFICIAL_FALLBACK_ARCHIVE_ATTEMPTS){
+3557: async function runOfficialFallbackGrowth(env,scheduledTime=Date.now()){
+3579: function chooseSelfDiscoveryYahooHit(query,hits=[]){
+3591: async function selfDiscoverProduct(env,query){
+3607: function shouldApplyClassification(current,next){if(!current||current==="other")return true;if(next.type===current)return false;if(next.confidence>=.90)return true;return false;}
+3609: async function repairProductQualityBatch(env,limit=PIPELINE.qualityRepairStandalone){
+3616: async function enrichExistingCatalogBatch(env,limit=PIPELINE.enrichmentCron){
+3632: async function growthMetricsScalable(env){
+3662: function rotationSlotFromTime(timeMs=Date.now()){return Math.floor(Number(timeMs)/3600000)%ROTATION.length;}
+3663: function autonomousStage(timeMs=Date.now()){return ROTATION[rotationSlotFromTime(timeMs)];}
+3664: function nextRotationStages(timeMs=Date.now(),count=4){const slot=rotationSlotFromTime(timeMs);return Array.from({length:count},(_,i)=>ROTATION[(slot+i)%ROTATION.length]);}
+3665: function nestedFailures(result){if(!result)return 0;if(Array.isArray(result))return result.filter(x=>x?.error).length;if(Array.isArray(result.errors))return result.errors.length;if(Array.isArray(resul
+3667: async function runRotationStage(env,stage,mode="cron",options={}){
+3676: function observationEffectivePrice(o){const p=Number(o.price_jpy),s=o.shipping_jpy==null?0:Number(o.shipping_jpy);return Number.isFinite(p)&&p>0?p+(Number.isFinite(s)&&s>0?s:0):null;}
+3677: function freshnessStatusFromAge(ageHours){if(ageHours==null||!Number.isFinite(ageHours))return "empty";if(ageHours<=24)return "live";if(ageHours<=168)return "recent";if(ageHours<=PIPELINE.marketFreshD
+3679: function marketView(product,obs){
+3684: function rarityAnalysis(product,market){const age=daysSince(product.original_release_date),n=market.offer_count||0,premium=market.median_vs_msrp_pct,sp=productSpecialistProfile(product),t=String(produ
+3686: function authenticityRisk(product,market,obs){let score=15;const reasons=[];if(market.msrp_jpy&&market.lowest_price_jpy&&market.lowest_price_jpy<market.msrp_jpy*.45){score+=30;reasons.push("Price is l
+3688: function buyWaitDecision(product,market,rarity,auth,lang){const msrp=market.msrp_jpy,low=market.lowest_price_jpy,med=market.median_price_jpy;if(auth.level==="high")return {decision:"AVOID",confidence:
+3690: async function refreshLiveMarketForProduct(env,product,obs=[]){
+3699: function dateOrNull(v){
+3704: function firstMetadataDate(metadata={},keys=[]){
+3711: function purchaseDeadlineView(product){
+3735: function priceHistoryView(product,obs=[]){
+3747: function listingMatchView(product,obs=[],listingUrl="",listingTitle=""){
+3758: function normalizeBuyerCountry(v="JP"){
+3770: function goodSmileShippingUsdForCountry(country="US"){
+3783: function isGoodSmileProduct(product){
+3788: function goodSmileOfficialUrl(product){
+3793: function officialPurchaseOffersForProduct(product,fxInfo={}){
+3840: function materializeDestinationOffer(offer,buyerCountry="JP"){
+3856: function sourcePurchaseProfile(source,buyerCountry="JP"){
+3890: function freeShippingEvidence(title=""){
+3894: function priceFreshnessLabel(observedAt,livePrice=false){
+3903: function priceConfidenceFromEvidence({livePrice=false,shippingKnown=false,observedAt=null}={}){
+3911: function observationToPurchaseOffer(o){
+3924: function rakutenToPurchaseOffer(x){
+3934: function zenMarketProxyOfferForDomesticOffer(offer,buyerCountry="US"){
+3985: function uniquePurchaseOffers(offers=[]){
+3997: function purchaseRouteTradeoff(route,cheapest,buyerCountry){
+4006: function assessPurchaseRoute(offer,buyerCountry="JP",cheapestKnown=null){
+4033: function countryAwarePurchaseRouting(obs=[],rakuten={offers:[]},buyerCountry="JP",officialOffers=[],product=null){
+4068: function landedCostView(bestPlace,buyerCountry="JP",postalCode=""){
+4086: async function buildIntelligence(env,product,refresh=false,lang="en",options={}){
+4094: function compactProductResponse(product){
+4118: function duffelConfigured(env){
+4122: function amadeusConfigured(env){
+4126: function expediaRapidConfigured(env){
+4130: async function sha512Hex(v){
+4135: function expediaRapidBase(env){
+4138: async function expediaRapidAuthHeader(env){
+4146: async function expediaRapidAvailability(env,body){
+4207: function travelProviderRegistry(env){
+4247: function duffelHeaders(env){
+4257: async function duffelRequest(env,path,{method="GET",body=null}={}){
+4280: function normalizeDuffelFlightOffer(o,index=0){
+4301: function scoreFlightOffer(o){
+4311: function validateFlightSearch(body){
+4323: async function duffelFlightSearch(env,body){
+4376: function providerConcentrationWarning(env,vertical){
+4387: function bookingDemandConfigured(env){
+4391: function bookingDemandBase(env){
+4397: function bookingDemandHeaders(env){
+4406: async function bookingDemandPost(env,path,body,{beta=false}={}){
+4430: function travelArray(payload){
+4438: function travelPriceCandidates(x){
+4457: function travelCurrency(x){
+4474: function travelUrl(x){
+4483: function travelReviewScore(x){
+4495: function travelName(x){
+4502: function normalizeTravelOffer(x,index=0){
+4517: function scoreTravelOffer(o){
+4526: function rankTravelOffers(payload,limit=10){
+4535: function validateTravelDates(body){
+4546: function defaultTravelBooker(body){
+4554: function defaultTravelGuests(body){
+4565: function travelLocationFields(body){
+4574: function buildAccommodationSearchBody(body){
+4589: async function travelAccommodationSearch(env,body,{smart=false}={}){
+4624: async function travelGenericBookingSearch(env,vertical,body){
+4655: async function travelShoppingIntelligence(env,body){
+4714: async function travelStatus(env){
+4743: async function travelApi(request,env,url){
+4964: async function seedDefaultPartsSources(env){
+4981: async function partsIngestStatus(env){
+5004: async function runPartsIngest(env,{sources=1,pages=1}={}){
+5026: function normalizePartNumber(v=""){
+5030: function partRowShape(row){
+5057: function partSearchScore(row,q,pn,manufacturer){
+5076: async function searchPartsCatalog(env,{query="",part_number="",manufacturer="",limit=20}={}){
+5119: async function getPartRelations(env,partId){
+5142: async function getPartRelationCandidates(env,part){
+5165: async function getPartDocuments(env,partId){
+5180: async function getPartLocalOffers(env,partId){
+5200: async function optionalPartMarketSearch(env,part){
+5213: function relationBuckets(relations=[]){
+5224: function partDecision(part,buckets){
+5248: async function resolvePart(env,{query="",part_number="",manufacturer=""}={}){
+5260: async function buildPartsIntelligence(env,part){
+5302: async function partsSearchApi(env,url){
+5317: async function partsIntelligenceApi(request,env,url,ctx=null){
+5332: async function upsertPartAdmin(env,body){
+5369: async function sha256HexText(v=""){
+5374: function clamp100(v){return Math.max(0,Math.min(100,Math.round(Number(v)||0)));}
+5375: function merchantPublicShape(m){
+5379: function merchantOfferShape(o){
+5384: function merchantOfferScore(offer,merchant,buyerCountry=""){
+5437: async function merchantByApiKey(env,request){
+5444: async function registerMerchantAdmin(env,body,origin){
+5459: function safeMerchantUrl(v){
+5463: async function merchantRegistrationIpHash(request){
+5467: async function enforceMerchantRegistrationRateLimit(env,request){
+5481: function publicMerchantRegistrationBody(body){
+5508: async function registerMerchantPublic(env,request,body,origin){
+5516: async function merchantSelfApi(env,request,origin){
+5533: async function rotateMerchantApiKey(env,request){
+5544: function merchantLandingPage(origin){
+5582: function merchantOnboardingPage(origin){
+5657: function key(){return $("api_key").value.trim()}
+5658: function setProgress(n){for(let i=1;i<=4;i++){const e=$("pg"+i);e.classList.toggle("done",i<n);e.classList.toggle("active",i===n)}}
+5659: function safePublicResult(j){if(!j||typeof j!=="object")return j;const c=JSON.parse(JSON.stringify(j));if(c.merchant_api_key)c.merchant_api_key="[REDACTED - saved in API Key field]";return c}
+5660: function setConnected(ok,name=""){const e=$("connection_state");e.textContent=ok?("Connected"+(name?": "+name:"")):"Not connected.";e.className="small "+(ok?"ok":"bad")}
+5661: function setPublicLinks(slug){if(!slug)return;merchantSlug=slug;const feed="/v1/merchant/feed?merchant="+encodeURIComponent(slug);const diag="/v1/merchant/diagnostic?merchant="+encodeURIComponent(slug
+5662: async function api(path,opt={}){const r=await fetch(path,opt);let j;try{j=await r.json()}catch{j={ok:false,error:"non_json_response",status:r.status}};if(!r.ok&&!j.status)j.status=r.status;return j}
+5663: async function registerMerchant(){
+5677: async function copyIssuedKey(){const v=$("issued_key").value;if(!v)return;try{await navigator.clipboard.writeText(v);out("register_out",{ok:true,message:"API Key copied. Store it in your password mana
+5678: function toggleIssuedKey(){const e=$("issued_key");e.type=e.type==="password"?"text":"password"}
+5679: async function connectMerchant(){const k=key();if(!k){setConnected(false);out("me_out",{ok:false,error:"Enter your Merchant API Key."});return}const j=await api("/v1/merchant/me",{headers:{"x-merchant
+5680: function toggleKey(){const e=$("api_key");e.type=e.type==="password"?"text":"password"}
+5681: async function saveProfile(){
+5686: function nval(id){const v=$(id).value.trim();return v===""?null:Number(v)}
+5687: async function publishOffer(){
+5693: function renderDiagnostic(j){
+5699: async function runDiagnostic(){
+5703: async function rotateKey(){
+5710: function merchantOptionalHttpUrl(v,field){
+5717: function merchantFiniteNumber(v,field,{min=null,max=null,integer=false}={}){
+5726: function normalizeMerchantOfferInput(x,merchantId){
+5776: async function upsertMerchantOffers(env,merchant,body){
+5785: async function updateMerchantProfile(env,merchant,body,origin){
+5796: async function loadMerchantBySlug(env,slug){
+5800: async function merchantProfileApi(env,url,origin){
+5806: async function merchantFeedApi(env,url){
+5813: async function searchMerchantOffers(env,{part_number="",manufacturer="",buyer_country="",limit=20}={}){
+5835: function merchantGlobalOfferReadiness(o){
+5841: async function merchantDiagnosticApi(env,url){
+5854: async function snapshotMerchantScores(env,merchant){
+5861: async function partsCoverageApi(env){
+5872: function partsSalesPage(origin){return htmlResponse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Global Parts P
+5874: const UNIVERSAL_GENERIC_DOMAINS=[
+5880: const UNIVERSAL_DOMAIN_TTL_HOURS={
+5886: const UNIVERSAL_MERCHANT_DUE_BUDGET=120;
+5887: const UNIVERSAL_MERCHANT_DUE_HARD_CEILING=180;
+5888: const UNIVERSAL_MERCHANT_TRICKLE_SEED_MAX_ROWS=1;
+5889: const UNIVERSAL_EXPANSION_PROFILES={
+5917: const UNIVERSAL_GENERIC_DOMAIN_TARGET=10000;
+5918: const UNIVERSAL_PROACTIVE_SEEDS=Object.entries(UNIVERSAL_EXPANSION_PROFILES).flatMap(([domain,p])=>p.anchors.map(query=>({domain,query})));
+5919: const UNIVERSAL_EXPANSION_POLICY={per_run_budget:6,identity_slots:3,fulfillment_slots:2,cross_provider_slots:0,utility_slots:1,demand_share:0.20,frontier_share:0.15,stale_share:0.10,exploration_share:
+5920: const UNIVERSAL_DISCOVERY_POLICY={results_per_provider:30,candidates_per_query:50,canonical_gtin_promotions_per_query:12,decision_live_detail_budget:2,background_live_detail_budget:0,cross_provider_gt
+5921: const UNIVERSAL_DECISION_READY_POLICY={high_risk_domains:["medical_supplies","baby_kids","automotive_parts","industrial_supplies","scientific_lab","safety_security"],exact_identity_domains:["automotiv
+5922: function genericCommerceConfigured(env){
+5925: function digitsOnly(v=""){return String(v||"").replace(/\D/g,"");}
+5926: function validGtin(v=""){
+5932: function isbn10Valid(v=""){
+5937: function normalizeUniversalIdentifiers(body={},query=""){
+5958: function universalIdentityKey(domain,identifiers={},manufacturer="",query=""){
+5966: function universalFreshness(domain,observedAt){
+5971: function offerEvidenceScore(o={}){
+5976: function dedupeUniversalOffers(rows=[]){
+5984: async function loadUniversalMarketMemory(env,domain,identityKey,query,limit=12){
+5995: function genericDomainProfile(domain){return UNIVERSAL_EXPANSION_PROFILES[String(domain||"general_commerce").toLowerCase()]||UNIVERSAL_EXPANSION_PROFILES.general_commerce;}
+5996: function genericDomainPolicy(domain,body){
+6003: function offerKnownPrice(o){const n=Number(o?.item_price??o?.price??o?.total_price);return Number.isFinite(n)?n:null;}
+6004: function offerKnownShipping(o){const n=Number(o?.shipping_cost);return Number.isFinite(n)?n:null;}
+6005: function genericOfferIdentityMatch(domain,o,intent,body={}){
+6016: function genericDomainHardGates(domain,o,intent,body={}){
+6030: function evaluateGenericOffer(domain,o,intent,body={}){
+6048: function decideGenericPurchase(domain,evaluated,intent){
+6059: function normalizeYahooGeneric(item){
+6063: function normalizeEbayGeneric(item){
+6070: function universalQueryKey(domain="general_commerce",query=""){
+6073: function universalObservationFingerprint(o={}){
+6076: function universalDiscoveryIdentityFingerprint(o={}){
+6087: const UNIVERSAL_QUERY_EQUIVALENTS=[
+6107: function universalEquivalentMatch(phrase,title){
+6112: function universalCandidateRelevance(query="",o={}){
+6127: function universalQueryFamily(domain="general_commerce",query=""){
+6135: function universalMerchantEvidence(o={}){
+6145: function universalCandidateCommerceEvidence(o={}){
+6161: function universalDomainDecisionReadiness(domain,o={},query=""){
+6176: function purchaseAttributionKey(intent={}){
+6180: function canonicalConflictAssessment(existing,row){
+6191: function explorationHistoryFromRows(rows=[],now=Date.now()){
+6209: function adaptiveExplorationScore(candidate,history,now=Date.now()){
+6223: async function persistUniversalCommerceObservations(env,body,result){
+6491: function universalIdentityRoleScore(x={}){
+6504: function universalFulfillmentRoleScore(x={}){
+6508: function universalCrossProviderRoleScore(x={}){return 0.65*universalIdentityRoleScore(x)+0.35*universalFulfillmentRoleScore(x);}
+6509: function universalCanonicalDecisionReady(domain,o={},query=""){
+6513: async function universalDemandRefresh(env,limit=6){
+6593: async function checkpointedUniversalDemandRefresh(env,limit=1,trigger="scheduled"){
+6609: async function universalDiscoveryDiagnostics(env){
+6622: async function publicDiscoveryHealth(env){
+6656: async function universalCoverageSnapshot(env){
+6668: function universalSelftest(){
+6788: function canonicalLinkedOfferRecord(domain,query,o={}){
+6793: function detailExactMpnMatch(detail,mpn=""){
+6798: async function resolveCanonicalOffersForProducts(env,products=[],domain="general_commerce",query=""){
+6841: async function enrichGenericDecisionLive(env,offers=[],budget=2){
+6849: function identityOptimizedSearchQuery(query="",exactId="",domain="general_commerce"){
+6872: function identityQueryBreadthScore(query=""){
+6879: async function genericCommerceSearch(env,body){
+6946: function commerceDomainsResponse(){
+6950: function shoppingDecisionAction(intel){
+6959: function shoppingReasonCodes(intel){
+6969: function shoppingIntelligenceView(intel,origin){
+7005: async function recordPurchaseIntent(env,data={},source="api"){
+7044: async function purchaseIntentApi(request,env){
+7097: function purchaseUpperCountry(v=""){
+7101: function inferPurchaseCountry(query="",explicit=""){
+7107: function purchaseFinite(v){if(v==null||v==="")return null;const n=Number(v);return Number.isFinite(n)?n:null;}
+7108: function safeDecodePurchaseText(v=""){
+7116: function inferPurchaseManufacturer(query="",explicit=""){
+7122: function inferPurchaseDeadline(query="",explicit=""){
+7131: function extractLikelyMpn(query=""){
+7138: function inferPurchaseDomain(body={},query="",mpn=""){
+7170: function normalizePurchaseDecisionIntent(body={},request=null){
+7210: function purchaseDeadlineDays(deadline){
+7214: function purchaseKnownOfferTotal(offer,quantity=1){
+7221: function assessPartMerchantOffer(x,intent){
+7247: function globalPartsOfferBlockers(x,intent){
+7259: function globalPartsDecision(partIntel,evaluated,intent){
+7282: function rankPurchasePartOffers(items=[]){
+7291: async function buildUniversalPurchaseDecision(request,env,body,origin){
+7347: function purchaseDecisionBodyFromUrl(url){
+7357: async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
+7395: function shapePaidResponse(path,intel){
+7532: function agentSelectionMetadata(path){
+7612: function discoveryTaskQueries(path){return DISCOVERY_TASK_QUERIES[path]||[];}
+7613: function combinedDiscoveryKeywords(){return [...new Set([...GLOBAL_DISCOVERY_KEYWORDS,...COMMERCIAL_DISCOVERY_KEYWORDS])];}
+7638: function bazaarTags(path){
+7641: function bazaarMethod(path){return path==="/v1/purchase-decision"?"POST":"GET";}
+7642: function bazaarExampleBody(path){if(path!=="/v1/purchase-decision")return null;return {query:"Find an authentic OMRON E2E-X5ME1 that can arrive in Tokyo tomorrow.",product:{manufacturer:"OMRON",mpn:"E
+7643: function canonicalPaidResourceUrl(request,path){
+7647: function bazaarExampleQueryParams(path){
+7674: function facilitatorUrl(env){return DEFAULT_X402_FACILITATOR.replace(/\/$/,"");}
+7675: function isCdpFacilitator(env){return facilitatorUrl(env).includes("api.cdp.coinbase.com/platform/v2/x402");}
+7676: function b64urlBytes(bytes){let bin="";for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");}
+7677: function b64urlJson(obj){return b64urlBytes(new TextEncoder().encode(JSON.stringify(obj)));}
+7678: function decodeBase64Bytes(value){const clean=String(value||"").trim().replace(/\s+/g,"");let bin;try{bin=atob(clean);}catch{throw new Error("CDP_API_KEY_SECRET is not valid base64");}const out=new Ui
+7679: function randomNonce(){const b=new Uint8Array(16);crypto.getRandomValues(b);return Array.from(b,x=>x.toString(16).padStart(2,"0")).join("");}
+7680: async function cdpJwt(env,method,path){if(!env.CDP_API_KEY_ID)throw new Error("CDP_API_KEY_ID is missing");if(!env.CDP_API_KEY_SECRET)throw new Error("CDP_API_KEY_SECRET is missing");const raw=decodeB
+7681: async function facilitatorHeaders(env,method,path){const h={accept:"application/json"};if(isCdpFacilitator(env))h.authorization=`Bearer ${await cdpJwt(env,method,path)}`;return h;}
+7682: async function facilitatorSupport(env){const base=facilitatorUrl(env),u=new URL(`${base}/supported`),path=u.pathname+u.search,h=await facilitatorHeaders(env,"GET",path);const r=await fetch(u.toString(
+7683: function findSolanaMainnetKind(support){const kinds=Array.isArray(support?.kinds)?support.kinds:Array.isArray(support)?support:[];return kinds.find(k=>Number(k.x402Version||2)===2&&k.scheme==="exact"&
+7684: async function cdpDiscoveryGet(env,route,params={}){if(!isCdpFacilitator(env))throw new Error("Coinbase CDP facilitator is not active");const base=facilitatorUrl(env),u=new URL(`${base}${route}`);for(
+7685: async function cdpBazaarValidateResource(origin,path){
+7692: async function bazaarComplianceAudit(origin,env){
+7729: async function bazaarMerchantAudit(env,origin){
+7737: function containsMojibake(value){
+7741: function bazaarExpectedAtomic(path){const s=INDEX402_SERVICES.find(x=>x.path===path);return s?String(Math.round(Number(s.price_usd||0)*1000000)):null;}
+7742: function bazaarMetadataQualityRow(x,origin,env){
+7763: async function bazaarFullQualityAudit(env,origin){
+7775: async function bazaarSemanticAudit(env,origin,query){
+7784: function bazaarResourcePath(resource,origin){try{const u=new URL(String(resource||""));if(u.origin!==origin)return null;return INDEX402_SERVICES.some(s=>s.path===u.pathname)?u.pathname:null;}catch{ret
+7785: function compactBazaarResource(x,origin){const path=bazaarResourcePath(x?.resource,origin),accept=Array.isArray(x?.accepts)&&x.accepts.length?x.accepts[0]:null;return {path,resource:x?.resource||null,
+7786: async function bazaarCheckOne(env,origin,path){
+7806: async function bazaarCheck(env,origin){
+7837: function bazaarOutputExample(path){
+7851: function bazaarInfoSchema(path=""){
+7915: function bazaarDiscoveryExtension(path){
+7944: function bazaarPaymentExtension(path){
+7962: async function paymentRequirement(request,env,amount,description,supportOverride=null){
+8022: function decodeExtensionResponsesHeader(v){
+8026: async function facilitatorPost(env,path,paymentPayload,accepted){
+8037: function requestTelemetry(request,url=null){
+8059: async function logRequestStage(env,request,eventType,extra={}){
+8072: function deferTelemetry(ctx,promise){
+8079: async function paymentRequirementFingerprint(accepted){
+8092: function paymentCapabilitySignals(request){
+8104: async function x402Gate(request,env,amount,description,work,ctx=null){
+8401: function routePrice(path){const p={"/v1/identify":PRICES.identify,"/v1/market":PRICES.market,"/v1/rarity":PRICES.rarity,"/v1/authenticity":PRICES.authenticity,"/v1/buy-wait":PRICES.buyWait,"/v1/best-p
+8402: function endpointPriceUsd(path){const atomic=routePrice(path)?.[0];return atomic?Number(atomic)/1000000:null;}
+8404: function monetizationFunnel(origin,product,currentPath){
+8408: function sanitizeAffiliateRouting(shaped,origin,productId){
+8426: function publicHtmlEscape(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+8427: function publicShopShell(title,body){return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="
+8428: async function loadProductById(env,id){const clean=String(id||"").trim();if(!clean)return null;const rows=await sbOptional(env,`/products?select=*&id=eq.${encodeURIComponent(clean)}&limit=1`);return A
+8429: function publicProductName(p){return cleanNullableTitle(p?.canonical_name_ja)||cleanNullableTitle(p?.canonical_name_en)||"\u5546\u54c1";}
+8430: function publicProductCard(p,origin){const name=publicProductName(p),img=p?.official_image_url?`<img class="thumb" src="${publicHtmlEscape(p.official_image_url)}" alt="${publicHtmlEscape(name)}">`:"";
+8431: async function publicShopLanding(env,origin,url){const q=String(url.searchParams.get("q")||"").trim();let body=`<h1>\u30a2\u30cb\u30e1\u30b0\u30c3\u30ba\u3092\u63a2\u3059</h1><form method="get" action
+8432: async function publicShopProduct(env,origin,productId,ctx=null){const product=await loadProductById(env,productId);if(!product)return null;const name=publicProductName(product),offers=registeredRakute
+8433: async function handlePublicAffiliateMetric(env,url,eventType){const pid=String(url.searchParams.get("product_id")||"").trim()||null;const count=Number(url.searchParams.get("count")||0)||null,offer=Num
+8444: function atelierConfigured(env){return !!env.ATELIER_API_KEY;}
+8445: function atelierHeaders(env,extra={}){return {authorization:`Bearer ${env.ATELIER_API_KEY}`,accept:"application/json","content-type":"application/json",...extra};}
+8446: async function atelierFetch(env,path,options={}){
+8453: function atelierOrderArray(payload){
+8460: function atelierBrief(order){
+8471: function atelierOrderId(order){return String(order?.id||order?.order_id||order?.orderId||"").trim();}
+8472: async function atelierResolveProduct(env,query){
+8478: function atelierResultUrl(env,orderId){const host=String(env.WORKER_HOST||"anime-intelligence.goodmy0312.workers.dev").replace(/^https?:\/\//,"").replace(/\/$/,"");return `https://${host}/atelier/resu
+8479: async function saveAtelierResult(env,order,query,result){
+8484: async function loadAtelierResult(env,orderId){
+8489: async function atelierBuildFullIntelligence(env,order){
+8499: async function atelierDeliver(env,orderId,deliverableUrl){
+8502: async function atelierProcessOrder(env,order){
+8516: async function atelierResolveAgentId(env,{force=false}={}){
+8525: async function atelierPollAndFulfill(env){
+8533: function atelierSafeAgentView(agent){
+8553: async function atelierStatus(env){
+8564: function paidCandidateView(p){
+8582: function exactPaidIdentityMatch(query,p){
+8593: function paidPopularitySignal(p){
+8602: function paidReleaseRecencyScore(p){
+8615: function paidQueryRelevanceScore(query,p){
+8629: function naturalShoppingIntent(query="",url=null,env=null){
+8653: function naturalPaidRoute(intent,query=""){
+8668: function candidateIntentBonus(p,intent){
+8687: function candidateRequestedCharacterConflict(p,intent){
+8702: function paidCandidateRanking(query,p,index=0,intent=null){
+8719: function rankPaidCandidates(query,rows=[],intent=null){
+8723: function paidRankedView(x,intent=null){const pref=x?.breakdown?.intent_fit_detail?.ambiguous_preference_fit||candidatePreferenceFit(x?.product,intent?.preferences||[]);return {...paidCandidateView(x.p
+8726: function commercialFallbackQueries(query){
+8741: async function findIntentCompatibleProducts(env,intent,limit=20){
+8778: async function commercialFallbackProducts(env,query,limit=10){
+8790: function directCharacterPatternMatches(character,title=""){
+8802: function directCharacterTitleEvidence(p,intent){
+8811: async function canonicalizeFocusedEbayNarutoTshirt(env,intent,limit=12){
+8842: async function directNarutoTshirtCandidates(env,intent,limit=12){
+8903: async function preflightPaidProduct(env,url){
+9084: function affiliateSourcesInResponse(value){
+9094: function recommendationEnvelope(path,preflight,intel,url){
+9123: async function paidApi(request,env,url,ctx=null){
+9175: async function searchDiagnosticFetch(env,label,path){
+9206: async function searchDiagnostic(env,query="One Piece figure"){
+9285: async function freeSearch(request,env,url){
+9304: function multilingualMerchIntentAudit(env){
+9328: function multilingualAmbiguityAudit(){const results=MULTILINGUAL_AMBIGUITY_AUDIT_CASES.map(c=>{const u=new URL("https://example.test/v1/identify");u.searchParams.set("query",c.query);const i=naturalSh
+9346: function auditExpectedIntentMatch(intent,c){
+9350: function auditProductHardMatch(p,intent,c){
+9366: function auditFranchiseDbValues(franchise=""){
+9376: function auditPostgrestIn(values=[]){
+9380: function auditCharacterSearchTerms(character=""){
+9390: function auditPreferenceEvidenceTerms(intent){
+9404: async function auditStructuredCatalogFetch(env,intent,opts={}){
+9427: async function auditGlobalTitleFetch(env,terms=[],limit=60){
+9440: async function auditCombinedTitleFetch(env,intent,allTerms=[],opts={}){
+9460: async function auditPreferenceSpecificFetch(env,intent,limit=80){
+9519: async function fastAuditCatalogCandidates(env,intent,limit=50){
+9556: async function multilingualAmbiguousShoppingE2EAudit(env,url){
+9597: function auditBucketKey(intent){
+9602: async function multilingualAmbiguousShoppingE2EBatchAudit(env){
+9692: function agentSelectionReadinessAudit(origin){
+9713: function discoveryExample(path){const d=DISCOVERY_CONFIG[path]||{};return {service:"ANIME INTELLIGENCE",version:VERSION,endpoint:path,example_query:d.examples?.[0]||"Nendoroid Hatsune Miku",value:d.va
+9715: function openapi(origin){
+9748: function llmsTxt(origin){return `# GLOBAL PURCHASE DECISION
+9845: const UNIVERSAL_DISCOVERY_KEYWORDS=["AI purchase decision API","AI shopping agent API","autonomous shopping agent","product comparison API","best product to buy API","where to buy product API","global
+9846: function x402WellKnown(origin){return {name:PLATFORM_NAME,display_name:PLATFORM_NAME,legacy_specialist:"ANIME INTELLIGENCE",version:VERSION,protocol:"x402",x402Version:2,network:SOLANA_MAINNET,asset:"
+10038: function paidToolPath(name){return {identify_anime_product:"/v1/identify",anime_market:"/v1/market",anime_rarity:"/v1/rarity",anime_authenticity:"/v1/authenticity",anime_buy_wait:"/v1/buy-wait",best_p
+10039: function mcpMeta(){return {"io.modelcontextprotocol/serverInfo":{name:"anime-intelligence",version:VERSION}};}
+10042: function mcpResult(id,result){return json({jsonrpc:"2.0",id,result:{...result,_meta:{...(result?._meta||{}),...mcpMeta()}}});}
+10044: async function mcp(request,env,origin){
+10135: async function index402Post(path,body){const r=await fetch(`${INDEX402_API}${path}`,{method:"POST",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify(body)});con
+10136: async function x402DiscoveryPreflight(origin,env){
+10155: function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
+10157: async function register402Index(origin){
+10229: async function x402RpcCall(endpoint,body){
+10240: async function x402SolanaRpcBridge(request){
+10265: async function x402RpcDiagnostic(){
+10298: async function readonlyYahooProbe(env){if(!env.YAHOO_CLIENT_ID)return {ok:false,reason:"not_configured"};try{const r=await yahooRequest(env,{query:"\u521d\u97f3\u30df\u30af"},1);return {ok:true,return
+10299: async function readonlyEbayProbe(env){if(!env.EBAY_CLIENT_ID||!env.EBAY_CLIENT_SECRET)return {ok:false,reason:"not_configured"};try{await ebayAccessToken(env);return {ok:true};}catch(e){return {ok:fal
+10300: async function registerRakutenAffiliateForProduct(env,payload={}){
+10317: function rakutenAvailabilitySignal(product){const now=Date.now(),name=String(product?.canonical_name_ja||product?.canonical_name_en||""),raw=product?.release_date?Date.parse(product.release_date):NaN;
+10318: function rakutenAffiliatePriority(product){const type=discoveryEffectiveType(product),fr=String(discoverySafeFranchise(product)||""),name=`${product?.canonical_name_ja||""} ${product?.canonical_name_e
+10319: function inferRakutenSeries(product){
+10345: function rakutenCandidateView(product){const offers=registeredRakutenAffiliateOffers(product),series=inferRakutenSeries(product),availability=rakutenAvailabilitySignal(product);return {product_id:prod
+10346: async function rakutenBatchSnapshot(env,page){
+10352: async function createRakutenBatchSnapshot(env,page,limit=100){
+10360: async function rakutenProductsForSnapshot(env,snapshot){
+10366: async function rakutenAffiliateCandidates(env,{page=1,limit=100}={}){
+10373: async function rakutenAffiliateSearchAdmin(env,{query="",limit=100}={}){
+10384: function rakutenSeriesTerms(product){return {franchise:cleanNullishValue(discoverySafeFranchise(product)),series:inferRakutenSeries(product),manufacturer:cleanNullishValue(product?.manufacturer)};}
+10385: function rakutenSeriesMatchScore(base,p){const a=rakutenSeriesTerms(base),b=rakutenSeriesTerms(p);let score=0;if(a.franchise&&b.franchise&&normalize(a.franchise)===normalize(b.franchise))score+=60;if(
+10386: async function rakutenAffiliateSeries(env,productId,limit=100){
+10417: async function rakutenAffiliateRegistry(env,{limit=200}={}){
+10425: async function readonlyRakutenProbe(env){const configured=rakutenConfigured(env);return {ok:configured,configured,mode:"affiliate_link_only",web_service_api:false,affiliate_id_present:configured,appli
+10427: async function finalCheck(env,origin){
+10437: function authorized(request,env){return !!env.REFRESH_KEY&&request.headers.get("x-refresh-key")===env.REFRESH_KEY;}
+10468: function worldAuditIncludesIgnoreCase(list,value){const v=String(value||"").toLowerCase();return (Array.isArray(list)?list:[]).some(x=>String(x||"").toLowerCase()===v);}
+10469: function worldAuditOwnAgent402Result(row){const s=JSON.stringify(row||{}).toLowerCase();return s.includes("anime intelligence")||s.includes("anime-intelligence.goodmy0312.workers.dev")||s.includes("an
+10470: function worldAuditResultLabel(row){if(!row||typeof row!=="object")return null;return row.name||row.title||row.tool_name||row.toolName||row.service||row.endpoint||row.url||row.href||null;}
+10471: function worldAuditRows(data){if(Array.isArray(data))return data;if(Array.isArray(data?.results))return data.results;if(Array.isArray(data?.tools))return data.tools;if(Array.isArray(data?.items))retur
+10472: function worldAuditProductMatches(p,tc){
+10478: async function worldDiscoveryInternalAudit(env){
+10527: async function worldDiscoveryAgent402Register(origin){
+10534: async function worldDiscoveryAgent402Audit(origin){
+10548: async function worldDiscoveryAudit(env,mode="all",origin="https://anime-intelligence.goodmy0312.workers.dev"){
+10557: function compactPurchaseRouteAuditView(route){
+10593: function repairLikelyUtf8Mojibake(value=""){
+10605: async function countryAwareRoutingAudit(env,query="Hatsune Miku figure"){
+10663: async function universalMerchantDueBacklog(env,limit=121){
+10669: function summarizeDiscoveryRows(rows=[],versionFilter=null){
+10700: async function universalGrowthStatus(env){
+10714: async function universalProductionReadiness(env){
+10721: function adminPage(env){return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="
+10757: function key(){const e=document.getElementById('k');let v=String(e&&e.value||'').trim();if(v){try{sessionStorage.setItem(KEY_SESSION,v)}catch{}return v}try{v=String(sessionStorage.getItem(KEY_SESSION)
+10758: function initKey(){const e=document.getElementById('k');if(!e)return;try{const v=String(sessionStorage.getItem(KEY_SESSION)||'').trim();if(v)e.value=v}catch{}e.addEventListener('input',function(){try{
+10759: function n(v){if(v===null||v===undefined||v==='')return '—';if(typeof v==='number')return Number.isInteger(v)?String(v):String(Math.round(v*1000)/1000);return String(v)}
+10760: function path(o,p){try{return p.split('.').reduce(function(a,k){return a==null?undefined:a[k]},o)}catch{return undefined}}
+10761: function first(o,ps){for(const p of ps){const v=path(o,p);if(v!==undefined&&v!==null)return v}return null}
+10762: function set(id,v){const e=document.getElementById(id);if(e)e.textContent=n(v)}
+10763: async function req(p,auth){const h={'cache-control':'no-cache'};if(auth){const k=key();if(!k)throw new Error('REFRESH_KEY_REQUIRED');h['x-refresh-key']=k;h['x-anime-intelligence-test']='admin_ui'}cons
+10764: function show(j){document.getElementById('o').textContent=JSON.stringify(j,null,2)}
+10765: function applyPublic(h,u){const ok=!!(h&&h.ok!==false&&h.status!=='offline');const d=document.getElementById('healthDot');d.className='dot '+(ok?'good':'bad');document.getElementById('healthText').tex
+10766: function applyKpi(k){k=k&&k.kpi?k.kpi:k;set('mRevenue',first(k,['external_revenue_usdc','recent_history_external_revenue_usdc'])??0);set('mPaid',first(k,['external_paid_calls','recent_history_external
+10767: function applyParts(p){set('mProducts',first(p,['parts_sample_count','data_quality.sample_size','parts_total','canonical_parts']));set('mOffers',first(p,['merchant_offer_collection.offers_sample_count
+10768: async function refreshAll(){const out={};try{const pair=await Promise.all([req('/health',false),req('/v1/universal/status',false)]);out.health=pair[0];out.universal=pair[1];applyPublic(pair[0],pair[1]
+10769: async function deepHealth(){try{const j=await req('/health/deep',false);show(j)}catch(e){show({error:String(e)})}}
+10770: async function showPublic(p){try{show(await req(p,false))}catch(e){show({error:String(e),endpoint:p})}}
+10771: async function authRun(p,m){const k=key();if(!k){show({error:'REFRESH_KEY_REQUIRED'});return}const h={'x-refresh-key':k,'cache-control':'no-cache','x-anime-intelligence-test':'admin_ui'};try{const r=a
+10867: function universeProfile(manufacturer){return MANUFACTURER_UNIVERSE.find(x=>x.name===manufacturer)||null;}
+11132: function sourceKey(v=""){return String(v).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,64)||"manufacturer";}
+11195: function merchantSearchUrl(source,partNumber){
+11248: function safeError(e){return String(e?.message||e||"unknown_error").slice(0,1200);}
+11249: function json(data,status=200,headers={}){return new Response(JSON.stringify(data,null,2),{status,headers:{"content-type":"application/json; charset=utf-8","access-control-allow-origin":"*",...headers
+11250: async function sha256HexText(v=""){
+11255: function normalizePartNumber(v=""){return String(v||"").normalize("NFKC").toUpperCase().replace(/\s+/g,"").replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g,"-").trim();}
+11256: function stripHtml(html=""){
+11271: function titleOf(html=""){const m=String(html).match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);return m?stripHtml(m[1]).slice(0,400):null;}
+11272: function absoluteUrl(base,href){try{return new URL(String(href||""),base).toString();}catch{return null;}}
+11273: function linksOf(html="",base=""){
+11280: function pdfLinksOf(html="",base=""){return linksOf(html,base).filter(u=>/\.pdf(?:$|[?#])/i.test(u));}
+11281: function hostAllowed(source,url){
+11288: function pageAllowed(source,url){
+11293: function crawlerHeaders(){return {
+11299: function jinaReaderUrl(url){return `https://r.jina.ai/${String(url)}`;}
+11300: function markdownLinksOf(text="",base=""){
+11306: function allLinksOf(page){return [...new Set([...(page.html?linksOf(page.html,page.url):[]),...markdownLinksOf(page.text,page.url)])];}
+11307: function isPdfUrl(url=""){return /\.pdf(?:$|[?#])/i.test(String(url||""));}
+11309: function sbBase(env){
+11314: function sbHeaders(env,extra={}){
+11319: function supabaseReadRetryCount(method="GET",allow=true){
+11323: function isRetryableSupabaseReadError(e){
+11327: async function sbOnce(env,path,options={}){
+11341: async function sb(env,path,options={}){
+11357: async function sbOptional(env,path,options={}){try{return await sb(env,path,options);}catch(e){console.log("sbOptional",safeError(e));return null;}}
+11358: async function collectorDbPreflight(env){
+11365: function rotateWindow(items,tick,width){
+11373: function sourceInFilter(sources){
+11376: async function activeQueueBacklog(env,limit=QUEUE_ACTIVE_BUDGET+1){
+11381: async function activeMerchantQueueBacklog(env,limit=MERCHANT_QUEUE_BUDGET+1){
+11388: async function quarantineDisabledMerchantQueue(env){
+11395: function isExpectedExternalSourceError(error=""){
+11399: function isLikelyMerchantDetailUrl(source,url=""){
+11407: function manufacturerAliases(name=""){
+11422: function merchantEvidenceGate(source,offer,pageText="",pageUrl=""){
+11437: function retryPolicy(error,attempts){
+11448: function decodeHttpBodyBytes(bytes,contentType=""){
+11464: function textDecodeScore(text=""){
+11476: async function fetchPage(url){
+11534: async function fetchViaJinaOnly(url){
+11541: function modelPatterns(manufacturer){
+11553: function genericModels(text=""){
+11559: function extractModels(manufacturer,text){
+11568: function occurrenceCount(text,token){
+11572: function contextualOfficialModels(manufacturer,text,title=""){
+11586: function metricExcerpt(text,index,len=120){const t=String(text||"").replace(/\s+/g," ");return t.slice(Math.max(0,index-45),Math.min(t.length,index+len)).trim();}
+11587: function findMetricAfterLabels(text,labels,units,sourceUrl,key){
+11609: function extractEngineeringSpecs(text,sourceUrl){
+11637: function canonicalEvidenceForModel(source,text,title,url,pn){
+11651: function classifyCanonicalModels(source,text,title,url,models){
+11654: function acceptedCanonicalModels(classified){return (classified||[]).filter(x=>x.level!=="candidate").map(x=>x.pn);}
+11655: function metricBindingSafe(classified){const accepted=(classified||[]).filter(x=>x.level!=="candidate");return accepted.length===1 || (accepted.length<=2&&accepted.every(x=>x.level==="manufacturer_exa
+11656: function isDeepWatchDepth(depth){return Number(depth||0)<0;}
+11657: function deepHop(depth){return Math.abs(Math.min(0,Number(depth||0)));}
+11658: function detailLikeOfficialUrl(url=""){return /(?:\/detail(?:\/|$)|\/products?\/[^/?#]+(?:\/[^/?#]+)?$|\/item\/|\/model\/|datasheet|spec(?:ification)?|replacement|successor|discontinued|renew|\.pdf(?:
+11659: function rankOfficialDiscoveryUrl(url=""){
+11667: function rankedWatchDiscoveryLinks(source,page){
+11670: async function deepQueueBacklog(env){
+11674: async function enqueueDeepWatchLinks(env,source,links,itemDepth){
+11685: function isMerchantDetailUrl(source,url=""){
+11693: function isMerchantDiscoveryHubUrl(source,url=""){
+11698: function merchantDetailCandidates(source,page){
+11708: async function promoteMerchantDetailLinks(env,source,page,itemDepth){
+11716: function replacementPdfLikely(url=""){return /(?:replacement|successor|renew|discontinued|replacement_data|代替|後継)/i.test(decodeURIComponent(String(url||"")));}
+11717: async function fetchReplacementPdfText(url){
+11721: function applicationEvidenceLevel(source,text){
+11726: function watchDiscoveryLinks(source,page){return rankedWatchDiscoveryLinks(source,page);}
+11728: function lifecycleFromText(source,text){
+11735: function extractReplacementCandidates(manufacturer,text,url){
+11746: function compactEvidence(text="",max=900){return String(text||"").replace(/\s+/g," ").trim().slice(0,max);}
+11747: function uniqueModels(manufacturer,text=""){return [...new Set(extractModels(manufacturer,text))];}
+11748: function strongRelationPairs(source,text,url,title=""){
+11819: function modelGranularity(pn=""){
+11823: function relationRoleMaps(pairs=[]){
+11828: async function existingLifecycleMap(env,manufacturer,models){
+11834: function markdownTableRelationPairs(source,text,url,title=""){
+11855: async function upsertPartsBatch(env,source,models,pageTitle,pageUrl,lifecycle,relationPairs=[],enrichment={}){
+11874: async function loadPartIds(env,manufacturer,models){
+11880: async function saveDocuments(env,source,ids,pdfs,title){
+11892: async function saveRelationCandidates(env,source,candidates,pageTitle){
+11926: async function seedQueue(env){
+11935: async function seedDynamicMerchantQueries(env,preferredManufacturers=[]){
+11981: function sourceBySlug(slug){return ALL_SOURCES.find(s=>s.slug===slug)||null;}
+11983: async function enqueueLinks(env,source,links,depth){
+11994: function offerUpdatedAt(text=""){
+12002: function parseOmronStoreOffers(source,page){
+12027: function rsStockMap(label=""){
+12035: function parseRsOmronOffers(source,page){
+12075: function decodeEmbeddedUnicode(v=""){
+12081: function monotaroPrimaryWindow(text="",pn=""){
+12095: function canonicalMonotaroProductUrl(url=""){
+12103: function monotaroPrintUrl(url=""){
+12107: function classifyMonotaroCommerce({discontinued=false,salePrice=null,leadDays=null}={}){
+12117: function sliceLabelValue(src,label,nextLabels=[]){
+12129: function moneyAfterLabel(src,label){
+12137: function parseMonotaroEvidenceText(text="",pageUrl=""){
+12181: function parseMonotaroOffers(source,page){
+12224: function parseMisumiOffers(source,page){
+12256: function parseDigiKeyOffers(source,page){
+12285: function parseMouserOffers(source,page){
+12312: function collectorSelfTest(){
+12405: async function ensureSystemMerchant(env,source){
+12433: async function upsertOfferParts(env,source,offers,pageTitle,pageUrl){
+12453: async function saveMerchantOffers(env,source,merchant,offers,partIds,pageUrl,pageText,evidenceUrl=pageUrl){
+12489: async function processOfferItem(env,item,source){
+12546: async function processWatchItem(env,item,source){
+12575: async function processItem(env,item){
+12605: async function markDone(env,item,result){
+12608: async function markFailure(env,item,e){
+12616: async function bootstrapDeepWatchWindow(env,window){
+12636: async function refreshStaleWatchRows(env){
+12647: async function runCollector(env,limit=MAX_PAGES_PER_RUN){
+12724: async function diagnosticQuery(env,name,path,timeoutMs=SUPABASE_TIMEOUT_MS,fallbackPath=null){
+12741: async function statusDbProbe(env){
+12749: async function runDiagnosticBatches(env,specs){
+12759: async function status(env){
+12815: function authorized(request,env){
+12857: async function embeddedPartsCollectorNeedsRun(env,nowMs=Date.now()){
+12867: async function runEmbeddedPartsCollectorFailover(event,env){
+12875: async function embeddedCollectorFetch(request,env,ctx){
+12886: function scheduledTaskForTime(timeMs){
+12899: async function universalDiscoveryLeaseStatus(env,nowMs=Date.now(),freshMinutes=55){
+12915: function universalStatusPayload(origin){
+12918: async function universalSupabaseProbe(env,timeoutMs=5000){

@@ -1,0 +1,300 @@
+    const state=await yahooCatalogCooldownState(env);
+    if(state.active){yahooBlocked=true;yahooCooldownUntil=state.until;errors.push({provider:"yahoo_japan",error:"Yahoo cooldown active; using available alternate providers"});}
+  }catch(e){errors.push({provider:"yahoo_cooldown_check",error:safeError(e)});}}
+  if(useYahoo&&!yahooBlocked){try{
+    yahooCalls++;const y=await yahooRequest(env,{query:searchQ},providerLimit);
+    const hits=Array.isArray(y?.hits)?y.hits:[];
+    for(const hit of hits)live.push(normalizeYahooGeneric(hit));
+    // Identity recovery: if an over-specific query produces a tiny sample, retry once with a compact identity query.
+    if(providerRole==="identity"&&hits.length<10){
+      const broadQ=identityOptimizedSearchQuery(q,"",domain);
+      if(broadQ&&normalize(broadQ)!==normalize(searchQ)){
+        try{const y2=await yahooRequest(env,{query:broadQ},providerLimit);yahooCalls++;for(const hit of (Array.isArray(y2?.hits)?y2.hits:[]))live.push(normalizeYahooGeneric(hit));}
+        catch(e2){errors.push({provider:"yahoo_japan_identity_retry",error:safeError(e2)});}
+      }
+    }
+  }catch(e){
+    errors.push({provider:"yahoo_japan",error:safeError(e)});
+    if(isYahoo403Error(e)){
+      yahooBlocked=true;
+      try{const cd=await setYahooCatalogCooldown(env,e,30);yahooCooldownUntil=cd.until;}catch(cdErr){errors.push({provider:"yahoo_cooldown_write",error:safeError(cdErr)});}
+    }
+  }}
+  if(useEbay){try{const e=await ebayBrowseRequest(env,directGtin?{gtin:directGtin,limit:providerLimit}:{q:searchQ,limit:providerLimit});for(const hit of (Array.isArray(e?.itemSummaries)?e.itemSummaries:[]))live.push(normalizeEbayGeneric(hit));}catch(err){errors.push({provider:"ebay",error:safeError(err)});}}
+  let bridgeCalls=0;
+  const bridgeBudget=body?._decision_live?UNIVERSAL_DISCOVERY_POLICY.cross_provider_gtin_bridge_budget:(body?._background_cross_provider?UNIVERSAL_DISCOVERY_POLICY.background_cross_provider_gtin_bridge_budget:0);
+  if(bridgeBudget>0&&useYahoo&&env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET){
+    const yahooGtins=[...new Set(live.filter(x=>x?.provider==="yahoo_japan").map(x=>digitsOnly(x?.gtin||x?.jan_code||"")).filter(validGtin))].slice(0,bridgeBudget);
+    for(const g of yahooGtins){
+      const already=live.some(x=>x?.provider==="ebay"&&digitsOnly(x?.gtin||"")===g);if(already)continue;
+      try{const e2=await ebayBrowseRequest(env,{gtin:g,limit:10});bridgeCalls++;for(const hit of (Array.isArray(e2?.itemSummaries)?e2.itemSummaries:[])){const x=normalizeEbayGeneric(hit);live.unshift({...x,cross_provider_bridge:"yahoo_gtin_to_ebay",cross_provider_bridge_gtin:g});}}
+      catch(err){errors.push({provider:"ebay_gtin_bridge",error:safeError(err)});}
+    }
+  }
+  let offers=dedupeUniversalOffers([...live,...memory]);
+  if(body?._decision_live||body?._background_cross_provider){offers.sort((a,b)=>Number(!!b?.cross_provider_bridge)-Number(!!a?.cross_provider_bridge));offers=await enrichGenericDecisionLive(env,offers,body?._decision_live?UNIVERSAL_DISCOVERY_POLICY.decision_live_detail_budget:UNIVERSAL_DISCOVERY_POLICY.background_cross_provider_gtin_bridge_budget);}
+  const explicitGtin=identifiers.gtin||((identifiers.isbn&&validGtin(identifiers.isbn))?identifiers.isbn:null);
+  if(explicitGtin)offers=offers.sort((a,b)=>Number(digitsOnly(b.gtin||b.jan_code||"")===explicitGtin)-Number(digitsOnly(a.gtin||a.jan_code||"")===explicitGtin)||Number(b.evidence_score||0)-Number(a.evidence_score||0)||((a.total_price??Number.MAX_SAFE_INTEGER)-(b.total_price??Number.MAX_SAFE_INTEGER)));
+  else offers.sort((a,b)=>Number(b.evidence_score||0)-Number(a.evidence_score||0)||((a.total_price??Number.MAX_SAFE_INTEGER)-(b.total_price??Number.MAX_SAFE_INTEGER)));
+  const eligible=offers.filter(o=>!o.memory_observation||o.freshness?.fresh);
+  const pseudoIntent={product:{identifiers,mpn:identifiers.mpn||null},quantity:Math.max(1,Number(body?.quantity||1)||1),destination:{country:String(body?.buyer_country||body?.destination?.country||"JP").toUpperCase()},requirements:{currency:String(body?.currency||body?.requirements?.currency||"JPY").toUpperCase(),max_total_cost:purchaseFinite(body?.max_total_cost??body?.budget??body?.requirements?.max_total_cost),delivery_deadline:body?.delivery_deadline||body?.deadline||body?.requirements?.delivery_deadline||null,authenticity_required:Boolean(body?.authenticity_required??body?.requirements?.authenticity_required??true)}};
+  const evaluated=eligible.map(o=>evaluateGenericOffer(domain,o,pseudoIntent,body));const decision=decideGenericPurchase(domain,evaluated,pseudoIntent),recommendation=policy.allow_select?decision.best:null;
+  const detailAttempts=(body?._decision_live||body?._background_cross_provider)?offers.filter(o=>o?.decision_live_detail_verified!==undefined||o?.decision_live_detail_error).length:0,providerCallsEstimate=yahooCalls+(useEbay?1:0)+bridgeCalls+detailAttempts;const out={ok:true,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,domain,query:q,identity_key:identityKey,identifiers,exact_identifier:exactId||null,policy,count:offers.length,live_count:live.length,memory_count:memory.length,response_path:body?._decision_live?"request_time_live_enrichment_plus_cache":"background_discovery_plus_cache",provider_role:providerRole,identity_search_query:searchQ,yahoo_calls:yahooCalls,yahoo_blocked:yahooBlocked,yahoo_cooldown_until:yahooCooldownUntil,ebay_fallback_enabled:useEbay,live_enrichment_performed:!!body?._decision_live,background_cross_provider_verification_performed:!!body?._background_cross_provider,source_diversity:[...new Set(offers.map(x=>x.provider).filter(Boolean))].length,cross_provider_bridge_calls:bridgeCalls,cross_provider_corroborated_offers:offers.filter(x=>x?.cross_provider_corroborated===true).length,cross_provider_conflicts:offers.filter(x=>x?.cross_provider_conflict===true).length,provider_calls_estimate:providerCallsEstimate,search_elapsed_ms:Date.now()-searchStarted,recommended_offer:recommendation,decision:{action:decision.action,can_purchase:decision.can_purchase,reason_codes:decision.reason_codes},offers:evaluated.slice(0,40),provider_errors:errors,evaluation_profile:genericDomainProfile(domain),evidence_policy:{live_preferred:true,stale_memory_never_silent:true,unknown_shipping_not_zero:true,unknown_tax_duty_not_zero:true,unknown_returns_warranty_explicit:true,compatibility_requires_evidence:true,paid_placement:false},generated_at:new Date().toISOString()};
+  if(body?._persist!==false){out.persistence=await persistUniversalCommerceObservations(env,body,out);if(out.persistence?.provider_calls_total!=null)out.provider_calls_estimate=Number(out.persistence.provider_calls_total);}
+  return out;
+}
+function commerceDomainsResponse(){
+  return {service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,architecture:"canonical_identity_offer_join_evidence_gated_decision_commerce",active:[{domain:"anime_collectibles",adapter:"specialist",status:"full"},{domain:"parts",adapter:"parts_intelligence",status:"full"},...UNIVERSAL_GENERIC_DOMAINS.map(domain=>({domain,adapter:"domain_profile_evidence_gated_purchase_decision",status:"active",freshness_ttl_hours:UNIVERSAL_DOMAIN_TTL_HOURS[domain]||24,decision_profile:genericDomainProfile(domain)}))],identifiers:["GTIN-8","UPC/GTIN-12","EAN/JAN/GTIN-13","GTIN-14","ISBN-10","ISBN-13","MPN","OE number","SKU","ASIN"],database_growth:{anime_catalog:"scheduled",parts_catalog:"scheduled_with_embedded_v3",generic_catalog:"commerce_utility_optimized_lightweight_discovery",generic_demand_graph:"continuous",generic_market_snapshots:"continuous",catalog_frontier:"self_expanding",provisional_market_gtin:"promoted_with_explicit_low_confidence_label",market_memory:"7_day_bounded_cache",adaptive_refresh:"demand_plus_frontier_plus_stale_plus_long_tail_plus_domain_gap_plus_exploration"},expansion_priority:"autonomous_exploration_plus_agent_demand_acceleration",decision_signals:["canonical_identity","listing_identity","merchant_route","merchant_trust","price","stock","shipping","delivery","authenticity","compatibility_or_fitment","regulatory_or_safety_evidence","returns","warranty","tax_duty_uncertainty","condition","freshness","cross_provider_corroboration"],principle:"Background discovery expands the product universe cheaply and quickly. Every paid purchase-decision request performs same-request live enrichment when needed, then returns a decision or explicit insufficient-evidence state without deferring the answer."};
+}
+
+function shoppingDecisionAction(intel){
+  const raw=String(intel?.buy_wait?.decision||intel?.buy_wait?.action||"").toUpperCase();
+  if(raw==="BUY"||raw==="BUY_NOW")return "BUY_NOW";
+  if(raw==="WAIT")return "WAIT_PRICE_DROP";
+  if(raw==="WATCH")return "WAIT_RESTOCK";
+  if(raw==="AVOID")return "NO_SAFE_OFFER";
+  return intel?.best_place?"OPEN_PURCHASE_URL":"ASK_USER";
+}
+
+function shoppingReasonCodes(intel){
+  const src=[
+    ...(Array.isArray(intel?.buy_wait?.reasons)?intel.buy_wait.reasons:[]),
+    ...(Array.isArray(intel?.authenticity_risk?.reasons)?intel.authenticity_risk.reasons:[])
+  ];
+  return [...new Set(
+    src.map(x=>String(typeof x==="string"?x:(x?.code||x?.reason||"")).trim()).filter(Boolean)
+  )].slice(0,12);
+}
+
+function shoppingIntelligenceView(intel,origin){
+  const product=compactProductResponse(intel.product);
+  const best=intel.best_place||intel.market?.best_place||null;
+  const purchasePageUrl=product?.id?origin+"/shop/product/"+encodeURIComponent(product.id):null;
+  return {
+    schema_version:"commerce-intelligence.v1",
+    domain:"anime_collectibles",
+    domain_status:"full",
+    product,
+    recommendation:{
+      decision:String(intel?.buy_wait?.decision||intel?.buy_wait?.action||"UNKNOWN").toUpperCase(),
+      next_action:shoppingDecisionAction(intel),
+      confidence:intel?.buy_wait?.confidence??intel?.recommendation_confidence??null,
+      reason_codes:shoppingReasonCodes(intel)
+    },
+    market:intel.market||null,
+    authenticity:intel.authenticity_risk||null,
+    rarity:intel.rarity||null,
+    price_history:intel.price_history||null,
+    landed_cost:intel.landed_cost||null,
+    best_offer:best?{...best,purchase_page_url:purchasePageUrl}:null,
+    routing:intel.routing||null,
+    purchase:{
+      purchase_page_url:purchasePageUrl,
+      purchase_intent_endpoint:origin+"/v1/purchase-intent",
+      requires_user_confirmation:true
+    },
+    agent_actions:{
+      can_purchase:!!(best||purchasePageUrl),
+      recommended_next_action:shoppingDecisionAction(intel),
+      requires_user_confirmation:true
+    },
+    generated_at:intel.generated_at||new Date().toISOString()
+  };
+}
+
+async function recordPurchaseIntent(env,data={},source="api"){
+  const purchaseIntentId=crypto.randomUUID();
+  const productId=String(data.canonical_product_id||data.product_id||"").trim()||null;
+  const metadata={
+    purchase_intent_id:purchaseIntentId,
+    source:String(source||"api").slice(0,40),
+    merchant_id:String(data.merchant_id||"").slice(0,160)||null,
+    merchant:String(data.merchant||"").slice(0,160)||null,
+    decision:String(data.decision||"").slice(0,40)||null,
+    currency:String(data.currency||"").slice(0,12)||null,
+    amount:Number.isFinite(Number(data.amount))?Number(data.amount):null,
+    agent_type:String(data.agent_type||data.agent||"").slice(0,120)||null,
+    version:VERSION
+  };
+  await logEvent(env,"purchase_intent_created",{
+    endpoint:"/v1/purchase-intent",
+    product_id:productId,
+    metadata
+  });
+  if(metadata.merchant_id||metadata.merchant){
+    await logEvent(env,"merchant_selected",{
+      endpoint:"/v1/purchase-intent",
+      product_id:productId,
+      metadata
+    });
+  }
+  return {
+    ok:true,
+    service:PLATFORM_NAME,
+    commerce_layer:"UNIVERSAL AI PURCHASE INTELLIGENCE",
+    version:VERSION,
+    purchase_intent_id:purchaseIntentId,
+    canonical_product_id:productId,
+    status:"RECORDED",
+    next_action:"OPEN_PURCHASE_URL",
+    generated_at:new Date().toISOString()
+  };
+}
+
+async function purchaseIntentApi(request,env){
+  let body={};
+  try{body=await request.json();}catch{}
+  return recordPurchaseIntent(env,body,"api");
+}
+
+
+/* =========================================================
+   UNIVERSAL PURCHASE DECISION v1 / GLOBAL PARTS PURCHASE DECISION v1 — v3.16.0
+   Global, multilingual purchase-decision layer over the existing verticals.
+   Principles:
+   - Natural-language input is normalized to a language-independent intent.
+   - Exact identifiers outrank fuzzy text.
+   - Compatibility/substitution is never inferred from name similarity alone.
+   - Paid placement never changes merchant ranking.
+   - Unknown tax/duty/shipping components stay unknown rather than fabricated.
+   - This endpoint recommends; actual purchase execution still requires explicit confirmation.
+========================================================= */
+
+const PURCHASE_COUNTRY_ALIASES={
+  JP:["japan","日本","日本国","japon","japón","japao","japão","japanische"],
+  US:["usa","u.s.","united states","america","米国","アメリカ","estados unidos","états-unis","vereinigte staaten"],
+  GB:["uk","united kingdom","britain","great britain","英国","イギリス","royaume-uni","reino unido"],
+  DE:["germany","deutschland","ドイツ","allemagne","alemania"],
+  FR:["france","フランス","francia"],
+  CA:["canada","カナダ"],
+  AU:["australia","オーストラリア"],
+  SG:["singapore","シンガポール"],
+  KR:["south korea","korea","韓国","대한민국","한국"],
+  CN:["china","中国","中国大陆","mainland china","中国大陸"],
+  HK:["hong kong","香港"],
+  TW:["taiwan","台湾","臺灣"],
+  IN:["india","インド","भारत"],
+  BR:["brazil","brasil","ブラジル"],
+  MX:["mexico","méxico","メキシコ"],
+  IT:["italy","italia","イタリア"],
+  ES:["spain","españa","スペイン"],
+  NL:["netherlands","holland","オランダ","nederland"],
+  PL:["poland","ポーランド","polska"],
+  CH:["switzerland","スイス","schweiz","suisse"],
+  AT:["austria","オーストリア","österreich"],
+  BE:["belgium","ベルギー","belgië","belgique"],
+  AE:["uae","united arab emirates","アラブ首長国連邦"],
+  SA:["saudi arabia","サウジアラビア"],
+  TH:["thailand","タイ","ประเทศไทย"],
+  VN:["vietnam","ベトナム","việt nam"],
+  ID:["indonesia","インドネシア"],
+  MY:["malaysia","マレーシア"],
+  PH:["philippines","フィリピン"],
+  NZ:["new zealand","ニュージーランド"]
+};
+const PURCHASE_DEFAULT_CURRENCY={JP:"JPY",US:"USD",GB:"GBP",DE:"EUR",FR:"EUR",CA:"CAD",AU:"AUD",SG:"SGD",KR:"KRW",CN:"CNY",HK:"HKD",TW:"TWD",IN:"INR",BR:"BRL",MX:"MXN",IT:"EUR",ES:"EUR",NL:"EUR",PL:"PLN",CH:"CHF",AT:"EUR",BE:"EUR",AE:"AED",SA:"SAR",TH:"THB",VN:"VND",ID:"IDR",MY:"MYR",PH:"PHP",NZ:"NZD"};
+
+function purchaseUpperCountry(v=""){
+  const x=String(v||"").trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(x)?x:null;
+}
+function inferPurchaseCountry(query="",explicit=""){
+  const direct=purchaseUpperCountry(explicit);if(direct)return direct;
+  const q=String(query||"").toLowerCase();
+  for(const [cc,names] of Object.entries(PURCHASE_COUNTRY_ALIASES))if(names.some(n=>q.includes(String(n).toLowerCase())))return cc;
+  return "JP";
+}
+function purchaseFinite(v){if(v==null||v==="")return null;const n=Number(v);return Number.isFinite(n)?n:null;}
+function safeDecodePurchaseText(v=""){
+  let s=String(v||"");
+  for(let i=0;i<2;i++){
+    if(!/%[0-9A-Fa-f]{2}/.test(s))break;
+    try{const d=decodeURIComponent(s);if(d===s)break;s=d;}catch{break;}
+  }
+  return s.replace(/\+/g," ").trim();
+}
+function inferPurchaseManufacturer(query="",explicit=""){
+  const e=safeDecodePurchaseText(explicit);if(e)return e;
+  const q=safeDecodePurchaseText(query);
+  const known=["OMRON","Mitsubishi Electric","SMC","IDEC","Panasonic Industry","Yaskawa","Oriental Motor","THK","NSK","Azbil"];
+  return known.find(x=>new RegExp(`(^|[^A-Za-z0-9])${x.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}([^A-Za-z0-9]|$)`,"i").test(q))||null;
+}
+function inferPurchaseDeadline(query="",explicit=""){
+  const e=safeDecodePurchaseText(explicit);if(e)return e;
+  const q=safeDecodePurchaseText(query).toLowerCase();
+  const now=new Date();
+  const iso=d=>`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,"0")}-${String(d.getUTCDate()).padStart(2,"0")}`;
+  if(/明日|tomorrow|mañana|demain|morgen/.test(q)){const d=new Date(now.getTime()+86400000);return iso(d);}
+  if(/今日|本日|today|aujourd'hui|heute/.test(q))return iso(now);
+  return null;
+}
+function extractLikelyMpn(query=""){
+  const q=safeDecodePurchaseText(query);
+  const labelled=q.match(/(?:mpn|part(?:\s*number)?|model|型番|品番|部品番号)\s*[:：#]?\s*([A-Z0-9][A-Z0-9._\/-]{2,39})/i);
+  if(labelled)return labelled[1];
+  const tokens=q.match(/\b[A-Z0-9]{1,12}[-_/][A-Z0-9._\/-]{2,30}\b/gi)||[];
+  return tokens.find(x=>/\d/.test(x)&&/[A-Za-z]/.test(x))||null;
+}
+function inferPurchaseDomain(body={},query="",mpn=""){
+  const declared=String(body?.domain||body?.vertical||body?.category||"").toLowerCase().trim();
+  const declaredMap={
+    anime:"anime_collectibles",collectibles:"anime_collectibles",anime_collectibles:"anime_collectibles",
+    parts:"parts",industrial_parts:"parts",mro:"parts",industrial:"parts",electronic_components:"parts",enterprise_procurement:"parts",
+    automotive_parts:"automotive_parts",consumer_electronics:"consumer_electronics",electronics:"consumer_electronics",
+    appliances:"home_appliances",home_appliances:"home_appliances",fashion:"fashion",apparel:"fashion",books:"books_media",
+    toys:"toys_hobbies",toy:"toys_hobbies",beauty:"beauty_personal_care",sports:"sports_outdoors",home:"home_living",
+    office:"office_business",medical:"medical_supplies",food:"food_grocery",grocery:"food_grocery",baby:"baby_kids",kids:"baby_kids",pet:"pet_supplies",tools:"tools_hardware",hardware:"tools_hardware",garden:"garden_outdoor",music:"musical_instruments",musical_instruments:"musical_instruments",jewelry:"jewelry_watches",watches:"jewelry_watches",crafts:"arts_crafts",lab:"scientific_lab",scientific:"scientific_lab",safety:"safety_security",general:"general_commerce",
+    general_commerce:"general_commerce"
+  };
+  if(declared&&declaredMap[declared])return declaredMap[declared];
+  const q=normalize(query);
+  if(/anime|nendoroid|figma|pokemon|one piece|naruto|hatsune|miku|フィギュア|アニメ|ポケモン|ワンピース|ねんどろいど/.test(q))return "anime_collectibles";
+  const industrial=/\b(?:plc|servo|inverter|encoder|bearing|linear guide|relay|sensor|proximity|contactor|connector|mosfet|igbt|gan|sic|mcu|fpga|pneumatic|solenoid|actuator|reducer|gearbox|motor driver|industrial|mro|fa)\b|サーボ|インバータ|エンコーダ|ベアリング|センサ|近接|リレー|コネクタ|減速機|アクチュエータ|産業部品|FA部品/i.test(String(query||""));
+  const knownMfr=!!inferPurchaseManufacturer(query,body?.manufacturer||body?.product?.manufacturer||"");
+  if(industrial||knownMfr)return "parts";
+  if(/\b(?:brake pad|oil filter|spark plug|oe number|oem number|vehicle fitment|car part|auto part)\b|自動車部品|車種適合|純正品番/i.test(String(query||"")))return "automotive_parts";
+  if(/\b(?:laptop|notebook|smartphone|phone|tablet|camera|headphones?|earbuds?|television|tv|monitor|router|ssd|gpu|cpu|keyboard|mouse|console)\b|スマホ|ノートPC|パソコン|カメラ|イヤホン|テレビ|モニター|ルーター/i.test(String(query||"")))return "consumer_electronics";
+  if(/\b(?:refrigerator|washing machine|vacuum|microwave|air conditioner|rice cooker)\b|冷蔵庫|洗濯機|掃除機|電子レンジ|エアコン|炊飯器/i.test(String(query||"")))return "home_appliances";
+  if(/\b(?:shirt|jacket|jeans|dress|shoe|sneaker|bag|watch|fashion)\b|シャツ|ジャケット|ジーンズ|ワンピース|靴|スニーカー|バッグ|腕時計/i.test(String(query||"")))return "fashion";
+  if(/\b(?:isbn|book|blu-?ray|dvd|album|vinyl|manga)\b|本|書籍|漫画|マンガ|ブルーレイ/i.test(String(query||"")))return "books_media";
+  if(/\b(?:toy|lego|model kit|board game|hobby)\b|おもちゃ|玩具|プラモデル|ボードゲーム/i.test(String(query||"")))return "toys_hobbies";
+  if(/\b(?:cosmetic|skincare|shampoo|beauty)\b|化粧品|コスメ|スキンケア|シャンプー/i.test(String(query||"")))return "beauty_personal_care";
+  if(/\b(?:baby|stroller|diaper|infant|kids)\b|ベビー|おむつ|乳児|子供用品/i.test(String(query||"")))return "baby_kids";
+  if(/\b(?:pet|dog food|cat food|aquarium|pet supplies)\b|ペット|犬用品|猫用品/i.test(String(query||"")))return "pet_supplies";
+  if(/\b(?:drill|saw|wrench|screwdriver|power tool|hardware)\b|工具|ドリル|レンチ|金物/i.test(String(query||"")))return "tools_hardware";
+  if(/\b(?:guitar|piano|synthesizer|microphone|musical instrument)\b|ギター|ピアノ|楽器|マイク/i.test(String(query||"")))return "musical_instruments";
+  if(/\b(?:jewelry|necklace|ring|bracelet)\b|宝飾|ネックレス|指輪|ジュエリー/i.test(String(query||"")))return "jewelry_watches";
+  if(/\b(?:laboratory|lab equipment|microscope|centrifuge)\b|実験器具|研究機器|顕微鏡/i.test(String(query||"")))return "scientific_lab";
+  return "general_commerce";
+}
+function normalizePurchaseDecisionIntent(body={},request=null){
+  const query=safeDecodePurchaseText(body?.query||body?.need||body?.intent||body?.request||"");
+  const product=body?.product&&typeof body.product==="object"?body.product:{};
+  const destination=body?.destination&&typeof body.destination==="object"?body.destination:{};
+  const requirements=body?.requirements&&typeof body.requirements==="object"?body.requirements:{};
+  const explicitLang=String(body?.language||body?.lang||"");
+  const language=detectLanguage(query,explicitLang,request?.headers?.get("accept-language")||"");
+  const manufacturer=inferPurchaseManufacturer(query,product.manufacturer||body?.manufacturer||"");
+  const mpn=String(product.mpn||product.part_number||body?.mpn||body?.part_number||body?.manufacturer_part_number||extractLikelyMpn(query)||"").trim()||null;
+  const country=inferPurchaseCountry(query,destination.country||body?.buyer_country||body?.country||"");
+  const currency=String(requirements.currency||body?.currency||PURCHASE_DEFAULT_CURRENCY[country]||"USD").toUpperCase();
+  const quantity=Math.max(1,Math.min(10000,Math.floor(purchaseFinite(body?.quantity??requirements.quantity)??1)));
+  const maxTotal=purchaseFinite(requirements.max_total_cost??body?.max_total_cost??body?.budget);
+  const deadline=inferPurchaseDeadline(query,requirements.delivery_deadline||body?.delivery_deadline||body?.deadline||"");
+  const domain=inferPurchaseDomain(body,query,mpn);
+  return {
+    schema_version:"purchase-intent.v1",
+    original_query:query||null,
+    language,
+    domain,
+    product:{manufacturer,mpn,gtin:normalizeUniversalIdentifiers(body,query).gtin||null,identifiers:normalizeUniversalIdentifiers(body,query),canonical_product_id:String(product.canonical_product_id||body?.canonical_product_id||"").trim()||null},
+    quantity,
+    destination:{country,postal_code:String(destination.postal_code||body?.postal_code||"").trim()||null},
+    requirements:{
+      currency,
+      max_total_cost:maxTotal,
+      delivery_deadline:deadline,
+      authorized_only:Boolean(requirements.authorized_only??body?.authorized_only??false),
+      authenticity_required:Boolean(requirements.authenticity_required??body?.authenticity_required??true),
+      substitutes_allowed:Boolean(requirements.substitutes_allowed??body?.substitutes_allowed??false),
+      returns_required:Boolean(requirements.returns_required??body?.returns_required??false),
