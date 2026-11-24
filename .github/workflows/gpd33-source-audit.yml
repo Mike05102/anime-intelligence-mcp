@@ -1,0 +1,31 @@
+name: GPD v33 source audit
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/gpd33-source-audit.yml'
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('releases/GPD32_9_COMPLETE_WORKER.js')
+          s=p.read_text()
+          d=Path('reports/gpd33-source')
+          d.mkdir(parents=True,exist_ok=True)
+          lines=s.splitlines(keepends=True)
+          for i in range(0,len(lines),300):
+              (d/f'part_{i//300:03}.txt').write_text(''.join(lines[i:i+300]))
+          import re
+          (d/'index.txt').write_text('\n'.join(f'{i+1}: {l.strip()[:200]}' for i,l in enumerate(lines) if re.search(r'^\s*(?:export )?(?:async )?function\s+|^\s*const UNIVERSAL_',l)))
+          PY
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add reports/gpd33-source
+          git commit -m "Index and split existing Worker for integrated review"
+          git push
