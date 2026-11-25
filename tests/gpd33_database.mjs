@@ -193,5 +193,27 @@ assert.deepEqual(coverageEvents.market_providers_observed,['fixture']);
 assert.ok(!JSON.stringify(coverageEvents).includes('price'));
 await db.query('reset role; set role anon');
 await assert.rejects(sql('select public.gpd33_health_events()'),/permission denied/);
+await db.query('reset role');
+await db.query(await readSql('supabase/migrations/20261125080000_gpd33_business_outcomes.sql'));
+await db.query(`insert into api_events(event_type,payment_network,transaction_hash,amount_usdc,metadata) values
+  ('paid_call','fixture-network','shared-receipt',0.10,'{"test_mode":"test_fixture"}'),
+  ('paid_call','fixture-network','shared-receipt',0.10,'{"test_mode":"test_fixture"}'),
+  ('paid_call','fixture-network','conflict',0.20,'{}'),
+  ('paid_call','fixture-network','conflict',0.30,'{}'),
+  ('purchase_confirmed',null,null,null,'{}'),
+  ('universal_purchase_decision_served',null,null,null,'{}')`);
+await db.query('set role service_role');
+const business=await one('select public.gpd33_business_outcomes() result');
+assert.equal(business.settlement_telemetry.distinct_consistent_receipts,1);
+assert.equal(business.settlement_telemetry.duplicate_receipt_records,2);
+assert.equal(business.settlement_telemetry.inconsistent_receipts,1);
+assert.equal(business.settlement_telemetry.recorded_receipt_usdc,0.1);
+assert.equal(business.recorded_events.purchase_confirmation_events,1);
+assert.equal(business.recorded_events.purchase_decisions,1);
+assert.equal(business.verified_outcomes.confirmed_goods_transactions,null);
+assert.equal(business.verified_outcomes.reconciled_external_revenue_usdc,null);
+assert.ok(!JSON.stringify(business).includes('shared-receipt'));
+await db.query('reset role; set role anon');
+await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission denied/);
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');

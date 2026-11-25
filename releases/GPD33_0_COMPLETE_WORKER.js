@@ -13198,6 +13198,11 @@ export default{
         if(url.pathname==="/admin/agent-selection-readiness-audit"&&request.method==="GET")return json(agentSelectionReadinessAudit(origin));
         if(url.pathname==="/admin/country-routing-audit"&&request.method==="GET")return json(await countryAwareRoutingAudit(env,url.searchParams.get("query")||"Hatsune Miku figure"));
         if(url.pathname==="/admin/metrics"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,metrics:await growthMetricsScalable(env)});
+        if(url.pathname==="/admin/business-outcomes"&&request.method==="GET"){
+          const metrics=await gpd33Rpc(env,"business_outcomes",{}).catch(()=>null);
+          return json({ok:metrics!==null,service:PLATFORM_NAME,version:VERSION,
+            ...(metrics?{metrics}:{error:"business_telemetry_unavailable"})},metrics?200:503,{"cache-control":"no-store"});
+        }
         if(url.pathname==="/admin/kpi"&&request.method==="GET"){
           const [kpi,ingress_daily]=await Promise.all([revenueMetrics(env),
             sbOptional(env,"/rpc/gpd33_ingress_rollup",{method:"POST",body:JSON.stringify({take:400})})]);

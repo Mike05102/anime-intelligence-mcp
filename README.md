@@ -1,10 +1,12 @@
 # GLOBAL PURCHASE DECISION (GPD) — AI Agent Purchase Intelligence
 
 **Production service:** https://anime-intelligence.goodmy0312.workers.dev  
-**Production version last confirmed by operator:** v32.0.0 (2026-11-16). This repository has not been verified as the production deployment source.  
+**Production version confirmed by the public health endpoint:** v32.9.0 (2026-11-25).
 **MCP endpoint:** https://anime-intelligence.goodmy0312.workers.dev/mcp
 
-GPD is an API and MCP service for AI agents that need to **find, identify, compare and choose physical products and sourcing options**. It supports anime collectibles, industrial parts and broader product discovery. Its business model is paid purchase-decision intelligence, not payment for the physical goods themselves.
+GPD is building a Universal Purchase Decision Engine for AI agents to find products, verify product identity, compare offers, select merchants and advance toward a transaction. Its business model combines purchase-decision fees, referrals and brokerage. The Anime and Parts specialist capabilities serve this shared platform.
+
+**Permanent development charter:** [Business purpose, priorities and operating rules](docs/GPD_DEVELOPMENT_CHARTER.md) · [Implementation assessment and roadmap](docs/GPD_ROADMAP.md)
 
 **Developer quickstart:** [Integrate GPD with your AI agent, inspect the API, and test the x402 payment flow](docs/AGENT_INTEGRATION.md)
 

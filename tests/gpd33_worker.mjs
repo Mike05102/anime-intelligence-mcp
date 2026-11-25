@@ -8,7 +8,7 @@ const api=await import('data:text/javascript;base64,'+Buffer.from(source+
 const worker=api.default;
 const origin='https://gpd.example';
 const fixtureKey=generateKeyPairSync('ed25519').privateKey.export({format:'jwk'});
-const env={CDP_API_KEY_ID:'fixture',CDP_API_KEY_SECRET:Buffer.concat([Buffer.from(fixtureKey.d,'base64url'),Buffer.from(fixtureKey.x,'base64url')]).toString('base64'),SUPABASE_URL:'https://db.example',SUPABASE_SECRET_KEY:'test-key',
+const env={REFRESH_KEY:'fixture-admin',CDP_API_KEY_ID:'fixture',CDP_API_KEY_SECRET:Buffer.concat([Buffer.from(fixtureKey.d,'base64url'),Buffer.from(fixtureKey.x,'base64url')]).toString('base64'),SUPABASE_URL:'https://db.example',SUPABASE_SECRET_KEY:'test-key',
   X402_WALLET_ADDRESS:'9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT',X402_FACILITATOR_URL:'https://pay.example'};
 const pending=[];
 const ctx={waitUntil(task){pending.push(task);}};
@@ -61,6 +61,9 @@ globalThis.fetch=async (target,options={})=>{
   if(url.pathname.endsWith('/supported')){
     return Response.json({kinds:[{x402Version:2,scheme:'exact',
       network:'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',extra:{feePayer:env.X402_WALLET_ADDRESS}}]});
+  }
+  if(url.pathname==='/rest/v1/rpc/gpd33_business_outcomes'){
+    return Response.json({verified_outcomes:{confirmed_goods_transactions:null}});
   }
   if(url.pathname==='/rest/v1/rpc/gpd33_health_events'){
     return Response.json({events:{},growth_24h:{read_ok:true},latest_expansion:null});
@@ -142,6 +145,12 @@ assert.equal(staged.metrics.ebay_calls,2);
 assert.ok(requests.some(url=>url.searchParams.get('fieldgroups')==='PRODUCT'));
 assert.ok(requests.length<=24,'Discovery used '+requests.length+' subrequests');
 assert.equal(fallback.new,1);
+const adminRoute='/admin/business-outcomes';
+assert.equal((await call(adminRoute)).status,401);
+const businessResponse=await call(adminRoute,{headers:{'x-refresh-key':'fixture-admin'}});
+assert.equal(businessResponse.status,200);
+assert.equal(businessResponse.headers.get('cache-control'),'no-store');
+assert.equal((await businessResponse.json()).metrics.verified_outcomes.confirmed_goods_transactions,null);
 const cachedHealth=new Map();
 globalThis.caches={default:{
   match:async request=>cachedHealth.get(request.url)?.clone(),
