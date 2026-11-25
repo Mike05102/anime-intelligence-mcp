@@ -154,7 +154,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // A local file is preferred to avoid accidentally echoing private ledger exports through a terminal.
     const source = process.argv[2];
     if (!source || process.argv.length !== 3) throw new Error('Expected one evidence file');
-    const report = reconcileGpd33Evidence(JSON.parse(await readFile(source, 'utf8')));
+    const input = JSON.parse(await readFile(source, 'utf8'));
+    if (input?.environment !== 'test') throw new Error('Use signed evidence intake for live reconciliation');
+    const report = reconcileGpd33Evidence(input);
     process.stdout.write(JSON.stringify(report, null, 2) + '\n');
   } catch {
     process.stderr.write('Reconciliation failed. Check local evidence schema and sources.\n');

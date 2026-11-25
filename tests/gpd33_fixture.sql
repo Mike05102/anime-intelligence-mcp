@@ -56,5 +56,5 @@ grant select,insert,delete on public.api_events to service_role;
 
 -- Minimal contract for merchant handoff tests.
 create table public.merchants(id uuid primary key,status text,verified boolean);
-create table public.merchant_offers(id uuid primary key,merchant_id uuid references public.merchants(id),active boolean);
+create table public.merchant_offers(id uuid primary key,merchant_id uuid references public.merchants(id),active boolean,gtin text);
 grant select on public.merchants,public.merchant_offers to service_role;

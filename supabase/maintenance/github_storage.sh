@@ -111,6 +111,12 @@ SQL
     if [[ "$(sql -c "select to_regprocedure('public.gpd33_create_buyer_handoff(uuid,uuid,uuid,integer,text)') is not null")" != t ]]; then
       sql -f supabase/migrations/20261125100000_gpd33_buyer_self_service.sql
     fi
+    if [[ "$(sql -c "select to_regclass('public.gpd33_active_offer_gtin') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125101500_gpd33_merchant_gtin.sql
+    fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_request_buyer_handoff(uuid,uuid,uuid,integer,text,text)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125103000_gpd33_offer_bound_handoff.sql
+    fi
     [[ "$(sql -c "select public.gpd33_coverage(array['food_grocery']) ? 'food_grocery'")" == t ]]
     [[ "$(sql -c 'select pg_database_size(current_database()) < 400000000')" == t ]]
     ;;

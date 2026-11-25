@@ -14,7 +14,7 @@ export async function testHandoffJourney(query, seller, offer) {
   env.GPD_MERCHANT_SIGNING_KEYS = JSON.stringify({[seller]:rawKey});
   const rpc = {
     gpd33_create_handoff: ['handoff', 'offer', 'units'],
-    gpd33_create_buyer_handoff: ['buyer', 'request_key', 'offer', 'units', 'country'],
+    gpd33_request_buyer_handoff: ['buyer', 'request_key', 'offer', 'units', 'country','expected_gtin'],
     gpd33_record_handoff_event: ['seller', 'handoff', 'event', 'new_state', 'reference_hash'],
     gpd33_buyer_handoff_status: ['handoff'],
     gpd33_merchant_handoffs: ['seller','lookup'],
@@ -34,10 +34,17 @@ export async function testHandoffJourney(query, seller, offer) {
         ? Response.json({id:buyer,email_confirmed_at:'2026-11-25T00:00:00Z'})
         : Response.json({error:'unauthenticated'}, {status:401});
     }
+    if (url.pathname === '/rest/v1/products') {
+      assert.equal(url.searchParams.get('source_product_key'),'eq.universal:gtin:00012345678905');
+      return Response.json([{id:randomUUID(),source_product_key:'universal:gtin:00012345678905',
+        product_type:'food_grocery',manufacturer:'Example',canonical_name_ja:'Example Pasta',metadata:{gpd33_verified:true}}]);
+    }
     if (url.pathname === '/rest/v1/merchant_offers') {
-      assert.equal(url.searchParams.get('normalized_part_number'), 'eq.EX-123');
+      const gtin = url.searchParams.get('gtin');
+      if(gtin)assert.match(gtin,/^in\.\(/);
+      else assert.equal(url.searchParams.get('normalized_part_number'), 'eq.EX-123');
       const eligible = await query("select to_jsonb(o) result from merchant_offers o where id=$1 and active", [offer]);
-      const offerFields = {manufacturer:'Example',part_number:'EX-123',stock_status:'in_stock'};
+      const offerFields = {manufacturer:'Example',part_number:'EX-123',gtin:'0012345678905',stock_status:'in_stock',price:12,currency:'JPY',source_updated_at:new Date().toISOString()};
       return Response.json([
         {...eligible,...offerFields,id:randomUUID(),ships_to:[]},
         {...eligible,...offerFields,ships_to:['JP']},
@@ -62,10 +69,10 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.ok(!init.body.includes('fixture-order'));
     return Response.json(await query('select public.' + method + '(' + parameters.join(',') + ') result', keys.map(key => body[key])));
   };
-  const request = (path, headers, body) => worker.fetch(new Request('https://gpd.example' + path, {
+  const request = (path, headers, body, bindings=env) => worker.fetch(new Request('https://gpd.example' + path, {
     method: body ? 'POST' : 'GET', headers: {'content-type': 'application/json', ...headers},
     body: body ? JSON.stringify(body) : undefined
-  }), env, {waitUntil(task) { pending.push(task); }});
+  }), bindings, {waitUntil(task) { pending.push(task); }});
   try {
     const admin = {'x-refresh-key': env.REFRESH_KEY};
     const search = '/v1/merchant/search?part_number=EX-123&manufacturer=Example';
@@ -74,17 +81,41 @@ export async function testHandoffJourney(query, seller, offer) {
     const scoped = await (await request(search + '&buyer_country=JP', {})).json();
     assert.equal(scoped.handoff_candidate_offer_id, offer);
     assert.equal(scoped.offers.filter(item => item.handoff_candidate).length, 1);
+    const generic = await (await request('/v1/merchant/search?gtin=012345678905&buyer_country=JP',{})).json();
+    assert.equal(generic.handoff_candidate_offer_id,offer);
     const buyerHeaders = {authorization:'Bearer '+buyerToken};
-    const input = {request_id:randomUUID(),offer_id:scoped.handoff_candidate_offer_id,
-      quantity:1,buyer_country:'JP',buyer_authorized:true,buyer_id:randomUUID()};
+    const beforeDiscovery = dbCalls;
+    const disabledManifest = await (await request('/.well-known/gpd',{})).json();
+    assert.equal(disabledManifest.buyer.enabled,false);
+    assert.equal(disabledManifest.buyer.registration,null);
+    assert.equal(disabledManifest.mcp_url,'https://gpd.example/mcp');
+    assert.equal(dbCalls,beforeDiscovery);
+    assert.equal((await request('/v1/agent/account',buyerHeaders)).status,503);
+
+    const input = {request_id:randomUUID(),offer_id:generic.handoff_candidate_offer_id,
+      quantity:1,buyer_country:'JP',buyer_authorized:true,gtin:generic.product.gtin,buyer_id:randomUUID()};
     const createBuyer = (body,headers=buyerHeaders) => request('/v1/handoffs',headers,body);
     assert.equal((await createBuyer(input)).status,503);
     env.GPD_BUYER_SELF_SERVICE='1';
     env.SUPABASE_PUBLISHABLE_KEY='fixture-publishable';
+    const signupEnv={...env,GPD_AGENT_SIGNUP_DISCOVERY:'1',SUPABASE_URL:'https://example.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixture'};
+    const publicResponse=await request('/.well-known/gpd',{},undefined,signupEnv);
+    assert.deepEqual((await publicResponse.json()).buyer.registration,{
+      project_url:'https://example.supabase.co',publishable_key:'sb_publishable_fixture',confirmation_required:true
+    });
+    const secretResponse=await request('/.well-known/gpd',{},undefined,{...signupEnv,SUPABASE_PUBLISHABLE_KEY:'sb_secret_fixture'});
+    assert.equal((await secretResponse.json()).buyer.registration,null);
+    const accountResponse=await request('/v1/agent/account',buyerHeaders);
+    assert.equal(accountResponse.headers.get('cache-control'),'no-store');
+    assert.deepEqual(await accountResponse.json(),{ok:true,account_id:buyer,verified:true});
+    assert.equal((await request('/v1/agent/account',{authorization:'Bearer bad.test.token'})).status,401);
+
     assert.equal((await createBuyer(input,{authorization:'Bearer bad.test.token'})).status,401);
     assert.equal((await createBuyer({...input,buyer_authorized:false})).status,400);
     assert.equal((await createBuyer({...input,buyer_country:'US'})).status,404);
     assert.equal((await createBuyer({...input,quantity:3})).status,404);
+    assert.equal((await createBuyer({...input,gtin:'4901234567894'})).status,409);
     const [create,retry] = await Promise.all([createBuyer(input),createBuyer(input)]);
     assert.equal(create.status,200,await create.clone().text());
     assert.equal(retry.status,200,await retry.clone().text());

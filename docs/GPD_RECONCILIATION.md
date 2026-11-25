@@ -2,7 +2,7 @@
 
 `scripts/gpd33_reconcile.mjs` は、別々に取得・検証した注文台帳、契約条件、確定入出金とGPDの引き渡し記録を照合する。DB・ネットワークへの接続、送金、課金、記録の更新は行わない。運用者が管理する隔離環境で実行し、入力も出力も公開ログやGitHubに保管しない。
 
-検証済みの入力ファイルを使う場合は `node scripts/gpd33_reconcile.mjs <ファイルパス>` を実行する。開発時は `node tests/gpd33_reconcile.mjs` でテスト値を使う。
+テスト用の整形済み入力を使う場合は `node scripts/gpd33_reconcile.mjs <ファイルパス>` を実行する。実環境区分のファイルは、下記の署名付き取り込みを使う。開発時は `node tests/gpd33_reconcile.mjs` と `node tests/gpd33_reconcile_signed.mjs` でテスト値を使う。
 
 ## 入力と信頼境界
 
@@ -19,4 +19,21 @@ UUIDとハッシュは小文字。注文参照には [販売業者への引き�
 
 受信した署名付き報告、x402チャレンジ、購入意向から上記の検証区分は付けられない。公開APIの本文を直接入力しない。収入合計は確認済み注文の契約額と確定入金が一致する仲介料のみを資産・ネットワーク別に返す。完全に整合する重複は1件にまとめる。矛盾、未入金、不足金額、無効な入出金は要照合として残す。取消後の入金は返金確認の対象として扱う。
 
-現在の範囲はローカルの証拠照合とテスト。取込元の真正性・確定性の検証、完全な対象期間の抽出、契約連携、会計台帳への取り込みは接続前に別途検証が必要。`supplied_live_evidence_only` は提供された実環境区分の証拠の範囲を表す。テスト出力は `test_only`。
+現在の範囲は署名の検証、ローカルでの証拠照合、テスト。外部事業者の台帳からの取得と決済ネットワークでの確定確認、完全な対象期間の抽出、契約連携、会計台帳への取り込みは接続前に別途検証が必要。`supplied_live_evidence_only` は提供された実環境区分の証拠の範囲を表す。テスト出力は `test_only`。
+
+## 署名付きスナップショット
+
+運用者が独立した経路で固定した公開鍵の台帳を使い、`node scripts/gpd33_reconcile_signed.mjs <証拠バンドル> <公開鍵台帳>` で照合する。公開鍵台帳は証拠バンドルの作成者から取得せず、書き換え権限を管理する。有効な署名は登録した出所の証言を認証する。運用者は、各出所が実際に台帳を照会し、確定性を確認してから署名するように管理する。
+
+公開鍵台帳には `schema_version: 1`、`environment`、発行者IDをキーとする `issuers` を指定する。各発行者は `role` とEd25519の生公開鍵 `public_key`（小文字16進64文字）を持つ。注文・契約の発行者は許可対象の `merchant_ids`、入出金の発行者は `networks` を指定する。鍵の使い回しは禁止。テストと実環境の公開鍵台帳は別ファイルとし、異なる鍵で運用する。
+
+証拠バンドルには `schema_version: 1`、`environment`、`envelopes` を指定する。各要素は発行者ID `issuer`、ペイロードUTF-8のパディングなしbase64url `payload`、そのバイト列に対するEd25519署名のパディングなしbase64url `signature` を持つ。ペイロードは `context`、`issuer`、`environment`、`snapshot_id`（UUID）、`observed_at`（Unix秒）、`rows` のJSONオブジェクト。すべての発行者が同一のスナップショットID・時刻を使う。ゼロ件の発行者も空配列に署名する。対象期間の鮮度は出力の `observed_at` と運用側の照合期間を比較して管理する。
+
+| 発行者の役割 | 署名の文脈 | 行に必要な追加条件 |
+|---|---|---|
+| `handoffs` | `gpd33-handoffs-v1` | GPDの引き渡し台帳から抽出。 |
+| `orders` | `gpd33-external-order-ledger-v1` | 許可販売業者の正式台帳にある成立または取消。 |
+| `fees` | `gpd33-agreed-fees-v1` | 許可販売業者で `contract_state: "executed"`。 |
+| `receipts` | `gpd33-finalized-settlement-v1` | 許可ネットワークで `settlement_state: "finalized"`。 |
+
+署名付き取り込みは、上記の条件を満たす出所から `verification` と `approval` を付ける。元の行に含まれる自己申告値は使用しない。

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import {generateKeyPairSync} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,evaluateGenericOffer,genericCommerceSearch};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision};').toString('base64'));
 const worker=api.default;
+await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
 const fixtureKey=generateKeyPairSync('ed25519').privateKey.export({format:'jwk'});
 const env={REFRESH_KEY:'fixture-admin',CDP_API_KEY_ID:'fixture',CDP_API_KEY_SECRET:Buffer.concat([Buffer.from(fixtureKey.d,'base64url'),Buffer.from(fixtureKey.x,'base64url')]).toString('base64'),SUPABASE_URL:'https://db.example',SUPABASE_SECRET_KEY:'test-key',
@@ -123,6 +125,11 @@ globalThis.fetch=async (target,options={})=>{
   if(url.hostname==='api.ebay.com'){
     return Response.json({itemSummaries:[{itemId:'e1',title:'Example Pasta 500 g'}]});
   }
+  if(url.pathname==='/rest/v1/products'&&mode.startsWith('decision')){
+    return Response.json([{id:'10000000-0000-4000-8000-000000000005',manufacturer:'Example',
+      product_type:'food_grocery',source_product_key:'universal:gtin:00012345678905',
+      canonical_name_ja:'Example Pasta',metadata:{identifiers:{gtin:'012345678905'},gpd33_verified:mode==='decision_verified'}}]);
+  }
   if(url.pathname==='/rest/v1/parts_catalog')return Response.json([{id:'fixture-part',manufacturer:'OMRON',part_number:'E2E-X5ME1',normalized_part_number:'E2EX5ME1',name:'Proximity sensor'}]);
   if(url.hostname==='db.example')return Response.json([]);
   throw new Error('unexpected request '+url);
@@ -169,6 +176,18 @@ assert.equal(staged.metrics.ebay_calls,2);
 assert.ok(requests.some(url=>url.searchParams.get('fieldgroups')==='PRODUCT'));
 assert.ok(requests.length<=24,'Discovery used '+requests.length+' subrequests');
 assert.equal(fallback.new,1);
+const buildDecision=()=>api.buildUniversalPurchaseDecision(new Request(origin+'/v1/purchase-decision'),
+  {...env,EBAY_CLIENT_ID:'e',EBAY_CLIENT_SECRET:'s'},
+  {domain:'food_grocery',query:'Example Pasta',gtin:'012345678905',buyer_country:'JP'},origin);
+mode='decision_verified';
+requests.length=0;
+assert.equal((await buildDecision()).purchase.handoff_offer_lookup_url,
+  origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP');
+assert.equal(requests.filter(url=>url.pathname==='/rest/v1/products').length,1);
+assert.ok(!requests.some(url=>url.pathname==='/rest/v1/merchant_offers'));
+mode='decision_unverified';
+assert.equal((await buildDecision()).purchase.handoff_offer_lookup_url,null);
+mode='http';
 const adminRoute='/admin/business-outcomes';
 assert.equal((await call(adminRoute)).status,401);
 const businessResponse=await call(adminRoute,{headers:{'x-refresh-key':'fixture-admin'}});

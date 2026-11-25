@@ -22,6 +22,9 @@ assert.equal(preflight.tables.products.indexes.products_pkey.valid,true);
 assert.deepEqual(preflight.gpd33_relation_names,[]);
 await db.query(await readSql('supabase/migrations/20261125053000_gpd33_catalog.sql'));
 await db.query(await readSql('supabase/migrations/20261125093500_gpd33_catalog_planning.sql'));
+await db.query(await readSql('supabase/migrations/20261125101500_gpd33_merchant_gtin.sql'));
+const merchantGtinIndex=await db.query("select to_regclass('public.gpd33_active_offer_gtin')::text as index_name");
+assert.equal(merchantGtinIndex.rows[0].index_name,'gpd33_active_offer_gtin');
 const indexCheck=await db.query("select to_regclass('public.gpd33_source_product_key')::text as extra, to_regclass('public.fixture_product_key_idx')::text as existing");
 assert.deepEqual(indexCheck.rows[0],{extra:null,existing:'fixture_product_key_idx'});
 const sql=async(q,args=[])=>(await db.query(q,args)).rows;
@@ -255,11 +258,20 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await db.query("alter table merchant_offers add stock_status text, add ships_to text[], add stock_quantity int");
   await db.query("update merchant_offers set stock_status='in_stock',ships_to=array['JP'],stock_quantity=2 where id=$1",[offer]);
   await db.query(await readSql('supabase/migrations/20261125100000_gpd33_buyer_self_service.sql'));
+  await db.query("alter table merchant_offers add manufacturer text");
+  await db.query("update merchant_offers set gtin='0012345678905',manufacturer='Example' where id=$1",[offer]);
+  await db.query(`insert into products(canonical_name_ja,source_product_key,manufacturer,product_type,metadata) values('Fixture pasta','universal:gtin:00012345678905','Example','food_grocery','{"gpd33_verified":true}') on conflict do nothing`);
+  await db.query("alter table merchants add metadata jsonb");
+  await db.query("update merchants set metadata=jsonb_build_object('system_managed',true) where id=$1",[other]);
+  await db.query(await readSql('supabase/migrations/20261125103000_gpd33_offer_bound_handoff.sql'));
   await db.query('set role anon');
   await assert.rejects(sql('select public.gpd33_create_buyer_handoff(null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
   await db.query('reset role; set role service_role');
+  const nonParticipating = await one('select public.gpd33_request_buyer_handoff($1,$2,$3,1,$4,null) result',
+    [seller,accept,ineligible,'JP']);
+  assert.equal(nonParticipating.error,'merchant_handoff_unavailable');
   await testHandoffJourney(one,seller,offer);
 }
 await Promise.all([db.end(),concurrent.end()]);
