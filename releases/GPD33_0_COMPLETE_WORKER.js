@@ -5934,16 +5934,21 @@ async function searchMerchantOffers(env,{part_number="",manufacturer="",buyer_co
   const byId=new Map(merchants.map(x=>[String(x.id),x]));
   const mnorm=normalize(manufacturer||"");
   const scored=[];
+  const destination=String(buyer_country).trim().toUpperCase();
   for(const row of offers){
     if(mnorm&&normalize(row.manufacturer||"")!==mnorm)continue;
     const merchant=byId.get(String(row.merchant_id));if(!merchant)continue;
     const ships=Array.isArray(row.ships_to)?row.ships_to.map(x=>String(x).toUpperCase()):[];
     if(buyer_country&&ships.length&&!ships.includes(String(buyer_country).toUpperCase())&&!ships.includes("WORLDWIDE")&&!ships.includes("ALL"))continue;
     const score=merchantOfferScore(row,merchant,buyer_country);
-    scored.push({merchant:merchantPublicShape(merchant),offer:merchantOfferShape(row),agent_score:score});
+    const destinationCovered=/^[A-Z]{2}$/.test(destination)&&ships.some(x=>x===destination||x==="WORLDWIDE"||x==="ALL");
+    const handoffCandidate=Boolean(mnorm&&gpd33HandoffId(row.id)&&merchant.verified===true&&destinationCovered
+      &&["in_stock","low_stock"].includes(row.stock_status));
+    scored.push({merchant:merchantPublicShape(merchant),offer:merchantOfferShape(row),agent_score:score,
+      handoff_candidate:handoffCandidate});
   }
   scored.sort((a,b)=>Number(b.agent_score.overall_agent_score)-Number(a.agent_score.overall_agent_score)||((b.offer.stock_status==="in_stock")-(a.offer.stock_status==="in_stock"))||((a.offer.currency===b.offer.currency&&a.offer.price!=null&&b.offer.price!=null)?a.offer.price-b.offer.price:0));
-  return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,query:{part_number:part_number,normalized_part_number:pn,manufacturer:manufacturer||null,buyer_country:buyer_country||null},count:Math.min(lim,scored.length),ranking_policy:{paid_placement:false,primary:"evidence_and_purchase_readiness",factors:["exact_mpn","merchant_verification","stock","price_completeness","lead_time","shipping_coverage","official_documents","return_policy","compatibility_evidence"]},recommended_offer:scored[0]||null,offers:scored.slice(0,lim),generated_at:new Date().toISOString()};
+  return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,query:{part_number:part_number,normalized_part_number:pn,manufacturer:manufacturer||null,buyer_country:buyer_country||null},count:Math.min(lim,scored.length),ranking_policy:{paid_placement:false,primary:"evidence_and_purchase_readiness",factors:["exact_mpn","merchant_verification","stock","price_completeness","lead_time","shipping_coverage","official_documents","return_policy","compatibility_evidence"]},recommended_offer:scored[0]||null,handoff_candidate_offer_id:scored.slice(0,lim).find(x=>x.handoff_candidate)?.offer.id||null,offers:scored.slice(0,lim),generated_at:new Date().toISOString()};
 }
 function merchantGlobalOfferReadiness(o){
   const x=merchantOfferShape(o)||{},g=x.global_fulfillment||{};
@@ -9934,6 +9939,10 @@ Version: ${VERSION}
 Build: ${BUILD_ID}
 
 GLOBAL PURCHASE DECISION is a multilingual paid purchase-decision layer for AI agents across products and industrial parts. Primary paid endpoint: POST/GET /v1/purchase-decision at 0.10 USDC via x402. It routes exact industrial parts to Parts Intelligence, anime collectibles to specialist collectible intelligence, and all other product categories to evidence-preserving generic commerce adapters. Database growth is autonomous: anime catalog collection, parts collection, generic demand observations, exact-GTIN promotion, and scheduled demand refresh. Legacy ANIME INTELLIGENCE specialist endpoints remain available for backwards compatibility.
+
+## Merchant matching and buyer tracking
+- GET /v1/merchant/search with manufacturer, exact part_number and buyer_country. A handoff_candidate_offer_id identifies a verified merchant's matching offer with reported stock and destination coverage. Confirm the current terms and obtain buyer authorization before arranging a handoff.
+- GET /v1/handoffs/status with the issued bearer token returns the seller-reported state for one handoff. See ${origin}/openapi.json.
 
 ## Legacy Anime Specialist Layer
 ANIME INTELLIGENCE is a paid decision-intelligence layer for PHYSICAL Japanese anime collectibles: figures, Nendoroid, figma, plush, acrylic goods, keychains, badges, lottery prizes, model kits, trading cards, collaboration sneakers and apparel. It is for autonomous shopping agents, not anime news or entertainment Q&A.

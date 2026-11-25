@@ -20,9 +20,23 @@ export async function testHandoffJourney(query, seller, offer) {
     const url = new URL(input);
     assert.equal(url.origin, env.SUPABASE_URL);
     dbCalls++;
+    if (url.pathname === '/rest/v1/merchant_offers') {
+      assert.equal(url.searchParams.get('normalized_part_number'), 'eq.EX-123');
+      const eligible = await query("select to_jsonb(o) result from merchant_offers o where id=$1 and active", [offer]);
+      const offerFields = {manufacturer:'Example',part_number:'EX-123',stock_status:'in_stock'};
+      return Response.json([
+        {...eligible,...offerFields,id:randomUUID(),ships_to:[]},
+        {...eligible,...offerFields,ships_to:['JP']},
+        {...eligible,...offerFields,id:randomUUID(),ships_to:['JP'],stock_status:'out_of_stock'}
+      ]);
+    }
     if (url.pathname === '/rest/v1/merchants') {
       const merchantKeyHash = createHash('sha256').update('fixture-merchant').digest('hex');
-      assert.equal(url.searchParams.get('merchant_api_key_hash'), 'eq.' + merchantKeyHash);
+      if (url.searchParams.has('merchant_api_key_hash')) {
+        assert.equal(url.searchParams.get('merchant_api_key_hash'), 'eq.' + merchantKeyHash);
+      } else {
+        assert.equal(url.searchParams.get('id'), 'in.("' + seller + '")');
+      }
       const merchant = await query("select to_jsonb(m) result from merchants m where id=$1 and status='active'", [seller]);
       return Response.json([merchant]);
     }
@@ -41,7 +55,15 @@ export async function testHandoffJourney(query, seller, offer) {
   try {
     const handoff = randomUUID();
     const admin = {'x-refresh-key': env.REFRESH_KEY};
-    const create = await request('/admin/handoffs', admin, {handoff_id:handoff, offer_id:offer, quantity:1, buyer_authorized:true});
+    const search = '/v1/merchant/search?part_number=EX-123&manufacturer=Example';
+    const unscoped = await (await request(search, {})).json();
+    assert.equal(unscoped.handoff_candidate_offer_id, null);
+    const scoped = await (await request(search + '&buyer_country=JP', {})).json();
+    assert.equal(scoped.handoff_candidate_offer_id, offer);
+    assert.equal(scoped.offers.filter(item => item.handoff_candidate).length, 1);
+    const create = await request('/admin/handoffs', admin, {
+      handoff_id:handoff, offer_id:scoped.handoff_candidate_offer_id, quantity:1, buyer_authorized:true
+    });
     assert.equal(create.status, 200);
     const {tracking_token: token} = await create.json();
     const [id, expiry, signature] = token.split('.');
