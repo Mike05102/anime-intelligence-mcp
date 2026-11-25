@@ -1,0 +1,42 @@
+name: Verify GPD 33 release
+on:
+  push:
+    branches: [main]
+    paths:
+      - releases/GPD33_0_COMPLETE_WORKER.js
+      - supabase/migrations/20261125053000_gpd33_catalog.sql
+      - tests/gpd33_*
+      - .github/workflows/verify-gpd33-complete.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: local-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --check releases/GPD33_0_COMPLETE_WORKER.js
+      - run: node tests/gpd33_worker.mjs
+      - run: npm install --prefix "${RUNNER_TEMP}/gpd33" pg@8.16.3
+      - run: GPD33_PG_MODULE="${RUNNER_TEMP}/gpd33/node_modules/pg/lib/index.js" node tests/gpd33_database.mjs
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: local-ci-password
+          PGDATABASE: postgres
