@@ -215,5 +215,38 @@ assert.equal(business.verified_outcomes.reconciled_external_revenue_usdc,null);
 assert.ok(!JSON.stringify(business).includes('shared-receipt'));
 await db.query('reset role; set role anon');
 await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission denied/);
+{
+  await db.query('reset role');
+  await db.query(await readSql('supabase/migrations/20261125083000_gpd33_merchant_handoffs.sql'));
+  const ids=Array.from({length:10},(_,i)=>'10000000-0000-4000-8000-'+String(i+1).padStart(12,'0'));
+  const [seller,other,offer,ineligible,handoff,second,accept,order,cancel,decline]=ids;
+  await db.query("insert into merchants values ($1,'active',true),($2,'active',false)",[seller,other]);
+  await db.query('insert into merchant_offers values ($1,$3,true),($2,$4,true)',[offer,ineligible,seller,other]);
+  await db.query('set role service_role');
+  const create=async(id,offerId,units=1)=>one('select public.gpd33_create_handoff($1,$2,$3) result',[id,offerId,units]);
+  const update=async(merchant,id,event,state,ref=null)=>one('select public.gpd33_record_handoff_event($1,$2,$3,$4,$5) result',[merchant,id,event,state,ref]);
+  assert.equal((await create(handoff,ineligible)).error,'offer_not_eligible');
+  assert.equal((await create(handoff,offer)).handoff_state,'requested');
+  assert.equal((await create(handoff,offer)).ok,true);
+  assert.equal((await create(handoff,offer,2)).error,'handoff_id_conflict');
+  assert.deepEqual((await one('select public.gpd33_merchant_handoffs($1,$2) result',[other,handoff])).handoffs,[]);
+  assert.equal((await update(other,handoff,accept,'accepted')).status,404);
+  assert.equal((await update(seller,handoff,order,'order_reported','a'.repeat(64))).status,409);
+  assert.equal((await update(seller,handoff,accept,'accepted')).handoff_state,'accepted');
+  assert.equal((await update(seller,handoff,accept,'declined')).error,'event_id_conflict');
+  assert.equal((await update(seller,handoff,order,'order_reported','a'.repeat(64))).ok,true);
+  assert.equal((await update(seller,handoff,cancel,'cancelled','b'.repeat(64))).status,409);
+  assert.equal((await update(seller,handoff,cancel,'cancelled','a'.repeat(64))).ok,true);
+  assert.equal((await update(seller,handoff,order,'order_reported','a'.repeat(64))).replayed,true);
+  assert.equal((await create(second,offer)).ok,true);
+  assert.equal((await update(seller,second,accept,'accepted')).ok,true);
+  assert.equal((await update(seller,second,order,'order_reported','a'.repeat(64))).error,'order_reference_conflict');
+  assert.equal((await update(seller,second,decline,'declined')).status,409);
+  const handoffOutcomes=await one('select public.gpd33_handoff_outcomes() result');
+  assert.deepEqual(handoffOutcomes,{scope:'merchant_authenticated_reports',window_days:30,
+    handoffs_created:2,merchant_acceptances:2,orders_reported_by_merchants:1,cancellations_reported_by_merchants:1});
+  await db.query('reset role; set role anon');
+  await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
+}
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');

@@ -62,6 +62,12 @@ globalThis.fetch=async (target,options={})=>{
     return Response.json({kinds:[{x402Version:2,scheme:'exact',
       network:'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',extra:{feePayer:env.X402_WALLET_ADDRESS}}]});
   }
+  if(url.pathname==='/rest/v1/merchants'){
+    return Response.json([{id:'10000000-0000-4000-8000-000000000001',status:'active'}]);
+  }
+  if(url.pathname.startsWith('/rest/v1/rpc/gpd33_')&&/handoff/.test(url.pathname)){
+    return Response.json({ok:true,fixture:JSON.parse(options.body)});
+  }
   if(url.pathname==='/rest/v1/rpc/gpd33_business_outcomes'){
     return Response.json({verified_outcomes:{confirmed_goods_transactions:null}});
   }
@@ -151,6 +157,22 @@ const businessResponse=await call(adminRoute,{headers:{'x-refresh-key':'fixture-
 assert.equal(businessResponse.status,200);
 assert.equal(businessResponse.headers.get('cache-control'),'no-store');
 assert.equal((await businessResponse.json()).metrics.verified_outcomes.confirmed_goods_transactions,null);
+const handoff='10000000-0000-4000-8000-000000000003';
+const offerId='10000000-0000-4000-8000-000000000004';
+const handoffRequest=(path,body,headers={})=>call(path,{
+  method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)
+});
+assert.equal((await handoffRequest('/admin/handoffs',{handoff_id:handoff})).status,401);
+assert.equal((await handoffRequest('/admin/handoffs',{handoff_id:handoff,offer_id:offerId,quantity:1},{'x-refresh-key':'fixture-admin'})).status,400);
+const authorizedHandoff=await handoffRequest('/admin/handoffs',{handoff_id:handoff,offer_id:offerId,quantity:1,buyer_authorized:true},{'x-refresh-key':'fixture-admin'});
+assert.equal((await authorizedHandoff.json()).fixture.handoff,handoff);
+assert.equal((await call('/v1/merchant/handoffs')).status,401);
+const receivedEvent=await handoffRequest('/v1/merchant/handoffs/events',{handoff_id:handoff,event_id:offerId,
+  state:'order_reported',order_reference:'private-reference',merchant_id:'caller-controlled'},{'x-merchant-key':'fixture'});
+const recorded=(await receivedEvent.json()).fixture;
+assert.equal(recorded.seller,'10000000-0000-4000-8000-000000000001');
+assert.match(recorded.reference_hash,/^[0-9a-f]{64}$/);
+assert.ok(!JSON.stringify(recorded).includes('private-reference'));
 const cachedHealth=new Map();
 globalThis.caches={default:{
   match:async request=>cachedHealth.get(request.url)?.clone(),

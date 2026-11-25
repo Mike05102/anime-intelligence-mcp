@@ -5489,6 +5489,51 @@ async function registerMerchantAdmin(env,body,origin){
   return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,merchant:merchantPublicShape(merchant),merchant_api_key:apiKey,important:"This API key is returned once. Store it securely. Send it in x-merchant-key for merchant write endpoints.",feed_url:`${origin}/v1/merchant/feed?merchant=${encodeURIComponent(slug)}`,diagnostic_url:`${origin}/v1/merchant/diagnostic?merchant=${encodeURIComponent(slug)}`};
 }
 
+function gpd33HandoffId(value){
+  return typeof value==="string"&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)?value.toLowerCase():null;
+}
+async function gpd33HandoffApi(request,env,merchant=null){
+  const headers={"cache-control":"no-store"};
+  let method,args;
+  if(request.method==="GET"){
+    const supplied=new URL(request.url).searchParams.get("handoff_id");
+    const lookup=gpd33HandoffId(supplied);
+    if(supplied!==null&&!lookup)return json({ok:false,error:"invalid_handoff_id"},400,headers);
+    method="merchant_handoffs";
+    args={seller:merchant.id,lookup};
+  }else{
+    let body;
+    try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400,headers);}
+    const handoff=gpd33HandoffId(body?.handoff_id);
+    if(!handoff)return json({ok:false,error:"invalid_handoff_id"},400,headers);
+    if(merchant){
+      const event=gpd33HandoffId(body?.event_id);
+      const newState=body?.state;
+      const reference=body?.order_reference??null;
+      if(!event||!["accepted","declined","order_reported","cancelled"].includes(newState)
+        || (reference!==null&&(typeof reference!=="string"||!reference.trim()||reference.length>128))){
+        return json({ok:false,error:"invalid_handoff_event"},400,headers);
+      }
+      const hash=reference===null?null:await sha256HexText("gpd33-order|"+merchant.id+"|"+reference.trim());
+      method="record_handoff_event";
+      args={seller:merchant.id,handoff,event,new_state:newState,reference_hash:hash};
+    }else{
+      const offer=gpd33HandoffId(body?.offer_id),units=body?.quantity;
+      if(body?.buyer_authorized!==true||!offer||!Number.isInteger(units)||units<1||units>1000){
+        return json({ok:false,error:"buyer_consent_and_valid_offer_required"},400,headers);
+      }
+      method="create_handoff";
+      args={handoff,offer,units};
+    }
+  }
+  try{
+    const result=await gpd33Rpc(env,method,args);
+    return json(result,result.ok?200:(result.status||400),headers);
+  }catch{
+    return json({ok:false,error:"handoff_service_unavailable"},503,headers);
+  }
+}
+
 function safeMerchantUrl(v){
   const s=String(v||"").trim();if(!s)return null;
   try{const u=new URL(s);if(!["http:","https:"].includes(u.protocol))return null;return u.toString();}catch{return null;}
@@ -9820,6 +9865,19 @@ function openapi(origin){
   paths["/v1/merchant/profile"]={get:{operationId:"getMerchantAgentProfile",summary:"Get merchant agent-commerce profile",tags:["merchant-intelligence","agent-commerce"],security:[],parameters:[{in:"query",name:"merchant",required:true,schema:{type:"string"}}],responses:{200:{description:"Merchant profile"},404:{description:"Merchant not found"}}}};
   paths["/v1/merchant/feed"]={get:{operationId:"getMerchantAgentFeed",summary:"Get machine-readable merchant offer feed",tags:["merchant-intelligence","agent-commerce"],security:[],parameters:[{in:"query",name:"merchant",required:true,schema:{type:"string"}},{in:"query",name:"limit",schema:{type:"integer",default:100}}],responses:{200:{description:"Merchant offer feed"}}}};
   paths["/v1/merchant/diagnostic"]={get:{operationId:"getMerchantAgentDiagnostic",summary:"Diagnose why an AI purchasing agent may or may not select a merchant",description:"Returns Agent Discoverability, Trust, Purchase Readiness, Compatibility Evidence and Fulfillment scores plus prioritized improvements.",tags:["merchant-intelligence","merchant-optimization"],security:[],parameters:[{in:"query",name:"merchant",required:true,schema:{type:"string"}}],responses:{200:{description:"Merchant optimization diagnostic"}}}};
+  paths["/v1/merchant/handoffs"]={get:{operationId:"listMerchantHandoffs",summary:"List this merchant's purchase handoffs",
+    tags:["merchant-intelligence"],security:[{MerchantApiKey:[]}],
+    parameters:[{name:"handoff_id",in:"query",schema:{type:"string",format:"uuid"}}],
+    responses:{"200":{description:"Merchant-scoped handoffs"},"401":{description:"Invalid merchant key"}}}};
+  paths["/v1/merchant/handoffs/events"]={post:{operationId:"recordMerchantHandoffEvent",summary:"Report a purchase handoff outcome",
+    description:"Use a stable event_id to retry. Reports do not create an order or move funds.",tags:["merchant-intelligence"],
+    security:[{MerchantApiKey:[]}],requestBody:{required:true,content:{"application/json":{schema:{
+      type:"object",required:["handoff_id","event_id","state"],properties:{
+        handoff_id:{type:"string",format:"uuid"},event_id:{type:"string",format:"uuid"},
+        state:{type:"string",enum:["accepted","declined","order_reported","cancelled"]},
+        order_reference:{type:"string",maxLength:128}}}}}},
+    responses:{"200":{description:"Event recorded or safely replayed"},"400":{description:"Invalid event"},
+      "401":{description:"Invalid merchant key"},"404":{description:"Handoff unavailable"},"409":{description:"Conflicting event or transition"}}}};
   paths["/v1/merchant/offers/upsert"]={post:{operationId:"upsertMerchantOffers",summary:"Publish or update merchant offers",description:"Authenticated merchant write endpoint. Send x-merchant-key.",tags:["merchant-intelligence","merchant-feed"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Offers accepted"},400:{description:"Invalid offer"},401:{description:"Invalid merchant key"}}}};
   paths["/v1/merchant/profile/update"]={post:{operationId:"updateMerchantAgentProfile",summary:"Update merchant agent-commerce profile",description:"Authenticated merchant write endpoint. Send x-merchant-key.",tags:["merchant-intelligence","merchant-feed"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Profile updated"},400:{description:"Invalid profile"},401:{description:"Invalid merchant key"}}}};
   paths["/v1/product/resolve"]={get:{operationId:"resolveUniversalProductIdentity",summary:"Normalize universal product identity",description:"Resolve GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN signals into a stable identity key and product domain before purchase-decision execution.",tags:["universal-commerce","product-identity"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"gtin",schema:{type:"string"}},{in:"query",name:"isbn",schema:{type:"string"}},{in:"query",name:"mpn",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}}],responses:{200:{description:"Normalized product identity"}}}};
@@ -13074,6 +13132,12 @@ export default{
       if(url.pathname==="/v1/merchant/feed"&&request.method==="GET"){const out=await merchantFeedApi(env,url);return json(out,out?.status||200,{"cache-control":"public, max-age=60"});}
       if(url.pathname==="/v1/merchant/diagnostic"&&request.method==="GET"){const out=await merchantDiagnosticApi(env,url);return json(out,out?.status||200);}
       if(url.pathname==="/v1/merchant/offers/upsert"&&request.method==="POST"){const merchant=await merchantByApiKey(env,request);if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401);let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await upsertMerchantOffers(env,merchant,body),200,{"cache-control":"no-store"});}catch(e){return json({ok:false,error:"merchant_offer_upsert_failed",detail:safeError(e)},400);}}
+      if((url.pathname==="/v1/merchant/handoffs"&&request.method==="GET")||
+          (url.pathname==="/v1/merchant/handoffs/events"&&request.method==="POST")){
+        const merchant=await merchantByApiKey(env,request);
+        if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401,{"cache-control":"no-store"});
+        return gpd33HandoffApi(request,env,merchant);
+      }
       if(url.pathname==="/v1/merchant/profile/update"&&request.method==="POST"){const merchant=await merchantByApiKey(env,request);if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401);let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await updateMerchantProfile(env,merchant,body,origin),200,{"cache-control":"no-store"});}catch(e){return json({ok:false,error:"merchant_profile_update_failed",detail:safeError(e)},400);}}
       if(url.pathname==="/v1/universal/coverage"&&request.method==="GET")return json(await universalCoverageSnapshot(env));
       if(url.pathname==="/v1/product/resolve"&&(request.method==="GET"||request.method==="POST")){
@@ -13198,10 +13262,14 @@ export default{
         if(url.pathname==="/admin/agent-selection-readiness-audit"&&request.method==="GET")return json(agentSelectionReadinessAudit(origin));
         if(url.pathname==="/admin/country-routing-audit"&&request.method==="GET")return json(await countryAwareRoutingAudit(env,url.searchParams.get("query")||"Hatsune Miku figure"));
         if(url.pathname==="/admin/metrics"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,metrics:await growthMetricsScalable(env)});
+        if(url.pathname==="/admin/handoffs"&&request.method==="POST")return gpd33HandoffApi(request,env);
         if(url.pathname==="/admin/business-outcomes"&&request.method==="GET"){
-          const metrics=await gpd33Rpc(env,"business_outcomes",{}).catch(()=>null);
+          const [metrics,merchantReportedHandoffs]=await Promise.all([
+            gpd33Rpc(env,"business_outcomes",{}).catch(()=>null),
+            gpd33Rpc(env,"handoff_outcomes",{}).catch(()=>null)
+          ]);
           return json({ok:metrics!==null,service:PLATFORM_NAME,version:VERSION,
-            ...(metrics?{metrics}:{error:"business_telemetry_unavailable"})},metrics?200:503,{"cache-control":"no-store"});
+            ...(metrics?{metrics,merchant_reported_handoffs:merchantReportedHandoffs}:{error:"business_telemetry_unavailable"})},metrics?200:503,{"cache-control":"no-store"});
         }
         if(url.pathname==="/admin/kpi"&&request.method==="GET"){
           const [kpi,ingress_daily]=await Promise.all([revenueMetrics(env),
