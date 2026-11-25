@@ -13,7 +13,8 @@ case "$1" in
     echo "TLS-verified database connection and GPD maintenance routines confirmed."
     ;;
   egress-check)
-    [[ "$2" =~ ^[1-9][0-9]{0,9}$ ]] && (( $2<=5000000000 ))
+    [[ "$2" =~ ^[1-9][0-9]{0,9}$ ]] || exit 1
+    (( $2<=5000000000 )) || exit 1
     logical_bytes="$(sql <<'SQL' | awk '{bytes+=$1} END {printf "%.0f",bytes}'
 select format('select coalesce(sum(octet_length(row_to_json(t)::text)),0) from only %I.%I t;',
               n.nspname,c.relname)

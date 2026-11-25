@@ -10,8 +10,14 @@ if ! docker run --rm --network host --user "$(id -u):$(id -g)" \
     >"$private/operation.log" 2>&1; then
   if grep -Eiq 'password authentication failed|no password supplied|authentication failed' "$private/operation.log"; then
     echo 'Database authentication failed. Check the database password in the GitHub secret.' >&2
+  elif grep -Eiq 'does not match host|hostname mismatch' "$private/operation.log"; then
+    echo 'The PostgreSQL certificate does not match the configured hostname.' >&2
+  elif grep -Eiq 'root certificate file.*(does not exist|could not)|could not read root certificate' "$private/operation.log"; then
+    echo 'The runner could not read the configured database CA file.' >&2
+  elif grep -Eiq 'certificate verify failed|unable to get local issuer|self.signed certificate' "$private/operation.log"; then
+    echo 'The PostgreSQL certificate did not chain to a trusted CA.' >&2
   elif grep -Eiq 'certificate|TLS|SSL error' "$private/operation.log"; then
-    echo 'Database TLS verification failed. Check the Supabase connection CA configuration.' >&2
+    echo 'Database TLS negotiation failed. Check the Supabase connection endpoint and CA.' >&2
   elif grep -Eiq 'tenant or user not found|invalid user|role .* does not exist' "$private/operation.log"; then
     echo 'Supabase pooler could not match the project or database username.' >&2
   elif grep -Eiq 'network is unreachable|connection refused|timeout expired|could not translate host|no route to host' "$private/operation.log"; then
