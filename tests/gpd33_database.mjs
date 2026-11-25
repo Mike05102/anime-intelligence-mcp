@@ -15,9 +15,12 @@ await db.query(`insert into api_events(event_type,occurred_at,metadata)
   values ('universal_expansion_run',now()-interval '40 days','{"version":"33.0.0"}')`);
 const preflight=JSON.parse((await db.query(await readSql('supabase/gpd33_production_preflight.sql'))).rows[0].gpd33_preflight);
 assert.equal(preflight.tables.products.columns.metadata.type,'jsonb');
+assert.equal(preflight.tables.products.columns.id.type,'uuid');
 assert.equal(preflight.tables.products.indexes.products_pkey.valid,true);
 assert.deepEqual(preflight.gpd33_relation_names,[]);
 await db.query(await readSql('supabase/migrations/20261125053000_gpd33_catalog.sql'));
+const indexCheck=await db.query("select to_regclass('public.gpd33_source_product_key')::text as extra, to_regclass('public.fixture_product_key_idx')::text as existing");
+assert.deepEqual(indexCheck.rows[0],{extra:null,existing:'fixture_product_key_idx'});
 const sql=async(q,args=[])=>(await db.query(q,args)).rows;
 const one=async(q,args=[])=>(await sql(q,args))[0].result;
 const tokenA='00000000-0000-0000-0000-000000000001';
@@ -26,7 +29,8 @@ const action=(name,token,slot,payload={})=>one('select public.gpd33_discovery($1
   [name,token,slot,JSON.stringify(payload)]);
 function product(gtin,title='Pasta'){
   return {source_product_key:'universal:gtin:'+gtin.padStart(14,'0'), canonical_name_ja:title,
-    manufacturer:'Example', product_type:'food_grocery', source_last_checked_at:new Date().toISOString(),
+    manufacturer:'Example', product_type:'food_grocery', product_status:'active', image_status:'pending',
+    identification_confidence:0.9, jan_code:gtin.length===13?gtin:null, source_last_checked_at:new Date().toISOString(),
     metadata:{universal_commerce:true,domain:'food_grocery',gpd33_verified:true,
       evidence_level:'usda_fdc_branded_package',provider:'usda_fdc',identifiers:{gtin}}};
 }

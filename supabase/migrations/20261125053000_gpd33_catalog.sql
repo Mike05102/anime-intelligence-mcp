@@ -22,7 +22,22 @@ create index gpd33_product_legacy_key on public.products
 create index gpd33_product_metadata_barcode on public.products
   (public.gpd33_barcode(metadata->'identifiers'->>'gtin'))
   where metadata->'identifiers'->>'gtin' is not null;
-create index gpd33_source_product_key on public.products (source_product_key);
+-- Reuse a valid, unfiltered btree whose leading key is source_product_key.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_catalog.pg_index i
+    join pg_catalog.pg_class idx on idx.oid=i.indexrelid
+    join pg_catalog.pg_am am on am.oid=idx.relam
+    join pg_catalog.pg_attribute a on a.attrelid=i.indrelid and a.attnum=i.indkey[0]
+    where i.indrelid='public.products'::regclass and i.indisvalid and i.indisready
+      and i.indpred is null and am.amname='btree' and a.attname='source_product_key'
+  ) then
+    create index gpd33_source_product_key on public.products (source_product_key);
+  end if;
+end
+$$;
 create unique index gpd33_verified_key on public.products (source_product_key)
   where metadata->>'gpd33_verified' = 'true';
 
