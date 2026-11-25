@@ -9,14 +9,14 @@ export async function testMerchantGtin(worker, domains) {
   const offer='10000000-0000-4000-8000-000000000004';
   const product='10000000-0000-4000-8000-000000000005';
   const keys='00012345678905';
-  let domain='food_grocery', mode='normal';
+  let domain='food_grocery', mode='normal', observedAt=new Date().toISOString();
   const calls=[];
   const originalFetch=globalThis.fetch;
   globalThis.fetch=async input=>{
     const url=new URL(input), query=url.searchParams;
     calls.push(url);
     const row={id:offer,merchant_id:seller,manufacturer:'Example',gtin:'0012345678905',
-      stock_status:'in_stock',stock_quantity:1,ships_to:['JP'],price:10,currency:'JPY'};
+      stock_status:'in_stock',stock_quantity:1,ships_to:['JP'],price:10,currency:'JPY',source_updated_at:observedAt};
     if(url.pathname==='/rest/v1/products'){
       assert.equal(query.get('source_product_key'),'eq.universal:gtin:'+keys);
       assert.equal(query.get('metadata->>gpd33_verified'),'eq.true');
@@ -62,6 +62,14 @@ export async function testMerchantGtin(worker, domains) {
     assert.equal(destination.handoff_candidate_offer_id,offer);
     assert.equal(destination.offers.length,3);
     assert.equal(destination.offers.filter(item=>item.handoff_candidate).length,1);
+    for(const observation of [null,new Date(Date.now()-8*86400000).toISOString(),new Date(Date.now()+360000).toISOString()]){
+      observedAt=observation;
+      const unconfirmed=await (await request('012345678905','&buyer_country=JP')).json();
+      assert.equal(unconfirmed.handoff_candidate_offer_id,null);
+      assert.ok(unconfirmed.offers.length>0);
+      assert.ok(unconfirmed.offers.every(item=>item.offer_evidence_fresh===false));
+    }
+    observedAt=new Date().toISOString();
     assert.ok(!JSON.stringify(destination).includes('system_managed'));
     assert.equal((await (await request('0012345678905')).json()).handoff_candidate_offer_id,null);
     assert.equal((await (await request('012345678905','&buyer_country=US')).json()).count,0);

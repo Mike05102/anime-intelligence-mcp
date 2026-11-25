@@ -1,3 +1,4 @@
+import {testOfferFreshness} from './gpd33_offer_freshness.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {testCatalogPlanning} from './gpd33_catalog_planning.mjs';
@@ -274,17 +275,20 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await db.query(`update merchant_offers set merchant_sku='fixture-sku',part_number='EX-123',
     normalized_part_number='EX-123',mpn='EX-123',source_updated_at=now()-interval '5 days' where id=$1`,[offer]);
   await db.query(await readSql('supabase/migrations/20261125110000_gpd33_merchant_feed_import.sql'));
+  await db.query(await readSql('supabase/migrations/20261125111500_gpd33_offer_source_freshness.sql'));
   await db.query('set role anon');
   await assert.rejects(sql('select public.gpd33_create_buyer_handoff(null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_catalog_planning_growth()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_import_merchant_feed(null,null)'),/permission denied/);
+  await assert.rejects(sql('select public.gpd33_offer_source_fresh(now())'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
   await db.query('reset role; set role service_role');
   const nonParticipating = await one('select public.gpd33_request_buyer_handoff($1,$2,$3,1,$4,null) result',
     [seller,accept,ineligible,'JP']);
   assert.equal(nonParticipating.error,'merchant_handoff_unavailable');
   await testHandoffJourney(one,seller,offer);
+  await testOfferFreshness(one,offer);
 }
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');

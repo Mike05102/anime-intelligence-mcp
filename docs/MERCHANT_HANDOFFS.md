@@ -39,3 +39,5 @@ UUIDは小文字。参照番号がある場合、`reference_hash` は `gpd33-ord
 本番では既定で無効。起動条件は移行SQLの適用、既存Authの登録・本人確認経路の確認、`SUPABASE_PUBLISHABLE_KEY` または `SUPABASE_ANON_KEY`、`GPD_BUYER_SELF_SERVICE=1`。有効時はUTC日単位で1買い手3件・全体30件、数量100以下に制限する。商品在庫や配送の情報は販売業者の登録内容を参照し、注文や決済を実行しない。
 
 一般商品の候補は `GET /v1/merchant/search?gtin=<GTIN>&buyer_country=<国>` から取得する。買い手が `POST /v1/handoffs` に同じ `gtin` を渡すと、保存時に商品とオファーの識別が一致することも確認する。観測専用の販売業者はセルフサービスの引き渡し対象外。
+
+GTIN検索では、販売業者が観測した時刻 `source_updated_at` が直近7日以内（時計差として未来5分まで）のオファーを引き渡し候補にする。時刻が欠落したオファーや期限超過のオファーは比較用に残し、`offer_evidence_fresh: false` を返す。新規の引き渡しにGTINを持つオファーを使う場合は、リクエストでGTINを省略した場合もDBで鮮度を確認する。既存案件の状態確認は引き続き可能。

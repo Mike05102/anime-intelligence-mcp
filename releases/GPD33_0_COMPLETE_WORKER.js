@@ -5990,6 +5990,10 @@ async function upsertMerchantOffers(env,merchant,body){
   await sbOptional(env,`/merchants?id=eq.${encodeURIComponent(merchant.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({last_feed_at:new Date().toISOString(),updated_at:new Date().toISOString()})});
   return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,merchant:merchantPublicShape(merchant),offers_received:rows.length,offers:rows.slice(0,20).map(merchantOfferShape)};
 }
+function gpd33MerchantObservationFresh(value,now=Date.now()){
+  const observed=typeof value==="string"?Date.parse(value):NaN;
+  return Number.isFinite(observed)&&observed>=now-7*86400000&&observed<=now+300000;
+}
 async function gpd33ImportMerchantFeed(request,env){
   const headers={"cache-control":"no-store"};
   const merchant=await merchantByApiKey(env,request);
@@ -6023,7 +6027,7 @@ async function gpd33ImportMerchantFeed(request,env){
       const {merchant_sku,manufacturer,part_number,title,gtin,price,currency,stock_status,ships_to,
         product_url,source_updated_at}=item;
       const observed=Date.parse(source_updated_at);
-      if(!Number.isFinite(observed)||observed>now+300000||observed<now-7*86400000||
+      if(!gpd33MerchantObservationFresh(source_updated_at,now)||
         (gtin!=null&&!gpd33Barcode(gtin)))throw new Error("invalid_feed_evidence");
       const row=normalizeMerchantOfferInput({merchant_sku,manufacturer,part_number,title,gtin,price,currency,
         stock_status,ships_to,product_url,source_updated_at:new Date(observed).toISOString()},merchant.id);
@@ -6122,6 +6126,7 @@ async function searchMerchantOffers(env,{part_number="",manufacturer="",buyer_co
     const score=merchantOfferScore(row,merchant,buyer_country);
     const destinationCovered=/^[A-Z]{2}$/.test(destination)&&ships.some(x=>x===destination||x==="WORLDWIDE"||x==="ALL");
     const handoffCandidate=Boolean(mnorm&&gpd33HandoffId(row.id)&&merchant.verified===true&&merchant.metadata?.system_managed!==true&&merchant.metadata?.system_managed!=="true"&&destinationCovered
+      &&(!row.gtin||gpd33MerchantObservationFresh(row.source_updated_at))
       &&["in_stock","low_stock"].includes(row.stock_status));
     scored.push({merchant:merchantPublicShape(merchant),offer:merchantOfferShape(row),agent_score:score,
       handoff_candidate:handoffCandidate});
@@ -6169,9 +6174,10 @@ async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,m
       const shipsToBuyer=!!destination&&ships.some(country=>[destination,"WORLDWIDE","ALL"].includes(country));
       if(destination&&ships.length&&!shipsToBuyer)continue;
       const available=["in_stock","low_stock"].includes(row.stock_status)&&(row.stock_quantity==null||Number(row.stock_quantity)>0);
-      const handoffCandidate=shipsToBuyer&&available&&merchant.system_managed!=="true"&&merchant.system_managed!==true;
+      const fresh=gpd33MerchantObservationFresh(row.source_updated_at);
+      const handoffCandidate=shipsToBuyer&&available&&fresh&&merchant.system_managed!=="true"&&merchant.system_managed!==true;
       scored.push({merchant:merchantPublicShape(merchant),offer:merchantOfferShape(row),
-        agent_score:merchantOfferScore(row,merchant,destination),handoff_candidate:handoffCandidate});
+        agent_score:merchantOfferScore(row,merchant,destination),handoff_candidate:handoffCandidate,offer_evidence_fresh:fresh});
     }
     const offers=scored.sort((a,b)=>Number(b.handoff_candidate)-Number(a.handoff_candidate)||
       b.agent_score.overall_agent_score-a.agent_score.overall_agent_score).slice(0,pageSize);
