@@ -170,7 +170,8 @@ function candidateRows(source,payload){
   const rows=[];
   for(const row of payload.sellers){
     const evidence=publicHttps(row?.evidence_url,true);
-    if(row?.sponsored===true||typeof row?.source_seller_id!=='string'||!EXTERNAL_SELLER.test(row.source_seller_id)
+    if((row?.sponsored!==undefined&&row.sponsored!==false)
+      ||typeof row?.source_seller_id!=='string'||!EXTERNAL_SELLER.test(row.source_seller_id)
       ||!evidence||!source.evidence.has(evidence.origin))continue;
     const consent=publicHttps(row.opt_in_evidence_url,true);
     const canReviewConsent=consent&&source.consent.has(consent.origin);

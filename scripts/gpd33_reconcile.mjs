@@ -92,21 +92,28 @@ export function reconcileGpd33Evidence(input) {
       result.brokerage_fee = 'conflicting_evidence';
       continue;
     }
-    const matchedOrders = (ordersByHandoff.get(key) || []).filter(order =>
-      order.verification === 'authoritative_ledger' && order.merchant_id === handoff.merchant_id
-        && order.order_reference_hash === handoff.order_reference_hash);
-    if (matchedOrders.length !== 1) {
-      if (matchedOrders.length) result.brokerage_fee = 'ambiguous_order';
+    const authoritativeOrders = (ordersByHandoff.get(key) || []).filter(order =>
+      order.verification === 'authoritative_ledger');
+    if (authoritativeOrders.some(order => order.merchant_id !== handoff.merchant_id
+      || order.order_reference_hash !== handoff.order_reference_hash)) {
+      result.brokerage_fee = 'conflicting_order_binding';
       continue;
     }
-    const [order] = matchedOrders;
+    if (authoritativeOrders.length !== 1) {
+      if (authoritativeOrders.length) result.brokerage_fee = 'ambiguous_order';
+      continue;
+    }
+    const [order] = authoritativeOrders;
     if ((order.state === 'cancelled') !== (handoff.state === 'cancelled')) {
       result.brokerage_fee = 'conflicting_order_state';
       continue;
     }
     result.order = order.state;
-    const contracts = (feesByHandoff.get(key) || []).filter(fee => fee.approval === 'contract_verified'
-      && fee.merchant_id === handoff.merchant_id);
+    const contracts = (feesByHandoff.get(key) || []).filter(fee => fee.approval === 'contract_verified');
+    if (contracts.some(fee => fee.merchant_id !== handoff.merchant_id)) {
+      result.brokerage_fee = 'conflicting_agreement_binding';
+      continue;
+    }
     if (contracts.length !== 1) {
       result.brokerage_fee = contracts.length ? 'ambiguous_agreement' : 'missing_agreement';
       continue;

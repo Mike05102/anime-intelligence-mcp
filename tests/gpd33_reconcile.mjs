@@ -45,4 +45,17 @@ assert.equal(report.results[0].brokerage_fee,'refunded');
 assert.deepEqual(report.matched_brokerage_fee_atomic,{});
 assert.throws(() => assess({receipts:[{...receipt,amount_atomic:12}]}), /Invalid evidence record/);
 assert.throws(() => assess({receipts:[{...receipt,environment:'production?'}]}), /Invalid evidence record/);
+const conflictingExternalOrder={...baseline.orders[0],record_id:'other_order_reference',
+  order_reference_hash:'b'.repeat(64),state:'cancelled'};
+const conflictingOrders=assess({orders:[baseline.orders[0],conflictingExternalOrder]});
+assert.equal(conflictingOrders.confirmed_orders,0);
+assert.equal(conflictingOrders.results[0].brokerage_fee,'conflicting_order_binding');
+assert.deepEqual(conflictingOrders.matched_brokerage_fee_atomic,{});
+assert.equal(assess({orders:[baseline.orders[0],{...conflictingExternalOrder,verification:'unverified'}]})
+  .results[0].brokerage_fee,'matched');
+const foreignContract={...fees[0],invoice_id:'foreign_merchant_invoice',merchant_id:secondHandoff};
+const conflictingContracts=assess({fees:[...fees,foreignContract]});
+assert.equal(conflictingContracts.confirmed_orders,1);
+assert.equal(conflictingContracts.results[0].brokerage_fee,'conflicting_agreement_binding');
+assert.deepEqual(conflictingContracts.matched_brokerage_fee_atomic,{});
 console.log('PASS isolated order evidence, fee receipts, environment separation, conflicts, cancellations and refunds');

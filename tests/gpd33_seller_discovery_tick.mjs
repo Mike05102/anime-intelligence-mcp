@@ -28,10 +28,12 @@ const demand={schema:'gpd-seller-discovery-demand-v1',environment:'test',observe
 ]};
 const seller={source_seller_id:'merchant',public_name:'Fixture Merchant',merchant_country:'US',
   evidence_url:origin+'/merchant?q=private',observed_at:iso(now),opt_in_evidence_url:origin+'/merchant/consent?secret=123',
-  opt_in_observed_at:iso(now),approval:true,email:'private@example.com'};
+  opt_in_observed_at:iso(now),sponsored:false,approval:true,email:'private@example.com'};
 const manifest={schema:'gpd-seller-discovery-feed-v1',sellers:[
   seller,{...seller,source_seller_id:'outside',evidence_url:'https://unapproved.example.com/escape'},
-  {...seller,source_seller_id:'external-consent',opt_in_evidence_url:'https://unapproved.example.com/claim'}
+  {...seller,source_seller_id:'external-consent',opt_in_evidence_url:'https://unapproved.example.com/claim'},
+  {...seller,source_seller_id:'advertisement',sponsored:true},
+  {...seller,source_seller_id:'ambiguous-advertisement',sponsored:'true'}
 ]};
 const dir=await mkdtemp(join(tmpdir(),'gpd-seller-discovery-tick-'));
 try{
@@ -62,7 +64,7 @@ try{
   assert.deepEqual(attempts,['jp','alpha']);
   assert.equal((await load(stateFile)).sources.alpha.cooldown_until_ms,now+36*HOUR);
   const first=await load(reportFile),firstJson=JSON.stringify(first);
-  assert.deepEqual(first.results,[{source:'jp',status:'observed',scope_excluded:1},{source:'alpha',status:'rate_limited'}]);
+  assert.deepEqual(first.results,[{source:'jp',status:'observed',scope_excluded:3},{source:'alpha',status:'rate_limited'}]);
   assert.equal(first.discovery.candidates.find(row=>row.source_seller_id==='jp.merchant').review_status,'review_opt_in_evidence');
   assert.equal(first.discovery.candidates.find(row=>row.source_seller_id==='jp.external-consent').review_status,'review_discovery_evidence');
   assert.ok(!firstJson.includes('private@example.com')&&!firstJson.includes('secret=')&&!firstJson.includes('request_count'));
@@ -80,6 +82,20 @@ try{
   await store(registryFile,{...registry,sources:[source('unapproved',['food_grocery'],[],{no_cost_public_read:false})]});
   await assert.rejects(tick(now+3*HOUR),/invalid_approved_seller_discovery_source/);
   assert.equal(attempts.length,6);
+  await store(registryFile,{...registry,max_reads:1,sources:registry.sources.filter(candidate=>['de','jp'].includes(candidate.id))});
+  await store(demandFile,{...demand,environment:'live'});
+  await assert.rejects(tick(now+3*HOUR),/invalid_seller_discovery_demand/);
+  assert.equal(attempts.length,6,'a mismatched demand environment must not send any request');
+
+  await store(demandFile,demand);
+  await tick(now+3*HOUR);
+  await tick(now+4*HOUR);
+  assert.deepEqual(attempts.slice(6),['de','jp'],'one-read budget alternates fairness and demand');
+  await store(demandFile,{...demand,observed_at:iso(now-8*24*HOUR),rows:[demand.rows[1]]});
+  await tick(now+5*HOUR);
+  await tick(now+6*HOUR);
+  assert.deepEqual(attempts.slice(8),['de','jp'],'expired demand cannot dominate round-robin rotation');
+
 }finally{
   await rm(dir,{recursive:true,force:true});
 }
@@ -106,6 +122,9 @@ await assert.rejects(fetchMock(response('{}',302)),/seller_source_response_rejec
 await assert.rejects(fetchMock(response('{}',429,{'retry-after':'86400'})),
   error=>error.message==='seller_source_rate_limited'&&error.retryAfter==='86400');
 await assert.rejects(fetchMock(response(Buffer.alloc(64*1024+1))),/response_too_large/);
-await assert.rejects(fetchMock(response('{}'),async()=>['127.0.0.1']),/public_ipv4/);
-assert.equal(networkCalls,4);
+await assert.rejects(fetchMock(response('{}',200,{'content-type':'application/json','content-encoding':'gzip'})),/invalid_seller_discovery_response/);
+await assert.rejects(fetchMock(response('{}',200,{'content-type':'application/json','content-length':'3'})),/response_size_mismatch/);
+await assert.rejects(fetchMock(response(Buffer.from([0xff]))),{code:'ERR_ENCODING_INVALID_ENCODED_DATA'});
+await assert.rejects(fetchMock(response('{}'),async()=>['8.8.8.8','127.0.0.1']),/public_ipv4/);
+assert.equal(networkCalls,7);
 console.log('PASS demand-directed seller discovery, private claims, fairness, consent scope, cooldown and pinned mock reads');
