@@ -6766,19 +6766,28 @@ async function persistUniversalCommerceObservations(env,body,result,job=null){
     }
     let verifiedCatalogGtin=null;
     let canonicalOfferResolution={attempted:0,identities_with_offer:0,exact_links:0,provider_calls:0,detail_calls:0,offers:[],errors:[]};
-    if(!job&&body?._decision_live&&env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET){
+    const barcode=gpd33Barcode(identifiers.gtin);
+    if(!job&&body?._decision_live&&barcode){
       try{
-        const keys=(identifiers.gtin?[{source_product_key:"universal:gtin:"+gpd33Barcode(identifiers.gtin)}]:[]).map(r=>`"${String(r.source_product_key).replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`).join(",");
-        const canonicalProducts=keys?await sbOptional(env,`/products?select=id,source_product_key,canonical_name_ja,canonical_name_en,manufacturer,jan_code,model_number,product_type,metadata&source_product_key=in.(${encodeURIComponent(keys)})&limit=${UNIVERSAL_DISCOVERY_POLICY.canonical_offer_resolution_budget+2}`):[];
-        const barcode=gpd33Barcode(identifiers.gtin);
-        if(barcode&&Array.isArray(canonicalProducts)&&canonicalProducts.some(product=>
+        const canResolveEbay=Boolean(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET);
+        const fields=canResolveEbay
+          ?"id,source_product_key,canonical_name_ja,canonical_name_en,manufacturer,jan_code,model_number,product_type,metadata"
+          :"source_product_key,manufacturer,product_type,gpd33_verified:metadata->gpd33_verified";
+        const productKey="universal:gtin:"+barcode;
+        const limit=canResolveEbay?UNIVERSAL_DISCOVERY_POLICY.canonical_offer_resolution_budget+2:2;
+        const canonicalProducts=await sbOptional(env,"/products?select="+encodeURIComponent(fields)+
+          "&source_product_key=eq."+encodeURIComponent(productKey)+"&limit="+limit);
+        const rows=Array.isArray(canonicalProducts)?canonicalProducts:[];
+        if(rows.some(product=>
           UNIVERSAL_GENERIC_DOMAINS.includes(product.product_type)&&(product.product_type===domain||domain==="general_commerce")&&
-          product.metadata?.gpd33_verified===true&&gpd33Part(product.manufacturer)&&
-          product.source_product_key==="universal:gtin:"+barcode)){
+          (product.metadata?.gpd33_verified===true||product.gpd33_verified===true)&&gpd33Part(product.manufacturer)&&
+          product.source_product_key===productKey)){
           verifiedCatalogGtin=barcode;
         }
-        canonicalOfferResolution=await resolveCanonicalOffersForProducts(env,Array.isArray(canonicalProducts)?canonicalProducts:[],domain,query);
-        for(const linked of canonicalOfferResolution.offers)discovery.push(canonicalLinkedOfferRecord(domain,query,linked));
+        if(canResolveEbay){
+          canonicalOfferResolution=await resolveCanonicalOffersForProducts(env,rows,domain,query);
+          for(const linked of canonicalOfferResolution.offers)discovery.push(canonicalLinkedOfferRecord(domain,query,linked));
+        }
       }catch(e){canonicalOfferResolution.errors.push({stage:"resolver_outer",error:safeError(e)});}
     }
 

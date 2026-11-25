@@ -150,7 +150,8 @@ globalThis.fetch=async (target,options={})=>{
   if(url.pathname==='/rest/v1/products'&&mode.startsWith('decision')){
     return Response.json([{id:'10000000-0000-4000-8000-000000000005',manufacturer:'Example',
       product_type:'food_grocery',source_product_key:'universal:gtin:00012345678905',
-      canonical_name_ja:'Example Pasta',metadata:{identifiers:{gtin:'012345678905'},gpd33_verified:mode==='decision_verified'}}]);
+      canonical_name_ja:'Example Pasta',gpd33_verified:mode==='decision_verified',
+      metadata:{identifiers:{gtin:'012345678905'},gpd33_verified:mode==='decision_verified'}}]);
   }
   if(url.pathname==='/rest/v1/parts_catalog')return Response.json([{id:'fixture-part',manufacturer:'OMRON',part_number:'E2E-X5ME1',normalized_part_number:'E2EX5ME1',name:'Proximity sensor'}]);
   if(url.hostname==='db.example')return Response.json([]);
@@ -228,6 +229,18 @@ const exactDecision=await api.buildUniversalPurchaseDecision(new Request(origin+
 assert.equal(exactDecision.normalized_intent.product.gtin,'012345678905');
 assert.equal(exactDecision.purchase.handoff_offer_lookup_url,
   origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP');
+const decisionWithoutProviders=()=>api.buildUniversalPurchaseDecision(
+  new Request(origin+'/v1/purchase-decision'),env,{gtin:'012345678905',buyer_country:'JP'},origin);
+requests.length=0;
+const catalogOnly=await decisionWithoutProviders();
+assert.equal(catalogOnly.purchase.handoff_offer_lookup_url,
+  origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP');
+assert.equal(catalogOnly.decision.can_purchase,false);
+const catalogReads=requests.filter(url=>url.pathname==='/rest/v1/products');
+assert.equal(catalogReads.length,1);
+assert.equal(catalogReads[0].searchParams.get('select'),'source_product_key,manufacturer,product_type,gpd33_verified:metadata->gpd33_verified');
+assert.equal(catalogReads[0].searchParams.get('source_product_key'),'eq.universal:gtin:00012345678905');
+assert.ok(!requests.some(url=>url.hostname==='api.ebay.com'||url.hostname.endsWith('yahooapis.jp')));
 const bulkDecision=await buildDecision(3);
 assert.equal(bulkDecision.purchase.handoff_offer_lookup_url,
   origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP&quantity=3');
@@ -243,6 +256,7 @@ for(const [quantity,status,blocker] of [
 }
 mode='decision_unverified';
 assert.equal((await buildDecision()).purchase.handoff_offer_lookup_url,null);
+assert.equal((await decisionWithoutProviders()).purchase.handoff_offer_lookup_url,null);
 mode='http';
 const adminRoute='/admin/business-outcomes';
 assert.equal((await call(adminRoute)).status,401);
