@@ -86,6 +86,15 @@ export async function testMerchantGtin(worker, domains) {
     assert.equal((await (await request('012345678905','&buyer_country=JP&condition=new')).json()).count,0);
     assert.equal((await request('012345678905','&manufacturer=Different')).status,404);
     assert.equal((await request('012345678905','&part_number=conflict')).status,400);
+    const mcpLookup=async args=>await (await worker.fetch(new Request(origin+'/mcp',{
+      method:'POST',headers:{'content-type':'application/json','accept':'application/json'},
+      body:JSON.stringify({jsonrpc:'2.0',id:42,method:'tools/call',
+        params:{name:'merchant_gtin_search',arguments:args}})
+    }),env,{waitUntil(){}})).json();
+    const mcpArgs={gtin:'012345678905',buyer_country:'JP',quantity:1,condition:'used'};
+    assert.deepEqual((await mcpLookup(mcpArgs)).result.structuredContent,
+      await (await request('012345678905','&buyer_country=JP&quantity=1&condition=used')).json());
+    assert.equal((await mcpLookup({...mcpArgs,quantity:101})).result.isError,true);
     const invalidBefore=calls.length;
     assert.equal((await request('012345678906')).status,400);
     assert.equal((await request('012345678905','&limit=0')).status,400);

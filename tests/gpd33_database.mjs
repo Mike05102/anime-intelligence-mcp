@@ -1,3 +1,4 @@
+import {testReconciledGrowth} from './gpd33_reconciled_growth.mjs';
 import {testOfferCondition} from './gpd33_offer_condition.mjs';
 import {testOfferQuantity} from './gpd33_offer_quantity.mjs';
 import {testOfferFreshness} from './gpd33_offer_freshness.mjs';
@@ -282,6 +283,7 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await db.query(await readSql('supabase/migrations/20261125113000_gpd33_offer_quantity.sql'));
   await db.query(await readSql('supabase/migrations/20261125120000_gpd33_handoff_condition.sql'));
   await db.query(await readSql('supabase/migrations/20261125121500_gpd33_feed_observed_condition.sql'));
+  await db.query(await readSql('supabase/migrations/20261125123000_gpd33_reconciled_growth.sql'));
   await db.query('set role anon');
   await assert.rejects(sql('select public.gpd33_create_buyer_handoff(null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
@@ -290,6 +292,8 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await assert.rejects(sql('select public.gpd33_offer_source_fresh(now())'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_bulk_quantity_unreported(2,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_request_condition_bound_handoff(null,null,null,null,null,null,null)'),/permission denied/);
+  await assert.rejects(sql('select public.gpd33_ingest_reconciled_growth(null,null,null,null)'),/permission denied/);
+  await assert.rejects(sql('select public.gpd33_catalog_planning_reconciled()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
   await db.query('reset role; set role service_role');
   const nonParticipating = await one('select public.gpd33_request_buyer_handoff($1,$2,$3,1,$4,null) result',
@@ -299,6 +303,7 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await testOfferFreshness(one,offer);
   await testOfferQuantity(one,offer);
   await testOfferCondition(one,seller,offer);
+  await testReconciledGrowth(one,concurrent);
 }
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');

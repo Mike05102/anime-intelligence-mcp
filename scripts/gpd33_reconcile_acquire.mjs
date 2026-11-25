@@ -38,6 +38,10 @@ export async function readBoundedJson(file, limit) {
   }
 }
 
+export async function readGpd33EvidenceBundle(bundleFile) {
+  return (await readBoundedJson(bundleFile,maxSnapshotBytes)).data;
+}
+
 export async function readGpd33EvidenceRegistry(registryFile) {
   return (await readBoundedJson(registryFile,maxRegistryBytes)).data;
 }

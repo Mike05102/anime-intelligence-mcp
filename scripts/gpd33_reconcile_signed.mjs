@@ -106,10 +106,10 @@ function normalizeRows(rows, authority) {
 }
 
 /**
- * Reconcile an offline complete snapshot. The trust registry comes from the operator, independently
- * of evidence envelopes. This function authenticates assertions by pinned sources, then matches them.
+ * Authenticate a complete snapshot against a registry supplied independently by the operator.
+ * Returned rows contain private evidence and are for local reconciliation only.
  */
-export function reconcileSignedGpd33Evidence(bundle, trust) {
+export function authenticateGpd33EvidenceSnapshot(bundle, trust) {
   if (!bundle || bundle.schema_version !== 1 || !['test','live'].includes(bundle.environment) ||
     !Array.isArray(bundle.envelopes) || !bundle.envelopes.length || bundle.envelopes.length > 64) {
     throw new Error('Invalid signed evidence bundle');
@@ -138,6 +138,11 @@ export function reconcileSignedGpd33Evidence(bundle, trust) {
   if (includedIssuers.size !== authorities.size) {
     throw new Error('Required evidence issuer is missing');
   }
+  return {input,metadata};
+}
+
+export function reconcileSignedGpd33Evidence(bundle, trust) {
+  const {input,metadata}=authenticateGpd33EvidenceSnapshot(bundle,trust);
   return {...reconcileGpd33Evidence(input), ...metadata, evidence:'signed_pinned_sources'};
 }
 

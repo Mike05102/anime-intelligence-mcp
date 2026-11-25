@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {prepareGpd33GrowthEvidence} from '../scripts/gpd33_apply_growth_evidence.mjs';
 import {generateKeyPairSync, randomUUID, sign} from 'node:crypto';
 import {reconcileSignedGpd33Evidence} from '../scripts/gpd33_reconcile_signed.mjs';
 import {reconcileGpd33Evidence} from '../scripts/gpd33_reconcile.mjs';
@@ -8,7 +9,7 @@ const contexts = {
   fees:'gpd33-agreed-fees-v1', receipts:'gpd33-finalized-settlement-v1'
 };
 
-function reconcileSignedFixture(input, merchant, network) {
+function sealedFixture(input, merchant, network) {
   const environment='test', snapshot_id=randomUUID(), observed_at=Math.floor(Date.now()/1000);
   const issuers={}, envelopes=[];
   for(const [role,context] of Object.entries(contexts)){
@@ -19,14 +20,14 @@ function reconcileSignedFixture(input, merchant, network) {
     envelopes.push({issuer:role,payload:payload.toString('base64url'),
       signature:sign(null,payload,privateKey).toString('base64url')});
   }
-  return reconcileSignedGpd33Evidence({schema_version:1,environment,envelopes},
-    {schema_version:1,environment,issuers});
+  return {bundle:{schema_version:1,environment,envelopes},trust:{schema_version:1,environment,issuers},snapshot:snapshot_id};
 }
 
 export async function assertReconciliationFromHandoff(query, handoffId) {
   const persisted = await query(`select jsonb_build_object(
-    'handoff_id',id,'merchant_id',merchant_id,'order_reference_hash',order_ref_hash,'state',status
-  ) result from public.gpd33_handoffs where id=$1`, [handoffId]);
+    'handoff_id',h.id,'merchant_id',h.merchant_id,'order_reference_hash',h.order_ref_hash,'state',h.status,
+    'product_domain',b.catalog_domain,'catalog_identity','verified_canonical'
+  ) result from public.gpd33_handoffs h join public.gpd33_buyer_handoffs b on b.handoff_id=h.id where h.id=$1`, [handoffId]);
   assert.ok(['order_reported', 'cancelled'].includes(persisted.state));
   const state = persisted.state === 'cancelled' ? 'cancelled' : 'confirmed';
   const handoff = {...persisted,environment:'test'};
@@ -37,9 +38,18 @@ export async function assertReconciliationFromHandoff(query, handoffId) {
   const refund = {...receipt, transfer_id:'fixture_refund#0', direction:'refund', payer:fee.payee, payee:fee.payer};
   // Only the GPD handoff is real database state. Contracts, ledger records and transfer finality are fixtures.
   const input = {schema_version:1,environment:'test',handoffs:[handoff],
-    orders:[{...handoff, state, source:'fixture_order_ledger', record_id:'fixture_record', verification:'authoritative_ledger'}],
+    orders:[{...handoff, state, confirmed_at:Math.floor(Date.now()/1000)-60,
+      source:'fixture_order_ledger', record_id:'fixture_record', verification:'authoritative_ledger'}],
     fees:[fee], receipts:state === 'confirmed' ? [receipt,receipt] : [receipt,refund]};
-  const report = reconcileSignedFixture(input,persisted.merchant_id,fee.network);
+  const {bundle,trust,snapshot}=sealedFixture(input,persisted.merchant_id,fee.network);
+  const report=reconcileSignedGpd33Evidence(bundle,trust);
+  const growth=await prepareGpd33GrowthEvidence(bundle,trust,snapshot);
+  assert.equal(growth.status,'preview');
+  assert.deepEqual(growth.domain_counts,state==='confirmed'
+    ?{food_grocery:{confirmed_orders:1,reconciled_invoices:1}}:{});
+  await assert.rejects(prepareGpd33GrowthEvidence(bundle,trust,snapshot,{
+    apply:true,ingest:async()=>assert.fail('Test evidence must never reach the ingest adapter')
+  }),/Live signed evidence/);
   assert.equal(report.evidence,'signed_pinned_sources');
   assert.equal(report.scope,'test_only');
   if (state === 'confirmed') {

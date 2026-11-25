@@ -6953,7 +6953,7 @@ function gpd33CoverageTotals(coverage){
     new_24h:rows.reduce((sum,row)=>sum+row.new_24h,0),new_7d:rows.reduce((sum,row)=>sum+row.new_7d,0),
     attainment_percent:Math.round(canonical/target*10000)/100};
 }
-function gpd33SelectDomain(slot,coverage,efficiency={},accountSignals={}){
+function gpd33SelectDomain(slot,coverage,efficiency={},accountSignals={},settlements={}){
   const domains=UNIVERSAL_GENERIC_DOMAINS;
   const baseline=domains[slot%domains.length];
   // Every first cycle of a two-cycle block serves all 24 domains.
@@ -6964,8 +6964,11 @@ function gpd33SelectDomain(slot,coverage,efficiency={},accountSignals={}){
     if(!data)continue;
     const buyers=Number(accountSignals[d]?.buyers)||0,sellers=Number(accountSignals[d]?.responsive_sellers)||0;
     const demand=buyers>=2?Math.min(0.25,0.025*buyers+0.025*sellers):0;
+    const confirmed=Number(settlements[d]?.confirmed_orders)||0;
+    const reconciled=Number(settlements[d]?.reconciled_invoices)||0;
+    const commerce=Math.min(0.15,0.03*Math.max(0,Math.min(confirmed,reconciled)));
     const score=data.remaining/UNIVERSAL_GENERIC_DOMAIN_TARGET*
-      (1+Math.min(1,(efficiency[d]?.new||0)/(5+Number(efficiency[d]?.runs||0)))+demand);
+      (1+Math.min(1,(efficiency[d]?.new||0)/(5+Number(efficiency[d]?.runs||0)))+demand+commerce);
     if(score>best){best=score;domain=d;}
   }
   return domain;
@@ -6992,12 +6995,18 @@ function gpd33RankQuery(row){
   return row.score+universalIdentityRoleScore(row)+Math.min(3,Number(row.history_canonical_per_provider_call||0));
 }
 async function gpd33Plan(env,job){
+  const useBuyerSignals=env.GPD_BUYER_GROWTH_SIGNALS==="1";
+  const useReconciledSignals=env.GPD_RECONCILED_GROWTH_SIGNALS==="1";
+  const planningRpc=useReconciledSignals?"catalog_planning_reconciled":
+    useBuyerSignals?"catalog_planning_growth":"catalog_planning";
   const [coverage,planning,paid]=await Promise.all([
     job.coverage||gpd33Coverage(env),
-    gpd33Rpc(env,env.GPD_BUYER_GROWTH_SIGNALS==="1"?"catalog_planning_growth":"catalog_planning",{}).catch(()=>null),
+    gpd33Rpc(env,planningRpc,{}).catch(()=>null),
     sbOptional(env,"/api_events?select=occurred_at,payer_hash,metadata&event_type=eq.paid_call&order=occurred_at.desc&limit=12")
   ]);
-  const domain=gpd33SelectDomain(job.slot,coverage,planning?.efficiency,planning?.account_handoff_signals);
+  const domain=gpd33SelectDomain(job.slot,coverage,planning?.efficiency,
+    useBuyerSignals?planning?.account_handoff_signals:undefined,
+    useReconciledSignals?planning?.reconciled_transaction_signals:undefined);
   const anchors=genericDomainProfile(domain).anchors||[];
   const {cycle,phase}=gpd33PlanPhase(job.slot);
   const now=Date.now();
@@ -10319,6 +10328,7 @@ GLOBAL PURCHASE DECISION is a multilingual paid purchase-decision layer for AI a
 - GET ${origin}/.well-known/gpd lists discovery, payment, and account endpoints. When verified-buyer onboarding is available, use the listed Auth provider, confirm the account, and call /v1/agent/account with the access token.
 
 ## Merchant matching and buyer tracking
+- Use the MCP merchant_gtin_search tool to match verified GTIN offers with the buyer country, quantity and condition.
 - GET /v1/merchant/directory and the MCP merchant_directory tool list active verified merchants and link to their public profiles and offer feeds. Filter by merchant country and follow next_cursor for more results.
 - GET /v1/merchant/search?gtin=<exact GTIN>&buyer_country=<country> locates reported offers for a verified general-catalog product. A handoff candidate needs a verified seller that can receive requests and reported stock and delivery coverage.
 - GET /v1/merchant/search with manufacturer, exact part_number and buyer_country. A handoff_candidate_offer_id identifies a verified merchant's matching offer with reported stock and destination coverage. Confirm the current terms and obtain buyer authorization before arranging a handoff.
@@ -10583,6 +10593,16 @@ const MCP_TOOLS=[
     annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
   },
   {
+    name:"merchant_gtin_search",
+    title:"Verified GTIN Merchant Search",
+    description:"Find verified merchants' offers for an exact catalog GTIN. Compare delivery country, requested quantity and reported condition before a buyer-authorized handoff.",
+    inputSchema:{type:"object",properties:{gtin:{type:"string"},manufacturer:{type:"string"},
+      buyer_country:{type:"string",pattern:"^[A-Za-z]{2}$"},quantity:{type:"integer",minimum:1,maximum:100,default:1},
+      condition:{type:"string",maxLength:40},limit:{type:"integer",minimum:1,maximum:20,default:20}},required:["gtin"]},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
     name:"merchant_directory",
     title:"Verified Merchant Directory",
     description:"Discover active, verified merchants and their public offer feeds. Country is the merchant's location. Use each offer's delivery evidence for buyer eligibility.",
@@ -10671,6 +10691,11 @@ async function mcp(request,env,origin){
     if(name==="merchant_offer_search"){
       const data=await searchMerchantOffers(env,{part_number:args.part_number||"",manufacturer:args.manufacturer||"",buyer_country:args.buyer_country||"JP",limit:args.limit||20});
       return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="merchant_gtin_search"){
+      const data=await searchGpd33CanonicalMerchantOffers(env,{gtin:args.gtin,manufacturer:args.manufacturer,
+        buyerCountry:args.buyer_country,requestedQuantity:args.quantity??null,condition:args.condition,limit:args.limit??null});
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data,...(!data.ok?{isError:true}:{})});
     }
     if(name==="merchant_directory"){
       const u=new URL(`${origin}/v1/merchant/directory`);

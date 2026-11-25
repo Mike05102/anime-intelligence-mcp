@@ -138,6 +138,9 @@ SQL
     if [[ "$(sql -c "select to_regprocedure('public.gpd33_feed_condition_label(text)') is not null")" != t ]]; then
       sql -f supabase/migrations/20261125121500_gpd33_feed_observed_condition.sql
     fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_ingest_reconciled_growth(uuid,bigint,text,jsonb)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125123000_gpd33_reconciled_growth.sql
+    fi
     [[ "$(sql -c "select public.gpd33_coverage(array['food_grocery']) ? 'food_grocery'")" == t ]]
     [[ "$(sql -c 'select pg_database_size(current_database()) < 400000000')" == t ]]
     ;;
