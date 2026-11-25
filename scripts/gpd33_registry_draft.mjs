@@ -43,7 +43,7 @@ export function verifyMcpRegistryDiscovery(draft,expectedBuild,{health,mcp,gpd})
   }
 }
 
-export async function readPublicRegistryMetadata(url,fetchImpl,{allowMissing=false}={}){
+export async function readPublicRegistryMetadata(url,fetchImpl,{allowMissing=false,maxBytes=MAX_METADATA_BYTES}={}){
   const response=await fetchImpl(url,{headers:{accept:'application/json'},redirect:'error',signal:AbortSignal.timeout(8000)});
   if(response.status===404&&allowMissing&&!response.redirected&&(!response.url||response.url===url)){
     await response.body?.cancel();
@@ -53,7 +53,7 @@ export async function readPublicRegistryMetadata(url,fetchImpl,{allowMissing=fal
   const type=response.headers.get('content-type')||'';
   if(response.status!==200||response.redirected||(response.url&&response.url!==url)||!response.body
     ||!/^application\/json(?:\s*;|$)/i.test(type)
-    ||(length!==null&&(!/^\d+$/.test(length)||Number(length)>MAX_METADATA_BYTES))){
+    ||(length!==null&&(!/^\d+$/.test(length)||Number(length)>maxBytes))){
     await response.body?.cancel();
     throw new Error('Registry discovery endpoint returned an invalid response');
   }
@@ -65,7 +65,7 @@ export async function readPublicRegistryMetadata(url,fetchImpl,{allowMissing=fal
       const {done,value}=await reader.read();
       if(done)break;
       size+=value.byteLength;
-      if(size>MAX_METADATA_BYTES)throw new Error('Registry discovery metadata exceeded the byte limit');
+      if(size>maxBytes)throw new Error('Registry discovery metadata exceeded the byte limit');
       chunks.push(value);
     }
   }finally{

@@ -10,6 +10,8 @@ const channelId = /^[a-z][a-z0-9_-]{0,49}$/;
 const issuerId = /^[A-Za-z0-9_-]{1,80}$/;
 const cohortId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const maxWindowSeconds = 31 * 86400;
+const maxLivePlanningAgeSeconds = 7 * 86400;
+const maxLiveFutureSkewSeconds = 300;
 const maxChannels = 24;
 const maxCount = 1000000;
 const maxWorkUnits = 24;
@@ -78,6 +80,8 @@ function authenticate(bundle,trust) {
 
 const count=value => Number.isSafeInteger(value) && value>=0 && value<=maxCount;
 const money=value => value===null || (typeof value==='string' && /^(0|[1-9][0-9]{0,23})$/.test(value));
+const unknownOrCount=value => value===null || count(value);
+const childFits=(parent,child) => child===null || (count(parent) && child<=parent);
 
 function indexChannels(rows,channels) {
   const indexed=new Map();
@@ -99,11 +103,13 @@ function linkEvidence(channels,journeys,outcomes) {
     const outcome=byOutcome.get(channel);
     const {visits=null,activations=null,handoffs=null}=journey || {};
     const {verified_orders=null,x402_information_usdc_atomic=null,brokerage_usdc_atomic=null}=outcome || {};
-    if (journey && (![visits,activations,handoffs].every(count) || activations>visits || handoffs>activations)) {
+    if (journey && (![visits,activations,handoffs].every(unknownOrCount) ||
+      !childFits(visits,activations) || !childFits(activations,handoffs))) {
       throw new Error('Invalid linked acquisition journey counts');
     }
-    if (outcome && (!journey || (verified_orders!==null && (!count(verified_orders) || verified_orders>handoffs)) ||
+    if (outcome && (!journey || !unknownOrCount(verified_orders) || !childFits(handoffs,verified_orders) ||
       !money(x402_information_usdc_atomic) || !money(brokerage_usdc_atomic) ||
+      (x402_information_usdc_atomic!==null && x402_information_usdc_atomic!=='0' && !(activations>0)) ||
       (brokerage_usdc_atomic!==null && brokerage_usdc_atomic!=='0' && !(verified_orders>0)))) {
       throw new Error('Invalid or unlinked acquisition outcome counts');
     }
@@ -118,7 +124,7 @@ function prioritize(rows,channels,cohort,budget) {
   // Rotate exact ties across cohorts. All eligible channels get a baseline before units are repeated.
   const start=Number.parseInt(cohort.slice(-8),16)%available.length;
   const ranked=available.map((row,index) => {
-    const qualified=row.visits>=20 && row.activations>=5;
+    const qualified=row.visits>=20 && row.activations>=5 && count(row.handoffs);
     const orderEvidence=row.verified_orders!==null;
     const score=qualified ? (row.handoffs+(orderEvidence?2*row.verified_orders:0))/row.visits : 0;
     return {channel:row.channel,units:0,tie:(index+available.length-start)%available.length,score,
@@ -143,33 +149,31 @@ function prioritize(rows,channels,cohort,budget) {
   };
 }
 
+function planPreview(environment,metadata,budget,funnel,channels,now) {
+  const clock=typeof now==='function'?now():null;
+  if (!Number.isSafeInteger(clock) || clock<1) throw new Error('Invalid acquisition planning clock');
+  const age=Math.floor(clock/1000)-metadata.window_end;
+  if (environment==='live' && (age>maxLivePlanningAgeSeconds || age< -maxLiveFutureSkewSeconds)) {
+    return {environment,status:'outside_live_freshness_window',requested_units:budget,unallocated_units:budget,allocations:[]};
+  }
+  return {environment,status:'preview',...prioritize(funnel,new Map(channels),metadata.cohort_id,budget)};
+}
+
 /** Offline cohort-scoped funnel. The planning output is a preview and never acts on a channel. */
-export function measureSignedGpd33AcquisitionFunnel(bundle,trust,{budget=0}={}) {
+export function measureSignedGpd33AcquisitionFunnel(bundle,trust,{budget=0,now=Date.now,expectedCohortId}={}) {
   if (!Number.isSafeInteger(budget) || budget<0 || budget>maxWorkUnits) {
     throw new Error('Free acquisition planning budget must be between 0 and 24 units');
   }
   const {environment,channels,metadata,journeys,outcomes}=authenticate(bundle,trust);
+  if (expectedCohortId!==undefined && metadata.cohort_id!==expectedCohortId) {
+    throw new Error('Requested acquisition cohort does not match');
+  }
   const funnel=linkEvidence(channels,journeys,outcomes);
   return {
     schema:'gpd33-acquisition-funnel-v1',
     scope:environment==='test'?'test_only':'supplied_live_evidence_only',
     ...metadata,attribution:'independently_signed_linked_aggregates',
     channels:funnel,
-    planning_only:{environment,...prioritize(funnel,new Map(channels),metadata.cohort_id,budget)}
+    planning_only:planPreview(environment,metadata,budget,funnel,channels,now)
   };
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    const [bundleFile,trustFile,units]=process.argv.slice(2);
-    if (process.argv.length!==5 || !/^(?:0|[1-9][0-9]?)$/.test(units)) throw new Error('Expected private evidence, trust and budget');
-    const [{data:bundle},{data:trust}]=await Promise.all([
-      readBoundedJson(bundleFile,512*1024,{privateFile:true}),
-      readBoundedJson(trustFile,128*1024,{privateFile:true})
-    ]);
-    process.stdout.write(JSON.stringify(measureSignedGpd33AcquisitionFunnel(bundle,trust,{budget:Number(units)}))+'\n');
-  } catch {
-    process.stderr.write('Acquisition funnel preview failed. Check private signed evidence and the budget.\n');
-    process.exitCode=1;
-  }
 }

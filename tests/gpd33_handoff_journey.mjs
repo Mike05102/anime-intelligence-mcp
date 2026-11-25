@@ -146,7 +146,7 @@ export async function testHandoffJourney(query, seller, offer) {
         readSource:()=>assert.fail('discovery budget must survive replay')
       })).status,'discovery_not_due');
       const report=JSON.parse(await readFile(join(discoveryDirectory,'seller-discovery-report.json'),'utf8'));
-      discoveryEvidence=report.discovery;
+      discoveryEvidence=report;
     } finally {
       await rm(discoveryDirectory,{recursive:true,force:true});
     }

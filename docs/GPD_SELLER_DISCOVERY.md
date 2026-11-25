@@ -27,3 +27,17 @@ node scripts/gpd33_seller_opt_in.mjs <探索結果.json> <非公開の公開鍵�
 エンベロープは `{seller_id, payload, signature}`。後ろ2つはパディングなしbase64urlで、署名対象は `payload` を復号したUTF-8 JSONの原文。署名するJSONは `context: "gpd-seller-opt-in-v1"`、`environment`、`seller_id`、`request_id`（UUID）、`scope`、`source`、`source_seller_id`、`country_code`、`evidence_url`、`signed_at`、`expires_at` を持つ。未登録の場合の `scope` は `preview_onboarding`、既存フィード接続は `review_feed_connection` で台帳と同じ `feed_url` を加える。現在時刻、探索側が同意参照を観測した時刻、有効期限を照合する。有効期間は最大30日。同一の要求IDが異なる有効な内容を署名していた場合は、該当販売業者の下書きを出力しない。
 
 `private_preview` の結果には、未登録販売業者の `registration_draft` または既存販売業者の `feed_connection_draft` が含まれる。登録には販売業者本人による利用規約の同意が必要で、フィード接続には運用者の期限付き承認が必要。確認後に [承認済み商品フィードの手順](GPD_MERCHANT_OFFER_FEED.md) へ進む。署名、連絡先、同意URLは下書きに転記しない。署名付き参加意思の確認だけで契約や本番登録が完了したとは扱わない。
+
+## 承認済み情報源の自動巡回
+
+```sh
+node scripts/gpd33_seller_discovery_tick.mjs <非公開ソース台帳.json> <非公開需要集計.json> <所有者専用の状態ディレクトリ>
+```
+
+ソース台帳は `schema: "gpd-seller-discovery-registry-v1"`、`environment`、`max_reads`（1〜2）、最大24件の `sources` を指定する。各情報源は一意の `id`、`kind`（探索入力と同じ4種類）、公開で認証不要の固定HTTPS `endpoint`、利用条件の `terms_url`、期限 `approved_until`、`approved_for: "public_seller_discovery"`、`no_cost_public_read: true`、対象 `domains`、`buyer_countries`、`evidence_origins` を持つ。購入先地域を問わない情報源は `buyer_countries: []` とする。パートナーや販売業者の明示同意を参照できる情報源には、必要に応じて `consent_origins` を設定する。利用条件、無料閲覧、オリジンは運用者が確認してから台帳に載せる。付与済みの条件は外部サイトから自動変更しない。
+
+需要集計は `schema: "gpd-seller-discovery-demand-v1"`、台帳と同じ `environment`、`observed_at`、`rows` を持つ。各行は `domain`、`buyer_country`、個人を含まない `request_count` の合計。7日を過ぎた需要集計では巡回順を使う。需要優先と最も長く未確認の情報源を組み合わせる。外部には固定URLへのGETのみ送り、需要値・検索語・利用者識別子を送らない。1時間あたり最大2件・1回64 KiBで、読み取り前に枠を確保する。429を受けた情報源には6時間以上の待機を設け、サーバーがより長い `Retry-After` を示す場合はその時刻まで待つ。
+
+取得先は `schema: "gpd-seller-discovery-feed-v1"` と最大100件の `sellers` を返す。行の形式は上記の探索証拠と同じだが、`source` は台帳の `kind` で固定する。ネイティブAPIの応答を使う場合は、そのAPIの利用条件の範囲内でこの形式に整形する公開アダプターの運営主体とURLを承認する。市場由来の行から同意証拠を作らない。外部販売業者IDに台帳のソースIDを付け、異なる取得先の同じIDを混同しない（例 `partner_directory:partner.seller-a`）。
+
+非公開ディレクトリの `seller-discovery-report.json` はそのまま署名付き参加意思の確認コマンドに渡せる。CLIの標準出力は件数と実行状態のみ。試験区分ではモックリーダーを用い、外部ソースを有効にしない。本番運用で使用するソース台帳の承認と設定は別途必要。

@@ -125,12 +125,22 @@ function selectSources(sources,demand,state,limit,now){
   return [ranked[0],...[...eligible].filter(row=>row.id!==ranked[0].id).sort(old).slice(0,limit-1)];
 }
 
+function rateLimitCooldown(now,retryAfter){
+  if(typeof retryAfter!=='string')return now+6*HOUR;
+  if(/^\d{1,10}$/.test(retryAfter))return Math.max(now+6*HOUR,now+Number(retryAfter)*1000);
+  const retryAt=/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(retryAfter)
+    ?Date.parse(retryAfter):NaN;
+  return Number.isFinite(retryAt)?Math.max(now+6*HOUR,retryAt):now+6*HOUR;
+}
+
 export async function readApprovedSellerDiscoverySource(source,{resolve,request=requestPinnedHttps}={}){
   const signal=AbortSignal.timeout(8000);
   const address=await resolvePinnedPublicIpv4(source.url.hostname,signal,resolve);
   const response=await request(source.url,{address,signal});
   try{
-    if(response.statusCode===429)throw new Error('seller_source_rate_limited');
+    if(response.statusCode===429){
+      throw Object.assign(new Error('seller_source_rate_limited'),{retryAfter:response.headers['retry-after']});
+    }
     if(response.statusCode!==200)throw new Error('seller_source_response_rejected');
     const contentType=response.headers['content-type'],encoding=response.headers['content-encoding'],length=response.headers['content-length'];
     if(typeof contentType!=='string'||!/^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/i.test(contentType)
@@ -191,6 +201,8 @@ async function savePrivate(directory,name,value){
       await handle.sync();
     }finally{await handle.close();}
     await rename(temporary,join(directory,name));
+    const parent=await open(directory,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+    try{await parent.sync();}finally{await parent.close();}
   }finally{
     await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});
   }
@@ -222,7 +234,7 @@ export async function runSellerDiscoveryTick(registryFile,demandFile,directory,
     if(!selected.length)return {status:'discovery_no_eligible_source'};
 
     const newState={schema:STATE,environment:registry.environment,last_tick_ms:now,ticks:state.ticks+1,
-      sources:Object.fromEntries(sources.flatMap(row=>state.sources[row.id]?[[row.id,state.sources[row.id]]]:[]))};
+      sources:Object.fromEntries(sources.flatMap(row=>Object.hasOwn(state.sources,row.id)?[[row.id,state.sources[row.id]]]:[]))};
     for(const source of selected)newState.sources[source.id]={last_attempt_ms:now,cooldown_until_ms:now+2*HOUR};
     // Claim the budget durably before the first network request, even on a later crash.
     await savePrivate(directory,'seller-discovery-state.json',newState);
@@ -236,7 +248,7 @@ export async function runSellerDiscoveryTick(registryFile,demandFile,directory,
       }catch(error){
         const limited=error?.message==='seller_source_rate_limited';
         results.push({source:source.id,status:limited?'rate_limited':'source_unavailable'});
-        if(limited)newState.sources[source.id].cooldown_until_ms=now+6*HOUR;
+        if(limited)newState.sources[source.id].cooldown_until_ms=rateLimitCooldown(now,error.retryAfter);
       }
     }
     await savePrivate(directory,'seller-discovery-state.json',newState);

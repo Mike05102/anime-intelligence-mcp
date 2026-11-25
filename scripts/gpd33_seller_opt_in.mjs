@@ -122,6 +122,10 @@ function interpretConsent(envelope,authority,candidates,environment,now){
 
 export function prepareSellerOptInReview(discoveryReport,registry,envelopes,now=Date.now()){
   const authorities=scopedAuthorities(registry);
+  if(discoveryReport?.schema==='gpd-seller-discovery-tick-v1'){
+    if(discoveryReport.environment!==registry.environment)throw new Error('seller_opt_in_environment_mismatch');
+    discoveryReport=discoveryReport.discovery;
+  }
   if(discoveryReport?.schema!=='gpd-seller-discovery-evidence-v1'||!Number.isFinite(now)
     ||!Array.isArray(envelopes)||envelopes.length>200)throw new Error('seller_opt_in_input_invalid');
   const candidates=new Map(collectSellerCandidates(discoveryReport.candidates,now).candidates

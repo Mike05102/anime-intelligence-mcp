@@ -16,6 +16,7 @@ on:
       - scripts/gpd33_registry_draft.mjs
       - scripts/gpd33_registry_observe.mjs
       - scripts/gpd33_acquisition_funnel.mjs
+      - scripts/gpd33_acquisition_audit.mjs
       - scripts/gpd33_seller_discovery_tick.mjs
       - server.json
       - scripts/gpd33_seller_discovery.mjs
@@ -57,6 +58,8 @@ jobs:
       - run: node tests/gpd33_registry_draft.mjs
       - run: node tests/gpd33_registry_observe.mjs
       - run: node tests/gpd33_acquisition_funnel.mjs
+      - run: node tests/gpd33_acquisition_audit.mjs
+      - run: node tests/gpd33_seller_discovery_tick.mjs
       - run: node tests/gpd33_agent_onboarding.mjs
       - run: node tests/gpd33_export_handoff_evidence.mjs
       - run: node tests/gpd33_reconcile.mjs

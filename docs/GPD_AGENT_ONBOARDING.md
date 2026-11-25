@@ -27,3 +27,15 @@ node scripts/gpd33_registry_draft.mjs --draft 33.0.0
 ```
 
 通常のコミットまたはタグでは外部レジストリを更新しない。本番切替が承認・検証された後、外部レジストリへの公開も承認された場合に限り、`Publish verified GPD metadata to the MCP Registry` を `main` で実行し、本番のバージョンとビルドIDを指定する。公開前に実際のWorkerのヘルス応答、MCPメタデータ、GPD探索URLが一致することを確認する。開発時のメタデータ検証は登録、採用、支払いの実績とは区別する。
+
+## 外部からの発見と接続を確認する
+
+公開済みのバージョンについて、公式MCP Registryの最新掲載、実際のWorkerバージョンとビルド、公開URLを照合する。認証なしでMCP初期化とツール一覧取得まで行い、無料の探索と有料の購買判断の公開メタデータを確認する。
+
+```sh
+node scripts/gpd33_acquisition_audit.mjs "<deployed-version>" "<deployed-build-id>"
+```
+
+`channel_ready: true` には、認証なしのMCP接続と、現在のバージョンに一致する公式の有効な最新掲載の両方が必要。出力の `registry_status` で掲載が見つからない場合や、バージョンが異なる場合を区別できる。掲載情報だけを取得する場合は `node scripts/gpd33_registry_observe.mjs "<deployed-version>"` を使う。確認コマンドは有料ツール、購入処理、外部レジストリ更新を呼び出さない。
+
+隔離Workerとレジストリのモックで `node tests/gpd33_acquisition_audit.mjs` と `node tests/gpd33_registry_observe.mjs` を再現できる。実際の公開掲載・接続、利用者獲得、決済の証拠は、それぞれの観測結果に基づいて扱う。

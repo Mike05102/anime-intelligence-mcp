@@ -76,6 +76,10 @@ assert.ok(!JSON.stringify(report).includes('person@example.com'));
 assert.ok(!JSON.stringify(report).includes(signedMain.signature));
 assert.ok(!JSON.stringify(report).includes(evidence));
 
+const wrapped={schema:'gpd-seller-discovery-tick-v1',environment:'test',discovery:discovered};
+assert.equal(prepareSellerOptInReview(wrapped,trust,[signedMain],now).candidates[0].merchant_id,merchant);
+assert.throws(()=>prepareSellerOptInReview({...wrapped,environment:'live'},trust,[signedMain],now),/environment_mismatch/);
+
 const conflicting=envelope({...consent,expires_at:'2026-12-03T11:00:00Z'});
 const conflict=prepareSellerOptInReview(discovered,trust,[conflicting,signedMain,signedUnregistered],now);
 assert.equal(conflict.conflicting_sellers,1);

@@ -76,4 +76,21 @@ assert.throws(()=>measureSignedGpd33AcquisitionFunnel(bundle,live.trust),/Pinned
 const reused=structuredClone(test.trust);
 reused.issuers.outcomes.public_key=reused.issuers.journeys.public_key;
 assert.throws(()=>measureSignedGpd33AcquisitionFunnel(bundle,reused),/different pinned keys/);
+const partial=test.run([{channel:'mcp_registry',visits:100,activations:20,handoffs:null}],[],8);
+assert.equal(partial.channels.find(row=>row.channel==='mcp_registry').handoffs,null);
+assert.equal(partial.planning_only.allocations.find(row=>row.channel==='mcp_registry').basis,'limited_or_missing_sample');
+assert.throws(()=>test.run([{channel:'mcp_registry',visits:100,activations:null,handoffs:1}],[],5),/journey counts/);
+assert.throws(()=>test.run([{...visits[0],activations:0,handoffs:0}],[{...outcomes[0],verified_orders:null,
+  brokerage_usdc_atomic:null}],5),/outcome counts/);
+assert.throws(()=>measureSignedGpd33AcquisitionFunnel(bundle,test.trust,{expectedCohortId:'wrong'}),/Requested acquisition cohort/);
+const liveBundle=live.bundle(visits,outcomes);
+const fresh=measureSignedGpd33AcquisitionFunnel(liveBundle,live.trust,{budget:4,now:()=>window_end*1000,expectedCohortId:cohort_id});
+assert.equal(fresh.planning_only.status,'preview');
+assert.equal(fresh.planning_only.allocations.length,3);
+for(const now of [()=> (window_end-301)*1000,()=> (window_end+7*86400+1)*1000]){
+  const outside=measureSignedGpd33AcquisitionFunnel(liveBundle,live.trust,{budget:4,now});
+  assert.equal(outside.planning_only.status,'outside_live_freshness_window');
+  assert.equal(outside.planning_only.unallocated_units,4);
+  assert.equal(outside.channels.find(row=>row.channel==='mcp_registry').verified_orders,5);
+}
 console.log('PASS signed verified acquisition funnel, separated revenue stages and bounded free-channel priorities');
