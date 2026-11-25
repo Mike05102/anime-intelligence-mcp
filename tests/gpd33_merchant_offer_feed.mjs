@@ -13,6 +13,16 @@ const preview=prepareMerchantOfferFeed(approval,manifest,now);
 assert.equal(preview.status,'operator_review_required');
 assert.equal(preview.offer_count,1);
 assert.deepEqual(preview.upsert_payload.offers[0].ships_to,['JP']);
+assert.ok(!Object.hasOwn(preview.upsert_payload.offers[0],'condition'));
+for(const condition of ['new','used','refurbished','open_box','unknown']){
+  const output=prepareMerchantOfferFeed(approval,{...manifest,offers:[{...offer,condition}]},now);
+  assert.equal(output.upsert_payload.offers[0].condition,condition);
+}
+const missingCondition=prepareMerchantOfferFeed(approval,{...manifest,offers:[{...offer,condition:null}]},now);
+assert.ok(!Object.hasOwn(missingCondition.upsert_payload.offers[0],'condition'));
+for(const condition of ['', 'NEW', 'like_new', false, {state:'new'}]){
+  assert.throws(()=>prepareMerchantOfferFeed(approval,{...manifest,offers:[{...offer,condition}]},now),/invalid_condition/);
+}
 assert.ok(!Object.hasOwn(preview.upsert_payload.offers[0],'stock_quantity'));
 for(const quantity of [0,5,2147483647]){
   const result=prepareMerchantOfferFeed(approval,{...manifest,offers:[{...offer,stock_quantity:quantity}]},now);

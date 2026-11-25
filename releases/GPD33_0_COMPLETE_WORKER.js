@@ -5563,13 +5563,18 @@ async function gpd33CreateBuyerHandoff(request,env){
   const units=body?.quantity;
   const barcode=body?.gtin==null?null:gpd33Barcode(body.gtin);
   if(body?.gtin!=null&&!barcode)return json({ok:false,error:"invalid_gtin"},400,headers);
+  const condition=typeof body?.condition==="string"?gpd33Part(body.condition):null;
+  if(body?.condition!=null&&(!condition||condition.length>40||/[\u0000-\u001f\u007f]/.test(body.condition))){
+    return json({ok:false,error:"invalid_offer_condition"},400,headers);
+  }
   if(!requestKey||!offer||!Number.isInteger(units)||units<1||units>100||!/^[A-Z]{2}$/.test(country)||body?.buyer_authorized!==true){
     return json({ok:false,error:"buyer_consent_and_valid_offer_required"},400,headers);
   }
   try{
     const buyer=await gpd33VerifiedBuyer(request,env);
     if(!buyer)return json({ok:false,error:"verified_buyer_required"},401,headers);
-    const result=await gpd33Rpc(env,"request_buyer_handoff",{buyer,request_key:requestKey,offer,units,country,expected_gtin:barcode});
+    const result=await gpd33Rpc(env,"request_condition_bound_handoff",{buyer,request_key:requestKey,offer,units,country,
+      expected_gtin:barcode,expected_condition:condition});
     return json(result.ok?await gpd33HandoffTrackingReceipt(env,result):result,
       result.ok?200:(result.status||400),headers);
   }catch{
@@ -6024,16 +6029,19 @@ async function gpd33ImportMerchantFeed(request,env){
     if(!Array.isArray(body.offers)||!body.offers.length||body.offers.length>200)throw new Error("invalid_feed");
     const skus=new Set(),now=Date.now();
     rows=body.offers.map(item=>{
-      const {merchant_sku,manufacturer,part_number,title,gtin,price,currency,stock_status,stock_quantity,ships_to,
+      const {merchant_sku,manufacturer,part_number,title,gtin,price,currency,stock_status,stock_quantity,ships_to,condition,
         product_url,source_updated_at}=item;
       const observed=Date.parse(source_updated_at);
+      if(condition!=null&&!["new","used","refurbished","open_box","unknown"].includes(condition)){
+        throw new Error("invalid_feed_condition");
+      }
       if(!gpd33MerchantObservationFresh(source_updated_at,now)||
         (gtin!=null&&!gpd33Barcode(gtin))||
         (stock_quantity!=null&&(!Number.isInteger(stock_quantity)||stock_quantity<0||stock_quantity>2147483647))){
         throw new Error("invalid_feed_evidence");
       }
       const row=normalizeMerchantOfferInput({merchant_sku,manufacturer,part_number,title,gtin,price,currency,
-        stock_status,stock_quantity,ships_to,product_url,source_updated_at:new Date(observed).toISOString()},merchant.id);
+        stock_status,stock_quantity,ships_to,condition:condition??"unknown",product_url,source_updated_at:new Date(observed).toISOString()},merchant.id);
       if(skus.has(row.merchant_sku))throw new Error("duplicate_feed_sku");
       skus.add(row.merchant_sku);
       return row;
@@ -10261,7 +10269,8 @@ function openapi(origin){
       required:["request_id","offer_id","quantity","buyer_country","buyer_authorized"],
       properties:{request_id:{type:"string",format:"uuid"},offer_id:{type:"string",format:"uuid"},
         quantity:{type:"integer",minimum:1,maximum:100},buyer_country:{type:"string",pattern:"^[A-Z]{2}$"},
-        buyer_authorized:{type:"boolean",const:true},gtin:{type:"string",description:"Exact product GTIN from merchant search"}}}}}},
+        buyer_authorized:{type:"boolean",const:true},gtin:{type:"string",description:"Exact product GTIN from merchant search"},
+        condition:{type:"string",minLength:1,maxLength:40,description:"Required reported condition from the merchant search"}}}}}},
     responses:{200:{description:"Handoff and tracking token"},401:{description:"Verified buyer required"},
       404:{description:"Offer unavailable"},409:{description:"Request conflict"},429:{description:"Pilot limit reached"},
       503:{description:"Self-service unavailable"}}}};

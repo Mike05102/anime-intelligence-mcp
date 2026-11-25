@@ -132,6 +132,12 @@ SQL
     if [[ "$(sql -c "select to_regprocedure('public.gpd33_import_merchant_stock_feed(uuid,jsonb)') is not null")" != t ]]; then
       sql -f supabase/migrations/20261125114500_gpd33_merchant_stock_feed.sql
     fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_request_condition_bound_handoff(uuid,uuid,uuid,integer,text,text,text)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125120000_gpd33_handoff_condition.sql
+    fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_feed_condition_label(text)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125121500_gpd33_feed_observed_condition.sql
+    fi
     [[ "$(sql -c "select public.gpd33_coverage(array['food_grocery']) ? 'food_grocery'")" == t ]]
     [[ "$(sql -c 'select pg_database_size(current_database()) < 400000000')" == t ]]
     ;;

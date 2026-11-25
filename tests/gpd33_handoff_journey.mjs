@@ -18,7 +18,7 @@ export async function testHandoffJourney(query, seller, offer) {
   const rpc = {
     gpd33_create_handoff: ['handoff', 'offer', 'units'],
     gpd33_import_merchant_stock_feed: ['seller','offers'],
-    gpd33_request_buyer_handoff: ['buyer', 'request_key', 'offer', 'units', 'country','expected_gtin'],
+    gpd33_request_condition_bound_handoff: ['buyer', 'request_key', 'offer', 'units', 'country','expected_gtin','expected_condition'],
     gpd33_record_handoff_event: ['seller', 'handoff', 'event', 'new_state', 'reference_hash'],
     gpd33_buyer_handoff_status: ['handoff'],
     gpd33_merchant_handoffs: ['seller','lookup'],
@@ -82,7 +82,7 @@ export async function testHandoffJourney(query, seller, offer) {
     const merchantHeaders={'x-merchant-key':merchantKey};
     const feedPath='/v1/merchant/offers/feed-import';
     const feedOffer={merchant_sku:'fixture-sku',manufacturer:'Example',part_number:'EX-123',
-      title:'Updated fixture',gtin:'012345678905',stock_status:'in_stock',stock_quantity:2,price:'12.50',currency:'JPY',
+      title:'Updated fixture',gtin:'012345678905',condition:'new',stock_status:'in_stock',stock_quantity:2,price:'12.50',currency:'JPY',
       ships_to:['JP'],product_url:'https://merchant.example/fixture',source_updated_at:new Date().toISOString()};
     const importFeed=(item,merchantId=seller)=>request(feedPath,merchantHeaders,{merchant_id:merchantId,offers:[item]});
     assert.equal((await importFeed(feedOffer,randomUUID())).status,403);
@@ -116,9 +116,10 @@ export async function testHandoffJourney(query, seller, offer) {
     const freshOffer={...feedOffer,merchant_sku:'new-fixture-sku'};
     assert.equal((await (await importFeed(freshOffer)).json()).new_or_updated,1);
     assert.equal((await (await importFeed(freshOffer)).json()).ignored,1);
-    const unknown={...freshOffer,stock_quantity:null,source_updated_at:new Date(Date.now()+60000).toISOString()};
+    const unknown={...freshOffer,condition:undefined,stock_quantity:null,source_updated_at:new Date(Date.now()+60000).toISOString()};
     assert.equal((await (await importFeed(unknown)).json()).new_or_updated,1);
     assert.equal(await query("select stock_quantity result from merchant_offers where merchant_sku='new-fixture-sku'"),null);
+    assert.equal(await query("select condition result from merchant_offers where merchant_sku='new-fixture-sku'"),'unknown');
 
 
     const search = '/v1/merchant/search?part_number=EX-123&manufacturer=Example';
@@ -139,7 +140,7 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal((await request('/v1/agent/account',buyerHeaders)).status,503);
 
     const input = {request_id:randomUUID(),offer_id:generic.handoff_candidate_offer_id,
-      quantity:1,buyer_country:'JP',buyer_authorized:true,gtin:generic.product.gtin,buyer_id:randomUUID()};
+      quantity:1,buyer_country:'JP',buyer_authorized:true,condition:'new',gtin:generic.product.gtin,buyer_id:randomUUID()};
     const createBuyer = (body,headers=buyerHeaders) => request('/v1/handoffs',headers,body);
     assert.equal((await createBuyer(input)).status,503);
     env.GPD_BUYER_SELF_SERVICE='1';
@@ -159,6 +160,8 @@ export async function testHandoffJourney(query, seller, offer) {
 
     assert.equal((await createBuyer(input,{authorization:'Bearer bad.test.token'})).status,401);
     assert.equal((await createBuyer({...input,buyer_authorized:false})).status,400);
+    assert.equal((await createBuyer({...input,condition:{unexpected:true}})).status,400);
+    assert.equal((await createBuyer({...input,condition:'used'})).status,409);
     assert.equal((await createBuyer({...input,buyer_country:'US'})).status,404);
     assert.equal((await createBuyer({...input,quantity:3})).status,404);
     assert.equal((await createBuyer({...input,gtin:'4901234567894'})).status,409);
@@ -170,6 +173,11 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal(repeated.handoff_id,handoff);
     assert.equal(await query('select buyer_id result from gpd33_buyer_handoffs where handoff_id=$1',[handoff]),buyer);
     assert.equal((await createBuyer({...input,quantity:2})).status,409);
+    assert.equal((await createBuyer({...input,condition:undefined})).status,409);
+    await query("update merchant_offers set condition='used' where id=$1 returning true result",[offer]);
+    assert.equal((await createBuyer({...input,condition:'NEW'})).status,200);
+    assert.equal((await createBuyer({...input,request_id:randomUUID()})).status,409);
+    await query("update merchant_offers set condition='new' where id=$1 returning true result",[offer]);
     const [id, expiry, signature] = token.split('.');
     assert.equal(id, handoff);
     const readStatus = (credential) => request('/v1/handoffs/status', {authorization:'Bearer ' + credential});
@@ -183,6 +191,7 @@ export async function testHandoffJourney(query, seller, offer) {
     const merchant = {'x-merchant-key':merchantKey};
     const inbox = await (await request('/v1/merchant/handoffs?handoff_id='+handoff,merchant)).json();
     assert.equal(inbox.handoffs[0].destination,'JP');
+    assert.equal(inbox.handoffs[0].expected_condition,'NEW');
     assert.ok(!JSON.stringify(inbox).includes(buyer));
     for (const state of ['accepted', 'order_reported', 'cancelled']) {
       const body = {handoff_id:handoff,event_id:randomUUID(),state};
