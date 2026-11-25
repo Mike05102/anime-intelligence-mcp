@@ -6593,7 +6593,7 @@ function universalDomainDecisionReadiness(domain,o={},query=""){
   return {decision_ready:blockers.length===0,blockers:[...new Set(blockers)],exact_identity:!!exact,merchant_trust_evidence:c.merchant_trust_evidence,offer_ready:c.offer_ready};
 }
 function purchaseAttributionKey(intent={}){
-  const family=universalQueryFamily(intent?.domain||"general_commerce",intent?.original_query||intent?.product?.mpn||intent?.product?.canonical_product_id||"");
+  const family=universalQueryFamily(intent?.domain||"general_commerce",intent?.original_query||intent?.product?.mpn||intent?.product?.canonical_product_id||intent?.product?.gtin||"");
   return stableHash32([family,String(intent?.destination?.country||""),String(intent?.requirements?.currency||"")].join("|"));
 }
 function canonicalConflictAssessment(existing,row){
@@ -7339,15 +7339,17 @@ function identityQueryBreadthScore(query=""){
 async function genericCommerceSearch(env,body){
   const searchStarted=Date.now();
   const domain=String(body?.domain||"general_commerce").toLowerCase();
-  const q=String(body?.query||body?.need||"").trim();
+  const query=String(body?.query||body?.need||"").trim();
+  const identifiers=normalizeUniversalIdentifiers(body,query);
+  const q=query.length>=2?query:identifiers.gtin||"";
   if(q.length<2)return {ok:false,status:400,error:"query_required"};
-  const policy=genericDomainPolicy(domain,body),identifiers=normalizeUniversalIdentifiers(body,q);
+  const policy=genericDomainPolicy(domain,body);
   const manufacturer=String(body?.manufacturer||body?.product?.manufacturer||"").trim();
   const identityKey=universalIdentityKey(domain,identifiers,manufacturer,q);
   const exactId=identifiers.oe_number||identifiers.mpn||identifiers.gtin||identifiers.isbn||identifiers.asin||"";
   const directGtin=identifiers.gtin||((identifiers.isbn&&validGtin(identifiers.isbn))?identifiers.isbn:null);
   const providerRole=String(body?._provider_role||"balanced");
-  const baseSearchQ=[q,exactId].filter(Boolean).join(" ").slice(0,220);
+  const baseSearchQ=[q,exactId!==q?exactId:""].filter(Boolean).join(" ").slice(0,220);
   const identitySearchQ=(providerRole==="identity"||providerRole==="cross_provider")?identityOptimizedSearchQuery(q,exactId,domain):baseSearchQ;
   const searchQ=identitySearchQ||baseSearchQ,limit=Math.min(40,Math.max(1,Number(body?.limit||20)||20)),providerLimit=Math.min(30,body?._discovery_mode?UNIVERSAL_DISCOVERY_POLICY.results_per_provider:limit);
   const memory=body?._discovery_mode===true?[]:await loadUniversalMarketMemory(env,domain,identityKey,q,Math.min(12,limit));
@@ -7402,7 +7404,7 @@ async function genericCommerceSearch(env,body){
   const pseudoIntent={product:{identifiers,mpn:identifiers.mpn||null},quantity:Math.max(1,Number(body?.quantity||1)||1),destination:{country:String(body?.buyer_country||body?.destination?.country||"JP").toUpperCase()},requirements:{currency:String(body?.currency||body?.requirements?.currency||"JPY").toUpperCase(),max_total_cost:purchaseFinite(body?.max_total_cost??body?.budget??body?.requirements?.max_total_cost),delivery_deadline:body?.delivery_deadline||body?.deadline||body?.requirements?.delivery_deadline||null,authenticity_required:Boolean(body?.authenticity_required??body?.requirements?.authenticity_required??true)}};
   const evaluated=eligible.map(o=>evaluateGenericOffer(domain,o,pseudoIntent,body));const decision=decideGenericPurchase(domain,evaluated,pseudoIntent),recommendation=policy.allow_select?decision.best:null;
   const detailAttempts=(body?._decision_live||body?._background_cross_provider)?offers.filter(o=>o?.decision_live_detail_verified!==undefined||o?.decision_live_detail_error).length:0,providerCallsEstimate=yahooCalls+(useEbay?1:0)+bridgeCalls+detailAttempts;const out={ok:true,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,domain,query:q,identity_key:identityKey,identifiers,exact_identifier:exactId||null,policy,count:offers.length,live_count:live.length,memory_count:memory.length,response_path:body?._decision_live?"request_time_live_enrichment_plus_cache":"background_discovery_plus_cache",provider_role:providerRole,identity_search_query:searchQ,yahoo_calls:yahooCalls,yahoo_blocked:yahooBlocked,yahoo_cooldown_until:yahooCooldownUntil,ebay_fallback_enabled:useEbay,live_enrichment_performed:!!body?._decision_live,background_cross_provider_verification_performed:!!body?._background_cross_provider,source_diversity:[...new Set(offers.map(x=>x.provider).filter(Boolean))].length,cross_provider_bridge_calls:bridgeCalls,cross_provider_corroborated_offers:offers.filter(x=>x?.cross_provider_corroborated===true).length,cross_provider_conflicts:offers.filter(x=>x?.cross_provider_conflict===true).length,provider_calls_estimate:providerCallsEstimate,search_elapsed_ms:Date.now()-searchStarted,recommended_offer:recommendation,decision:{action:decision.action,can_purchase:decision.can_purchase,reason_codes:decision.reason_codes},offers:evaluated.slice(0,40),provider_errors:errors,evaluation_profile:genericDomainProfile(domain),evidence_policy:{live_preferred:true,stale_memory_never_silent:true,unknown_shipping_not_zero:true,unknown_tax_duty_not_zero:true,unknown_returns_warranty_explicit:true,compatibility_requires_evidence:true,paid_placement:false},generated_at:new Date().toISOString()};
-  if(body?._persist!==false){out.persistence=await persistUniversalCommerceObservations(env,body,out);if(out.persistence?.provider_calls_total!=null)out.provider_calls_estimate=Number(out.persistence.provider_calls_total);}
+  if(body?._persist!==false){out.persistence=await persistUniversalCommerceObservations(env,query===q?body:{...body,query:q},out);if(out.persistence?.provider_calls_total!=null)out.provider_calls_estimate=Number(out.persistence.provider_calls_total);}
   return out;
 }
 function commerceDomainsResponse(){
@@ -7750,9 +7752,13 @@ function rankPurchasePartOffers(items=[]){
     return 0;
   });
 }
+function purchaseDecisionHasProduct(intent){
+  return Boolean(intent.original_query||intent.product.mpn||intent.product.canonical_product_id||
+    (UNIVERSAL_GENERIC_DOMAINS.includes(intent.domain)&&intent.product.gtin));
+}
 async function buildUniversalPurchaseDecision(request,env,body,origin){
   const intent=normalizePurchaseDecisionIntent(body,request);
-  if(!intent.original_query&&!intent.product.mpn&&!intent.product.canonical_product_id)return {ok:false,status:400,error:"purchase_query_or_product_required",normalized_intent:intent,charged:false};
+  if(!purchaseDecisionHasProduct(intent))return {ok:false,status:400,error:"purchase_query_or_product_required",normalized_intent:intent,charged:false};
 
   if(intent.domain==="parts"){
     if(!intent.product.mpn&&!intent.original_query)return {ok:false,status:400,error:"exact_part_number_or_query_required",normalized_intent:intent,charged:false};
@@ -7834,7 +7840,7 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   if(intent.original_query&&!hasPaymentHeader){
     deferTelemetry(ctx,logEvent(env,"universal_product_demand",{endpoint:"/v1/purchase-decision",metadata:{domain:intent.domain,query_text:String(intent.original_query).slice(0,180),query_key:universalQueryKey(intent.domain,intent.original_query),query_family:universalQueryFamily(intent.domain,intent.original_query),language:intent.language,buyer_country:intent.destination.country,pre_payment:true,attribution_key:purchaseAttributionKey(intent),version:VERSION}}));
   }
-  if(!intent.original_query&&!intent.product.mpn&&!intent.product.canonical_product_id){
+  if(!purchaseDecisionHasProduct(intent)){
     if(!hasPaymentHeader)return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{throw new Error("purchase_query_or_product_required");},ctx);
     return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"purchase_query_or_product_required",charged:false,normalized_intent:intent},400);
   }
@@ -7852,7 +7858,7 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{
     const out=await buildUniversalPurchaseDecision(request,env,body,origin);
     if(out?.status&&out.status>=400){const e=new Error(out.error||"purchase_decision_failed");e.public_payload=out;throw e;}
-    deferTelemetry(ctx,logRequestStage(env,request,"universal_purchase_decision_served",{metadata:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||""),attribution_key:purchaseAttributionKey(intent),language:intent.language,destination_country:intent.destination.country,can_purchase:!!out?.decision?.can_purchase,decision_action:out?.decision?.action||null,reason_codes:Array.isArray(out?.decision?.reason_codes)?out.decision.reason_codes.slice(0,12):[],cross_provider_corroborated_offers:Number(out?.cross_provider_corroborated_offers||out?.persistence?.cross_provider_corroborated_candidates||0)}}));
+    deferTelemetry(ctx,logRequestStage(env,request,"universal_purchase_decision_served",{metadata:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||intent.product.gtin||""),attribution_key:purchaseAttributionKey(intent),language:intent.language,destination_country:intent.destination.country,can_purchase:!!out?.decision?.can_purchase,decision_action:out?.decision?.action||null,reason_codes:Array.isArray(out?.decision?.reason_codes)?out.decision.reason_codes.slice(0,12):[],cross_provider_corroborated_offers:Number(out?.cross_provider_corroborated_offers||out?.persistence?.cross_provider_corroborated_candidates||0)}}));
     return {...out,_payment_attribution:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||""),attribution_key:purchaseAttributionKey(intent),decision_action:out?.decision?.action||null,can_purchase:!!out?.decision?.can_purchase},price_usdc_atomic:PRICES.purchaseDecision,price_usdc:Number(PRICES.purchaseDecision)/1000000};
   },ctx);
 }

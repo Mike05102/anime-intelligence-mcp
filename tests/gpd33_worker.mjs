@@ -169,6 +169,21 @@ for(const route of ['/v1/purchase-decision','/v1/buy-wait','/v1/full-intelligenc
   assert.equal(challenge.x402Version,2);
   assert.match(challenge.accepts[0].network,/^solana:/);
 }
+const directGtin='/v1/purchase-decision?gtin=012345678905&buyer_country=JP';
+assert.equal((await call(directGtin)).status,402);
+const invalidSignature={headers:{'payment-signature':'invalid-signature'}};
+for(const gtinRequest of [await call(directGtin,invalidSignature),await call('/v1/purchase-decision',{
+  method:'POST',headers:{'content-type':'application/json',...invalidSignature.headers},
+  body:JSON.stringify({product:{gtin:'012345678905'},buyer_country:'JP'})
+})]){
+  assert.ok(gtinRequest.status>=400);
+  const rejection=await gtinRequest.json();
+  assert.match(rejection.error,/payment|x402/i);
+  assert.notEqual(rejection.error,'purchase_query_or_product_required');
+}
+const invalidGtin=await call('/v1/purchase-decision?gtin=012345678906',invalidSignature);
+assert.equal(invalidGtin.status,400);
+assert.equal((await invalidGtin.json()).error,'purchase_query_or_product_required');
 for(const route of ['/v1/parts/status','/v1/merchant/search','/.well-known/x402','/openapi.json']){
   const response=await call(route);
   assert.ok(response.status<500,route+' '+response.status);
@@ -207,6 +222,12 @@ assert.equal((await buildDecision()).purchase.handoff_offer_lookup_url,
   origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP');
 assert.equal(requests.filter(url=>url.pathname==='/rest/v1/products').length,1);
 assert.ok(!requests.some(url=>url.pathname==='/rest/v1/merchant_offers'));
+const exactDecision=await api.buildUniversalPurchaseDecision(new Request(origin+'/v1/purchase-decision'),
+  {...env,EBAY_CLIENT_ID:'e',EBAY_CLIENT_SECRET:'s'},
+  {product:{gtin:'012345678905'},buyer_country:'JP'},origin);
+assert.equal(exactDecision.normalized_intent.product.gtin,'012345678905');
+assert.equal(exactDecision.purchase.handoff_offer_lookup_url,
+  origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP');
 const bulkDecision=await buildDecision(3);
 assert.equal(bulkDecision.purchase.handoff_offer_lookup_url,
   origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP&quantity=3');
