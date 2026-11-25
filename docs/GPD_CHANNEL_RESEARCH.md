@@ -13,6 +13,7 @@
 | **Google Search** | 所有確認後に Search Console のサイトマップ画面またはAPIを使える。公開 robots.txt にサイトマップを置く場合は登録なしで発見可能。 | リポジトリの Worker は公開案内のサイトマップを提供する。所有確認、クローラーへの提出、検索結果への掲載は今回未確認。 [サイトマップの提出手順](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap) · [Search Console API](https://developers.google.com/webmaster-tools/v1/sitemaps/submit) |
 | **Smithery** | 公式方針は検証済みサーバーの選抜と直接MCP URLの提示。現在のGPDの登録手続き、無償条件、自動提出は未確認。 | GPDの最新掲載を確認できていない。既存のMCP URLの掲載候補。 [運営の方針](https://www.smithery.ai/future) |
 | **Postman API Network** | 公式案内では公開ワークスペースからAPIを共有できる。公開範囲と利用プランを確認し、公開版OpenAPIを使う。 | アカウントでの登録、無料枠の適合、自動提出、GPDの掲載を未確認。 [公式公開案内](https://learning.postman.com/docs/postman-api-network/overview) |
+| **Glama** | 公式MCP Registryの公開情報から取り込む経路があり、同経路ではGlamaへの個別提出は不要。デプロイやゲートウェイ利用はここでの掲載確認の対象外。 | GPDの名前空間の公開コネクターページを確認。案内名は旧称の ANIME INTELLIGENCE で、新リリースの掲載・接続状況は未確認。 [公式FAQ](https://glama.ai/mcp/faq) · [GPDの公開コネクター](https://glama.ai/mcp/connectors/io.github.Mike05102/anime-intelligence-mcp) |
 
 第三者の過去のスキャンでも既存GPDのMCP接続とx402の露出が見つかる。これらは観測日と記載バージョンを伴う履歴として扱う。公式掲載の最新状態、実利用者、取引成立と照合済み入金には、それぞれ対応する証拠を使う。 [VerifyMCPのMCP接続記録](https://verifymcp.io/servers/mike05102-anime-intelligence-mcp/anime-intelligence) · [x402 Trustの提供者記録](https://x402-trust.com/provider/anime-intelligence.goodmy0312.workers.dev)
 
