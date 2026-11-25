@@ -18,10 +18,12 @@ create index gpd33_product_barcode on public.products
   (public.gpd33_barcode(jan_code::text)) where jan_code is not null;
 create index gpd33_product_legacy_key on public.products
   (public.gpd33_barcode(substring(source_product_key from '^universal:gtin:([0-9]+)$')))
-  where source_product_key like 'universal:gtin:%';
+  where source_product_key like 'universal:gtin:%'
+    and source_product_key !~ '^universal:gtin:[0-9]{14}$';
 create index gpd33_product_metadata_barcode on public.products
   (public.gpd33_barcode(metadata->'identifiers'->>'gtin'))
-  where metadata->'identifiers'->>'gtin' is not null;
+  where metadata->'identifiers'->>'gtin' is not null
+    and source_product_key is distinct from 'universal:gtin:'||public.gpd33_barcode(metadata->'identifiers'->>'gtin');
 -- Reuse a valid, unfiltered btree whose leading key is source_product_key.
 do $$
 begin
@@ -153,8 +155,10 @@ begin
       select 1 from public.products p
       where p.source_product_key=product.source_product_key
          or (p.jan_code is not null and public.gpd33_barcode(p.jan_code::text)=code)
-         or (p.metadata->'identifiers'->>'gtin' is not null and public.gpd33_barcode(p.metadata->'identifiers'->>'gtin')=code)
-         or (p.source_product_key like 'universal:gtin:%' and
+         or (p.metadata->'identifiers'->>'gtin' is not null
+             and p.source_product_key is distinct from 'universal:gtin:'||public.gpd33_barcode(p.metadata->'identifiers'->>'gtin')
+             and public.gpd33_barcode(p.metadata->'identifiers'->>'gtin')=code)
+         or (p.source_product_key like 'universal:gtin:%' and p.source_product_key !~ '^universal:gtin:[0-9]{14}$' and
              public.gpd33_barcode(substring(p.source_product_key from '^universal:gtin:([0-9]+)$'))=code)
       limit 2
     ) matching;
@@ -182,8 +186,10 @@ begin
     select p.* into prior from public.products p
       where p.source_product_key=product.source_product_key
          or (p.jan_code is not null and public.gpd33_barcode(p.jan_code::text)=code)
-         or (p.metadata->'identifiers'->>'gtin' is not null and public.gpd33_barcode(p.metadata->'identifiers'->>'gtin')=code)
-         or (p.source_product_key like 'universal:gtin:%' and
+         or (p.metadata->'identifiers'->>'gtin' is not null
+             and p.source_product_key is distinct from 'universal:gtin:'||public.gpd33_barcode(p.metadata->'identifiers'->>'gtin')
+             and public.gpd33_barcode(p.metadata->'identifiers'->>'gtin')=code)
+         or (p.source_product_key like 'universal:gtin:%' and p.source_product_key !~ '^universal:gtin:[0-9]{14}$' and
              public.gpd33_barcode(substring(p.source_product_key from '^universal:gtin:([0-9]+)$'))=code)
       limit 1;
     if prior.metadata->>'universal_commerce' is distinct from 'true'
