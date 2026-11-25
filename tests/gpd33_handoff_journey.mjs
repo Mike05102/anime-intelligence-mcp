@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
-import {collectSellerCandidates} from '../scripts/gpd33_seller_discovery.mjs';
+import {runSellerDiscoveryTick} from '../scripts/gpd33_seller_discovery_tick.mjs';
 import {prepareSellerOptInReview} from '../scripts/gpd33_seller_opt_in.mjs';
 import {prepareMerchantOfferFeed} from '../scripts/gpd33_merchant_offer_feed.mjs';
 import {fingerprintPartnerReview,publishApprovedMerchantFeed} from '../scripts/gpd33_merchant_feed_publish.mjs';
 import {assertReconciliationFromHandoff} from './gpd33_reconcile_journey.mjs';
 import {createHash, createHmac, generateKeyPairSync, randomUUID, sign} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 
 export async function testHandoffJourney(query, seller, offer) {
   const source = await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js', import.meta.url), 'utf8');
@@ -93,7 +95,16 @@ export async function testHandoffJourney(query, seller, offer) {
   try {
     const admin = {'x-refresh-key': env.REFRESH_KEY};
     const merchantHeaders={'x-merchant-key':merchantKey};
-    const feedPath='/v1/merchant/offers/feed-import';
+    const beforeParticipation=dbCalls;
+    const participationResponse=await request('/v1/merchant/participation',{});
+    assert.equal(participationResponse.status,200);
+    const participation=await participationResponse.json();
+    assert.equal(participation.registration.requires_authorized_terms_acceptance,true);
+    assert.equal(participation.registration.initially_verified,false);
+    assert.equal(participation.supply.requires_verified_merchant,true);
+    assert.equal(participation.supply.max_offers,200);
+    assert.equal(dbCalls,beforeParticipation);
+    const feedPath=new URL(participation.supply.url).pathname;
     const feedOffer={merchant_sku:'fixture-sku',manufacturer:'Example',part_number:'EX-123',
       title:'Updated fixture',gtin:'012345678905',condition:'new',stock_status:'in_stock',stock_quantity:2,price:'12.50',currency:'JPY',
       ships_to:['JP'],product_url:'https://merchant.example/fixture',source_updated_at:new Date().toISOString()};
@@ -105,17 +116,48 @@ export async function testHandoffJourney(query, seller, offer) {
     const evidenceUrl='https://merchant.example/consent';
     const consentIssuer=randomUUID(), consentKeys=generateKeyPairSync('ed25519');
     const observed=feedOffer.source_updated_at;
-    const discoveryEvidence=collectSellerCandidates([{source:'merchant_feed',source_seller_id:'fixture',
-      public_name:'Example',merchant_country:'JP',evidence_url:feedUrl,observed_at:observed,
-      opt_in_evidence_url:evidenceUrl,opt_in_observed_at:observed}]);
+    const discoveryDirectory=await mkdtemp(join(tmpdir(),'gpd-seller-journey-'));
+    let discoveryEvidence;
+    try {
+      const registryPath=join(discoveryDirectory,'registry.json'),demandPath=join(discoveryDirectory,'demand.json');
+      const source={id:'merchant',kind:'merchant_feed',endpoint:feedUrl,terms_url:'https://merchant.example/terms',
+        approved_until:approvalExpiry,approved_for:'public_seller_discovery',no_cost_public_read:true,
+        domains:['food_grocery'],buyer_countries:['JP'],evidence_origins:['https://merchant.example'],
+        consent_origins:['https://merchant.example']};
+      await writeFile(registryPath,JSON.stringify({schema:'gpd-seller-discovery-registry-v1',environment:'test',
+        max_reads:1,sources:[{...source,id:'alternate',endpoint:'https://alternate.example/feed.json',
+          domains:['books_media']},source]}),{mode:0o600});
+      const demand={schema:'gpd-seller-discovery-demand-v1',environment:'test',observed_at:observed,rows:[
+        {domain:'food_grocery',buyer_country:'JP',request_count:10}
+      ]};
+      await writeFile(demandPath,JSON.stringify(demand),{mode:0o600});
+      const status=await runSellerDiscoveryTick(registryPath,demandPath,discoveryDirectory,{readSource:async selected=>{
+        assert.equal(selected.id,'merchant');
+        assert.equal(selected.url.href,feedUrl);
+        return {schema:'gpd-seller-discovery-feed-v1',sellers:[
+          {source_seller_id:'fixture',public_name:'Example',merchant_country:'JP',evidence_url:feedUrl,
+            observed_at:observed,opt_in_evidence_url:evidenceUrl,opt_in_observed_at:observed},
+          {source_seller_id:'sponsored',public_name:'Ad',merchant_country:'JP',evidence_url:feedUrl,
+            observed_at:observed,sponsored:true}
+        ]};
+      }});
+      assert.deepEqual(status,{status:'discovery_review_ready',sources_attempted:1,candidates:1});
+      assert.equal((await runSellerDiscoveryTick(registryPath,demandPath,discoveryDirectory,{
+        readSource:()=>assert.fail('discovery budget must survive replay')
+      })).status,'discovery_not_due');
+      const report=JSON.parse(await readFile(join(discoveryDirectory,'seller-discovery-report.json'),'utf8'));
+      discoveryEvidence=report.discovery;
+    } finally {
+      await rm(discoveryDirectory,{recursive:true,force:true});
+    }
     const trust={schema:'gpd-seller-opt-in-trust-v1',environment:'test',sellers:{[consentIssuer]:{
       public_key:Buffer.from(consentKeys.publicKey.export({format:'jwk'}).x,'base64url').toString('hex'),
       merchant_id:seller,name:'Example',country_code:'JP',website_url:'https://merchant.example',
-      source_ids:['merchant_feed:fixture'],opt_in_origins:['https://merchant.example'],
+      source_ids:['merchant_feed:merchant.fixture'],opt_in_origins:['https://merchant.example'],
       feed:{url:feedUrl,product_origins:['https://merchant.example']}
     }}};
     const consent=Buffer.from(JSON.stringify({context:'gpd-seller-opt-in-v1',environment:'test',seller_id:consentIssuer,
-      request_id:randomUUID(),scope:'review_feed_connection',country_code:'JP',source:'merchant_feed',source_seller_id:'fixture',
+      request_id:randomUUID(),scope:'review_feed_connection',country_code:'JP',source:'merchant_feed',source_seller_id:'merchant.fixture',
       evidence_url:evidenceUrl,signed_at:observed,expires_at:approvalExpiry,feed_url:feedUrl}));
     const optIn=prepareSellerOptInReview(discoveryEvidence,trust,[{seller_id:consentIssuer,
       payload:consent.toString('base64url'),signature:sign(null,consent,consentKeys.privateKey).toString('base64url')}]);

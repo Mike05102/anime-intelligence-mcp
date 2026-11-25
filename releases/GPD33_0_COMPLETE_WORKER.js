@@ -5537,7 +5537,8 @@ function gpd33AgentManifest(env,origin){
     merchant_directory_url:origin+"/v1/merchant/directory",merchant_offer_search_url:origin+"/v1/merchant/search",purchase_decision_url:origin+"/v1/purchase-decision",
     onboarding:{guide_url:origin+"/agents",examples_url:origin+"/agents/examples",readiness_url:origin+"/agents/readiness",
       mcp_transport:"streamable-http",free_mcp_tools:["product_resolve","merchant_directory","merchant_gtin_search","parts_search"],
-      paid_decision_mcp_tool:"universal_purchase_decision"},
+      paid_decision_mcp_tool:"universal_purchase_decision",mcp_registry_name:"io.github.Mike05102/anime-intelligence-mcp",
+      merchant_participation_url:origin+"/v1/merchant/participation"},
     buyer:{enabled,mode:buyerMode,account_url:origin+"/v1/agent/account",handoff_url:origin+"/v1/handoffs",
       tracking_url:origin+"/v1/handoffs/status",handoff_history_url:origin+"/v1/handoffs",token_type:"Bearer",provider:"supabase_auth",
       registration:authUrl?{project_url:authUrl,publishable_key:env.SUPABASE_PUBLISHABLE_KEY,
@@ -5803,7 +5804,7 @@ a{color:inherit}.wrap{max-width:1120px;margin:auto;padding:0 22px}.nav{display:f
 
 <section class="hero"><div><div class="eyebrow">AGENT COMMERCE INFRASTRUCTURE</div><h1>Make your store readable to AI purchasing agents.</h1>
 <p>AI agents increasingly compare exact products, stock, lead time, shipping and trust evidence before choosing where to buy. Merchant Intelligence gives your store a machine-readable offer feed, an evidence-based score and a diagnostic showing what prevents selection.</p>
-<div class="cta"><a class="btn" href="/merchant/onboard">Start merchant onboarding</a><a class="btn secondary" href="/v1/merchant/search?part_number=E2E-X5ME1">See agent-ready search</a></div></div>
+<div class="cta"><a class="btn" href="/merchant/onboard">Start merchant onboarding</a><a class="btn secondary" href="/v1/merchant/search?part_number=E2E-X5ME1">See agent-ready search</a><a class="btn secondary" href="/v1/merchant/participation">Machine-readable participation guide</a></div></div>
 <div class="proof"><h3>What an AI agent can evaluate</h3><div class="metric"><span>Exact MPN identity</span><b>YES</b></div><div class="metric"><span>Price / stock / lead time</span><b>YES</b></div><div class="metric"><span>Ship-to coverage</span><b>YES</b></div><div class="metric"><span>Official documents / evidence</span><b>YES</b></div><div class="metric"><span>Merchant trust and readiness</span><b>YES</b></div><div class="metric"><span>Paid placement changes ranking</span><b>NO</b></div></div></section>
 
 <section class="section"><h2>What you publish</h2><p class="lead">The goal is not another storefront. It is a clean machine-readable layer that lets purchasing agents understand exactly what you sell and whether the offer is safe and actionable.</p>
@@ -5813,11 +5814,26 @@ a{color:inherit}.wrap{max-width:1120px;margin:auto;padding:0 22px}.nav{display:f
 <div class="scoregrid"><div class="score"><b>Discoverability</b><span>Can an agent identify the exact offer?</span></div><div class="score"><b>Trust</b><span>Can claims and merchant status be substantiated?</span></div><div class="score"><b>Purchase readiness</b><span>Can the agent actually make a purchase decision?</span></div><div class="score"><b>Compatibility evidence</b><span>Are substitution claims backed by evidence?</span></div><div class="score"><b>Fulfillment</b><span>Can the order be delivered predictably?</span></div></div>
 <div class="policy"><b>No pay-to-rank.</b> Paying for access or future commercial plans does not improve search position. Ranking is based on exact identity, evidence quality, purchase readiness and fulfillment data.</div></section>
 
-<section class="section"><h2>Onboard in four practical steps</h2><div class="steps"><div class="step"><span>STEP 1</span><strong>Register</strong><span>Create the merchant identity and receive a one-time API Key.</span></div><div class="step"><span>STEP 2</span><strong>Describe your store</strong><span>Publish the agent-facing merchant profile.</span></div><div class="step"><span>STEP 3</span><strong>Publish offers</strong><span>Start with exact-MPN inventory; add evidence where available.</span></div><div class="step"><span>STEP 4</span><strong>Improve the score</strong><span>Use the diagnostic to see exactly what an AI agent still cannot trust or use.</span></div></div>
+<section class="section"><h2>Onboard in four practical steps</h2><div class="steps"><div class="step"><span>STEP 1</span><strong>Register</strong><span>Create the merchant identity and receive a one-time API Key.</span></div><div class="step"><span>STEP 2</span><strong>Describe your store</strong><span>Publish the agent-facing merchant profile.</span></div><div class="step"><span>STEP 3</span><strong>Publish offers</strong><span>Offer exact GTIN or MPN inventory with stock, price and destination evidence.</span></div><div class="step"><span>STEP 4</span><strong>Improve the score</strong><span>Use the diagnostic to see exactly what an AI agent still cannot trust or use.</span></div></div>
 <div class="cta"><a class="btn" href="/merchant/onboard">Open Merchant Onboarding</a></div></section>
 
 <footer class="footer">API base: ${esc(origin)} | Evidence-based ranking | Compatibility claims require evidence | Merchant API keys are stored only as SHA-256 hashes.</footer></div>
 </body></html>`;
+}
+
+function gpd33MerchantParticipation(origin){
+  return {
+    schema:"gpd-merchant-participation-v1",
+    merchant_guide_url:origin+"/merchant",
+    benefits:["machine_readable_offers","destination_aware_offer_matching","verified_buyer_handoffs"],
+    registration:{method:"POST",url:origin+"/v1/merchant/register",
+      guide_url:origin+"/merchant/onboard",requires_authorized_terms_acceptance:true,initially_verified:false},
+    supply:{method:"POST",url:origin+"/v1/merchant/offers/feed-import",
+      auth_header:"x-merchant-key",requires_verified_merchant:true,max_offers:200,
+      comparison_fields:["manufacturer","gtin_or_part_number","condition","currency","price","stock_status","stock_quantity","ships_to","product_url"]},
+    buyer_preview:{merchant_directory_url:origin+"/v1/merchant/directory",
+      offer_search_url:origin+"/v1/merchant/search",mcp_url:origin+"/mcp"}
+  };
 }
 
 function merchantOnboardingPage(origin){
@@ -10272,6 +10288,7 @@ function openapi(origin){
   paths["/v1/parts/coverage"]={get:{operationId:"partsCoverage",summary:"Global Parts coverage snapshot",description:"Free sampled coverage view across the parts catalog, merchant offers and active merchants. Counts are explicitly sampled and are not represented as global totals.",tags:["parts","coverage","merchant-intelligence"],security:[],responses:{200:{description:"Sampled parts and merchant coverage"}}}};
   paths["/v1/parts/search"]={get:{operationId:"searchPartsCatalog",summary:"Search exact/discontinued/industrial parts",description:"Free catalog search by part number, manufacturer or description. No new external API credential is required.",tags:["parts","industrial","replacement-parts","discontinued"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"part_number",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}},{in:"query",name:"limit",schema:{type:"integer",default:20}}],responses:{200:{description:"Part candidates"}}}};
   paths["/v1/parts-intelligence"]={get:{operationId:"partsIntelligence",summary:"Paid exact-part lifecycle compatibility replacement and sourcing intelligence",description:"Resolves a part before payment, then returns lifecycle, verified successor/substitute relationships, official documents and sourcing intelligence. Compatibility is not inferred from title similarity.",tags:["parts","industrial","replacement-parts","x402"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"part_number",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}}],responses:{200:{description:"Parts intelligence"},402:{description:"x402 payment required"},404:{description:"Part not found"},409:{description:"Disambiguation required"}}}};
+  paths["/v1/merchant/participation"]={get:{operationId:"getMerchantParticipation",summary:"Discover merchant participation and feed requirements",tags:["merchant-intelligence","merchant-onboarding"],security:[],responses:{200:{description:"Merchant benefits, consent requirements and supply endpoints"}}}};
   paths["/v1/merchant/register"]={post:{operationId:"registerMerchant",summary:"Self-service merchant registration",description:"Create an unverified active merchant and return a one-time Merchant API Key. Ranking is evidence-based; registration never grants verified status.",tags:["merchant-intelligence","merchant-onboarding"],security:[],requestBody:{required:true,content:{"application/json":{schema:{type:"object",required:["name","accept_terms"],properties:{name:{type:"string"},slug:{type:"string"},website_url:{type:"string"},country_code:{type:"string"},agent_description:{type:"string"},accept_terms:{type:"boolean"}}}}}},responses:{200:{description:"Merchant registered; API key returned once"},400:{description:"Invalid registration"},429:{description:"Registration rate limited"}}}};
   paths["/v1/merchant/me"]={get:{operationId:"getMerchantSelf",summary:"Read authenticated merchant account",description:"Send x-merchant-key.",tags:["merchant-intelligence","merchant-onboarding"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Authenticated merchant account"},401:{description:"Invalid merchant key"}}}};
   paths["/v1/merchant/key/rotate"]={post:{operationId:"rotateMerchantKey",summary:"Rotate Merchant API Key",description:"Authenticated key rotation. The previous key becomes invalid immediately; the replacement key is returned once.",tags:["merchant-intelligence","merchant-onboarding","security"],security:[{MerchantApiKey:[]}],responses:{200:{description:"New API key returned once"},401:{description:"Invalid merchant key"}}}};
@@ -13641,6 +13658,7 @@ export default{
       if(url.pathname==="/v1/parts/search"&&request.method==="GET")return json(await partsSearchApi(env,url));
       if(url.pathname==="/v1/parts-intelligence"&&request.method==="GET")return partsIntelligenceApi(request,env,url,ctx);
       if(url.pathname==="/merchant"&&request.method==="GET")return htmlResponse(merchantLandingPage(origin),200,{"cache-control":"public, max-age=300","x-robots-tag":"index, follow"});
+      if(url.pathname==="/v1/merchant/participation"&&request.method==="GET")return json(gpd33MerchantParticipation(origin),200,{"cache-control":"public, max-age=300"});
       if(url.pathname==="/merchant/onboard"&&request.method==="GET")return htmlResponse(merchantOnboardingPage(origin),200,{"cache-control":"no-store","x-robots-tag":"index, follow"});
       if(url.pathname==="/v1/merchant/register"&&request.method==="POST"){let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await registerMerchantPublic(env,request,body,origin),200,{"cache-control":"no-store"});}catch(e){const status=Number(e?.status)||400;return json({ok:false,error:status===429?"merchant_registration_rate_limited":"merchant_register_failed",detail:safeError(e)},status,{"cache-control":"no-store"});}}
       if(url.pathname==="/v1/merchant/me"&&request.method==="GET"){const out=await merchantSelfApi(env,request,origin);return json(out,out?.status||200,{"cache-control":"no-store"});}

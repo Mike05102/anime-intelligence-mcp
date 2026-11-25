@@ -20,3 +20,13 @@ node scripts/gpd33_apply_growth_evidence.mjs <署名済みバンドル> <信頼�
 承認済みDBに適用できる段階で、`PGHOST`、`PGDATABASE`、`PGUSER`、`PGSSLMODE=verify-full` と既存の認証を非公開実行環境へ設定する。`GPD_GROWTH_APPLY=1` と `--apply` を両方指定した場合に限り、本番区分の署名済み集計をサービス権限のRPCに送る。テスト区分のデータはプレビューに限る。DBは同じスナップショットの再送を重複計上せず、環境・内容の異なる再送を拒否する。実際の注文台帳・決済、接続先、権限、無料枠を確認したあとで `GPD_RECONCILED_GROWTH_SIGNALS=1` を設定する。設定は既定で無効。買い手依頼の加点は既存の `GPD_BUYER_GROWTH_SIGNALS` で個別に管理する。
 
 現在の検証はモック、検証用の署名鍵、隔離PostgreSQLを使う。実際の販売業者・外部エージェント・三者間の取引・入金実績は未確認。次は条件が確認できた提携先の定期接続、台帳発行者の照合、少数案件の実運用と探索配分への効果測定。
+
+## 買い手の露出と需要起点の販売業者探索
+
+`node scripts/gpd33_registry_observe.mjs <本番稼働を確認済みのバージョン>` は公式MCP Registryの公開掲載を読み取る。最新・有効な掲載、バージョン、リポジトリ、接続先の一致を確認する。新規掲載や更新の申請には既存の承認付きワークフローを使う。検索エンジンでの掲載や、実際に利用開始した買い手の数は別に観測する。
+
+販売業者向けの機械可読な参加ガイドは `GET /v1/merchant/participation`。発見文書と販売業者向けページから取得でき、同意付き登録、認証後の商品フィード、買い手から見える検索を案内する。
+
+`node scripts/gpd33_seller_discovery_tick.mjs <非公開ソース台帳> <非公開需要集計> <所有者専用の状態ディレクトリ>` で承認済みの公開JSONソースを巡回する。取得は1時間に最大2件、各64 KiB。需要優先と巡回順を併用し、外部には指定された固定URLだけを照会する。ソース台帳は `gpd-seller-discovery-registry-v1`、需要集計は `gpd-seller-discovery-demand-v1` で、環境区分を一致させる。需要には `observed_at` と `rows` を指定し、各行は `domain`、`buyer_country`、`request_count` の集計値。候補は非公開の `seller-discovery-report.json` に保存され、内側の `discovery` を販売業者の署名付き同意のレビューに渡せる。この試験では実行スケジュール・情報源を有効にしていない。
+
+`node scripts/gpd33_acquisition_funnel.mjs <署名済み証拠> <信頼台帳> <作業枠数>` は同じ観測期間・対象に絞った、別々の発行者による署名済みの利用経路と取引実績を照合する。出力は非公開環境で扱う。集計値がない段階は未計測とし、承認済みの無料経路に対する次回配分をプレビューする。現時点では本番のチャネル別観測の発行元は未接続。

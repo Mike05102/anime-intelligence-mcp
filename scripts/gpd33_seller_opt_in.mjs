@@ -92,7 +92,8 @@ function interpretConsent(envelope,authority,candidates,environment,now){
   try{body=JSON.parse(utf8.decode(payload));}catch{return null;}
   if(!body||typeof body!=='object'||Array.isArray(body)||body.context!=='gpd-seller-opt-in-v1'
     ||body.environment!==environment||body.seller_id!==envelope.seller_id||body.scope!==authority.scope
-    ||typeof body.request_id!=='string'||!UUID.test(body.request_id)||body.country_code!==authority.country){
+    ||typeof body.request_id!=='string'||!UUID.test(body.request_id)||body.country_code!==authority.country
+    ||typeof body.source!=='string'||typeof body.source_seller_id!=='string'){
     return null;
   }
 

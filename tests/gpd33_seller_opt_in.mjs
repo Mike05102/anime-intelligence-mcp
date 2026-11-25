@@ -52,6 +52,7 @@ const report=prepareSellerOptInReview(discovered,trust,[
   envelope({...consent,seller_id:unregistered}),
   envelope({...consent,country_code:'US'}),
   envelope({...consent,source:'ebay_browse',source_seller_id:'marketplace'}),
+  envelope({...consent,source:['merchant_feed']}),
   envelope({...consent,evidence_url:origin+'/other'}),
   envelope({...consent,signed_at:'2026-11-25T12:07:00Z'}),
   envelope({...consent,expires_at:'2026-11-25T11:00:00Z'}),
@@ -62,7 +63,7 @@ assert.equal(report.status,'private_preview');
 assert.equal(report.environment,'test');
 assert.equal(report.candidates.length,2);
 assert.equal(report.duplicate_count,2);
-assert.equal(report.rejected_count,11);
+assert.equal(report.rejected_count,12);
 const feedDraft=report.candidates.find(candidate=>candidate.merchant_id===merchant);
 assert.deepEqual(feedDraft.feed_connection_draft,{merchant_id:merchant,feed_url:feed,product_origins:[origin]});
 assert.equal(feedDraft.consent_expires_at,expires.replace('00Z','00.000Z'));

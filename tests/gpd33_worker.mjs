@@ -240,6 +240,16 @@ for(const gtinRequest of [await call(directGtin,invalidSignature),await call('/v
 const invalidGtin=await call('/v1/purchase-decision?gtin=012345678906',invalidSignature);
 assert.equal(invalidGtin.status,400);
 assert.equal((await invalidGtin.json()).error,'purchase_query_or_product_required');
+const participation=await (await call('/v1/merchant/participation')).json();
+assert.equal(participation.registration.method,'POST');
+assert.equal(participation.registration.initially_verified,false);
+assert.equal(participation.supply.url,origin+'/v1/merchant/offers/feed-import');
+assert.equal(participation.supply.auth_header,'x-merchant-key');
+assert.equal(participation.buyer_preview.mcp_url,origin+'/mcp');
+const sellerLanding=await (await call('/merchant')).text();
+assert.match(sellerLanding,/href="\/v1\/merchant\/participation"/);
+const merchantOpenApi=await (await call('/openapi.json')).json();
+assert.equal(merchantOpenApi.paths['/v1/merchant/participation'].get.operationId,'getMerchantParticipation');
 for(const route of ['/v1/parts/status','/v1/merchant/search','/.well-known/x402','/openapi.json']){
   const response=await call(route);
   assert.ok(response.status<500,route+' '+response.status);
