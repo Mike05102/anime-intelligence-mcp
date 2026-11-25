@@ -3,7 +3,7 @@ import {pathToFileURL} from 'node:url';
 
 const MAX_BYTES = 256 * 1024;
 const MAX_ROWS = 500;
-const FEEDS = new Set(['merchant_feed','partner_directory','ebay_browse','yahoo_shopping']);
+const FEEDS = new Set(['merchant_feed','partner_directory','ebay_browse','yahoo_shopping','nhtsa_vpic']);
 const OPT_IN_FEEDS = new Set(['merchant_feed','partner_directory']);
 const DAY = 86400000;
 

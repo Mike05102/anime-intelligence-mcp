@@ -128,3 +128,33 @@ await assert.rejects(fetchMock(response(Buffer.from([0xff]))),{code:'ERR_ENCODIN
 await assert.rejects(fetchMock(response('{}'),async()=>['8.8.8.8','127.0.0.1']),/public_ipv4/);
 assert.equal(networkCalls,7);
 console.log('PASS demand-directed seller discovery, private claims, fairness, consent scope, cooldown and pinned mock reads');
+
+const vpicDirectory=await mkdtemp(join(tmpdir(),'gpd-vpic-tick-'));
+try{
+  const registryFile=join(vpicDirectory,'registry.json'),demandFile=join(vpicDirectory,'demand.json');
+  const endpoint='https://vpic.nhtsa.dot.gov/api/vehicles/GetAllManufacturers?format=json&page=1';
+  const vpic=source('vpic',['automotive_parts'],['US'],{kind:'nhtsa_vpic',endpoint,
+    terms_url:'https://vpic.nhtsa.dot.gov/api/',evidence_origins:['https://vpic.nhtsa.dot.gov'],consent_origins:[]});
+  const setSource=entry=>writeFile(registryFile,JSON.stringify({...registry,sources:[entry]}),{mode:0o600});
+  await writeFile(demandFile,JSON.stringify(demand),{mode:0o600});
+  await setSource({...vpic,endpoint:endpoint+'&other=1'});
+  await assert.rejects(runSellerDiscoveryTick(registryFile,demandFile,vpicDirectory,{now,
+    readSource:()=>assert.fail('Unexpected network request')}),/invalid_vpic_scope/);
+  await setSource(vpic);
+  const status=await runSellerDiscoveryTick(registryFile,demandFile,vpicDirectory,{now,readSource:async selected=>{
+    assert.equal(selected.url.href,endpoint);
+    return {Count:2,Results:[{Mfr_ID:123,Mfr_Name:'Example Manufacturer',Country:'UNITED STATES',
+      opt_in_evidence_url:'https://vpic.nhtsa.dot.gov/consent'},{Mfr_ID:'broken',Mfr_Name:'Invalid'}]};
+  }});
+  assert.equal(status.candidates,1);
+  const report=JSON.parse(await readFile(join(vpicDirectory,'seller-discovery-report.json'),'utf8'));
+  assert.equal(report.results[0].scope_excluded,1);
+  const [manufacturer]=report.discovery.candidates;
+  assert.equal(manufacturer.source,'nhtsa_vpic');
+  assert.equal(manufacturer.source_seller_id,'vpic.123');
+  assert.equal(manufacturer.review_status,'review_discovery_evidence');
+  assert.equal(manufacturer.opt_in_evidence_url,null);
+}finally{
+  await rm(vpicDirectory,{recursive:true,force:true});
+}
+console.log('PASS official vPIC manufacturer candidate adapter, pinned page and no opt-in promotion');

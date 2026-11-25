@@ -14,7 +14,7 @@ const MAX_SOURCES=24;
 const SOURCE=/^[a-z][a-z0-9_-]{0,23}$/;
 const EXTERNAL_SELLER=/^[a-z0-9][a-z0-9_.-]{0,63}$/i;
 const COUNTRY=/^[A-Z]{2}$/;
-const KINDS=new Set(['merchant_feed','partner_directory','ebay_browse','yahoo_shopping']);
+const KINDS=new Set(['merchant_feed','partner_directory','ebay_browse','yahoo_shopping','nhtsa_vpic']);
 const OPT_IN_KINDS=new Set(['merchant_feed','partner_directory']);
 const DOMAINS=new Set([
   'consumer_electronics','automotive_parts','home_appliances','fashion','books_media','toys_hobbies',
@@ -22,6 +22,7 @@ const DOMAINS=new Set([
   'baby_kids','pet_supplies','tools_hardware','garden_outdoor','musical_instruments','jewelry_watches',
   'arts_crafts','industrial_supplies','scientific_lab','restaurant_hospitality','safety_security','general_commerce'
 ]);
+const VPIC_ORIGIN='https://vpic.nhtsa.dot.gov';
 const STATE='gpd-seller-discovery-state-v1';
 
 function publicHttps(input,stripTracking=false){
@@ -57,7 +58,13 @@ function approvedSources(registry,now){
   }
   const labels=new Set(),urls=new Set();
   return registry.sources.map(row=>{
-    const url=publicHttps(row?.endpoint),terms=publicHttps(row?.terms_url),expiry=utc(row?.approved_until);
+    const vpic=row?.kind==='nhtsa_vpic';
+    const url=publicHttps(row?.endpoint,vpic),terms=publicHttps(row?.terms_url),expiry=utc(row?.approved_until);
+    if(vpic){
+      const endpoint=typeof row.endpoint==='string'&&row.endpoint.match(/^https:\/\/vpic\.nhtsa\.dot\.gov\/api\/vehicles\/GetAllManufacturers\?format=json&page=([1-9][0-9]{0,2})$/);
+      if(!endpoint||!url||row.domains?.length!==1||row.domains[0]!=='automotive_parts')throw new Error('invalid_vpic_scope');
+      url.search='?format=json&page='+endpoint[1];
+    }
     if(typeof row?.id!=='string'||!SOURCE.test(row.id)||labels.has(row.id)
       ||!KINDS.has(row.kind)||!url||urls.has(url.href)||!terms||!Number.isFinite(expiry)
       ||row.approved_for!=='public_seller_discovery'||row.no_cost_public_read!==true
@@ -163,7 +170,19 @@ export async function readApprovedSellerDiscoverySource(source,{resolve,request=
   }
 }
 
-function candidateRows(source,payload){
+function candidateRows(source,payload,now){
+  if(source.kind==='nhtsa_vpic'){
+    if(!Array.isArray(payload?.Results)||payload.Results.length>100||payload.Count!==payload.Results.length){
+      throw new Error('invalid_vpic_response');
+    }
+    const observed_at=new Date(now).toISOString();
+    const rows=payload.Results.filter(row=>Number.isSafeInteger(row?.Mfr_ID)&&row.Mfr_ID>0).map(row=>({
+      source:source.kind,source_seller_id:source.id+'.'+row.Mfr_ID,public_name:row.Mfr_Name,
+      evidence_url:VPIC_ORIGIN+'/api/vehicles/GetManufacturerDetails/'+row.Mfr_ID,observed_at
+    }));
+    return {rows,excluded:payload.Results.length-rows.length};
+  }
+
   if(payload?.schema!=='gpd-seller-discovery-feed-v1'||!Array.isArray(payload.sellers)||payload.sellers.length>100){
     throw new Error('invalid_seller_feed_payload');
   }
@@ -242,7 +261,7 @@ export async function runSellerDiscoveryTick(registryFile,demandFile,directory,
     const candidates=[],results=[];
     for(const source of selected){
       try{
-        const {rows,excluded}=candidateRows(source,await readSource(source));
+        const {rows,excluded}=candidateRows(source,await readSource(source),now);
         candidates.push(...rows);
         results.push({source:source.id,status:'observed',scope_excluded:excluded});
         newState.sources[source.id].cooldown_until_ms=0;

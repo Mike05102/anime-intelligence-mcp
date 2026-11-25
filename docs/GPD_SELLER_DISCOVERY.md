@@ -41,3 +41,9 @@ node scripts/gpd33_seller_discovery_tick.mjs <非公開ソース台帳.json> <�
 取得先は `schema: "gpd-seller-discovery-feed-v1"` と最大100件の `sellers` を返す。行の形式は上記の探索証拠と同じだが、`source` は台帳の `kind` で固定する。ネイティブAPIの応答を使う場合は、そのAPIの利用条件の範囲内でこの形式に整形する公開アダプターの運営主体とURLを承認する。市場由来の行から同意証拠を作らない。外部販売業者IDに台帳のソースIDを付け、異なる取得先の同じIDを混同しない（例 `partner_directory:partner.seller-a`）。
 
 非公開ディレクトリの `seller-discovery-report.json` はそのまま署名付き参加意思の確認コマンドに渡せる。CLIの標準出力は件数と実行状態のみ。試験区分ではモックリーダーを用い、外部ソースを有効にしない。本番運用で使用するソース台帳の承認と設定は別途必要。
+
+## 米国 NHTSA vPIC のメーカー候補
+
+`nhtsa_vpic` は鍵なしの公式メーカー一覧を利用する。ソースのカテゴリーは `automotive_parts` に限定し、台帳で `https://vpic.nhtsa.dot.gov/api/vehicles/GetAllManufacturers?format=json&page=1` のようにページを固定する。照会は既存の回数・応答サイズ・クールダウン制限に従う。米国市場向けの公的メーカー情報を提供するが、個別製品、販売可否、配送能力、同意は別途確認する。 [API仕様](https://vpic.nhtsa.dot.gov/api/) · [公開データ案内](https://data.transportation.gov/Automobiles/NHTSA-Product-Information-Catalog-and-Vehicle-List/j8kd-qyeh)
+
+2026-11-25 UTCに第1ページを公開GETで取得し、応答100件を隔離環境のアダプターでメーカー候補100件に変換した。実販売業者の同意確認、取込、本番設定は未実施。
