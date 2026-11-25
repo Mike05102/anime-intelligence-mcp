@@ -33,7 +33,7 @@ with event_rows as (
 )
 select jsonb_pretty(jsonb_build_object(
   'database_bytes',pg_database_size(current_database()),
-  'bytes_to_gpd_catalog_write_limit',greatest(0,490000000-pg_database_size(current_database())),
+  'bytes_to_gpd_catalog_write_limit',greatest(0,400000000-pg_database_size(current_database())),
   'transaction_read_only',current_setting('transaction_read_only'),
   'events_total_bytes',pg_total_relation_size('public.api_events'::regclass),
   'expired_payload_bytes_estimate',(select coalesce(sum(eligible_payload_bytes),0) from event_totals),

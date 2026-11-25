@@ -52,4 +52,4 @@ alter table public.products enable row level security;
 alter table public.api_events enable row level security;
 grant select,insert,update on public.products to service_role;
 grant usage,select on all sequences in schema public to service_role;
-grant select,delete on public.api_events to service_role;
+grant select,insert,delete on public.api_events to service_role;

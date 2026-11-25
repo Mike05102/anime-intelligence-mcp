@@ -13283,8 +13283,10 @@ export default{
       // Run discovery at every scheduled slot if the primary slot did not do so.
       // This is an independent waitUntil job so failure of Parts/rotation/enrichment cannot suppress it.
       try{await logEvent(env,"scheduled_growth_run",{endpoint:"scheduled",metadata:{task,ok:report.errors.length===0,errors:report.errors,heartbeat_persisted:report.heartbeat_persisted}});}catch{}
-      if(dt.getUTCHours()===0&&dt.getUTCMinutes()===50){
+      if(dt.getUTCMinutes()===50){
         try{
+          const storage=await sb(env,"/rpc/gpd33_storage_status",{method:"POST",body:"{}"});
+          if(storage?.catalog_paused)console.warn("GPD storage pressure",JSON.stringify(storage));
           await sb(env,"/rpc/gpd33_prune_events",{method:"POST",body:"{}"});
         }catch(e){console.warn("GPD event retention",safeError(e));}
       }

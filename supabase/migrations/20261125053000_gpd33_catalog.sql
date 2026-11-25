@@ -127,7 +127,7 @@ begin
   ) then raise exception 'GPD discovery lease expired'; end if;
   -- Keep a small margin for the transaction, indexes and operational writes.
   -- This is a per-database guard, independent of the organization's billing quota.
-  if jsonb_array_length(rows)>0 and pg_database_size(current_database())>=490000000 then
+  if jsonb_array_length(rows)>0 and pg_database_size(current_database())>=400000000 then
     raise exception 'GPD catalog write paused: database storage budget';
   end if;
   -- Serialize against legacy writers for the alias lookup and batch transaction.

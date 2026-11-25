@@ -142,5 +142,32 @@ assert.equal(await one('select public.gpd33_prune_events() result'),0);
 assert.equal((await one('select public.gpd33_ingress_rollup() result'))[0].events,1);
 assert.equal(await one("select count(*)::int result from api_events where event_type='payment_required'"),4);
 assert.equal(await one("select count(*)::int result from api_events where event_type='dynamic_catalog_pool'"),2);
+await db.query('reset role');
+await db.query(await readSql('supabase/migrations/20261125070000_gpd33_storage_control.sql'));
+await db.query('set role service_role');
+await db.query(`insert into api_events(event_type,metadata) values
+  ('api_call','{"payment_header_present":false,"query_present":true}'),
+  ('payment_required','{"payment_header_present":false,"response_status":402}'),
+  ('paid_call','{"payment_header_present":true}')`);
+assert.equal(await one("select count(*)::int result from api_events where event_type='api_call'"),0);
+assert.equal(await one("select count(*)::int result from api_events where event_type='paid_call'"),3);
+assert.equal(await one("select (public.gpd33_storage_status()->>'target_bytes')::int result"),400000000);
+await db.query('reset role');
+await db.query(`insert into api_events(event_type,occurred_at,metadata) values
+  ('gpd_cron_heartbeat',now()-interval '2 days','{}'),
+  ('scheduled_growth_run',now()-interval '2 days','{"ok":false}'),
+  ('x402_configuration_error',now()-interval '6 days','{}'),
+  ('x402_configuration_error',now()-interval '8 days','{}')`);
+await db.query('set role service_role');
+assert.equal(await one('select public.gpd33_prune_events() result'),2);
+assert.equal(await one("select count(*)::int result from api_events where event_type='x402_configuration_error'"),1);
+assert.equal(await one("select count(*)::int result from api_events where event_type='scheduled_growth_run'"),1);
+await db.query('reset role; update gpd33_maintenance.storage_sample set database_bytes=451000000; set role service_role');
+await db.query(`insert into api_events(event_type,metadata) values
+  ('gpd_cron_heartbeat','{}'), ('scheduled_growth_run','{"ok":false}'),
+  ('paid_call','{"payment_header_present":true}')`);
+assert.equal(await one("select count(*)::int result from api_events where event_type='gpd_cron_heartbeat'"),0);
+assert.equal(await one("select count(*)::int result from api_events where event_type='scheduled_growth_run'"),2);
+assert.equal(await one("select count(*)::int result from api_events where event_type='paid_call'"),4);
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');
