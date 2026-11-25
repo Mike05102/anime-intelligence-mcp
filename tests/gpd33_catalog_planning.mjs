@@ -20,6 +20,10 @@ export async function testCatalogPlanning(one) {
     assert.ok(slots.every(slot=>gpd33SelectDomain(slot,growth,planning.efficiency)===domains[index]));
     assert.deepEqual(slots.map(slot=>gpd33PlanPhase(slot).phase).sort(),[0,1,2,3]);
   }
+  const demandDomain=domains[1];
+  assert.equal(gpd33SelectDomain(0,growth,{}, {[demandDomain]:{buyers:50,responsive_sellers:20}}),domains[0]);
+  assert.equal(gpd33SelectDomain(24,growth,{}, {[demandDomain]:{buyers:2,responsive_sellers:1}}),demandDomain);
+  assert.equal(gpd33SelectDomain(24,growth,{}, {[demandDomain]:{buyers:1,responsive_sellers:1}}),domains[0]);
   const now = Date.parse('2026-11-25T05:00:00Z');
   const query = ['pasta','coffee'];
   const freshHistory = {'food_grocery:pasta':{new:9,calls:1,last_at:'2026-11-25T04:59:00Z'}};

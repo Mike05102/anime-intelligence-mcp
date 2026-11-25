@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import {generateKeyPairSync, sign} from 'node:crypto';
+import {mkdtemp, rm, symlink, truncate, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {acquireGpd33Snapshot} from '../scripts/gpd33_reconcile_acquire.mjs';
 import {reconcileSignedGpd33Evidence} from '../scripts/gpd33_reconcile_signed.mjs';
 
 const handoffId = '00000000-0000-4000-8000-000000000001';
@@ -63,3 +67,35 @@ const tampered = structuredClone(baseline.envelopes[1]);
 tampered.payload = Buffer.from(Buffer.from(tampered.payload,'base64url').toString().replace('confirmed','cancelled')).toString('base64url');
 assert.throws(() => reconcile(swap('orders',tampered)), /Invalid evidence signature/);
 console.log('PASS signed external evidence intake, source roles, scope, completeness and tamper resistance');
+
+
+const staging = await mkdtemp(join(tmpdir(),'gpd33-signed-intake-'));
+try {
+  const registry = join(staging,'trust.json');
+  await writeFile(registry,JSON.stringify(trust),{mode:0o600});
+  for (const envelope of baseline.envelopes) {
+    await writeFile(join(staging,envelope.issuer+'.json'),JSON.stringify(envelope),{mode:0o600});
+  }
+  // Files are selected by configured issuer IDs, not by scanning directory contents.
+  await writeFile(join(staging,'other.json'),'not an envelope');
+  assert.deepEqual(await acquireGpd33Snapshot(staging,registry,snapshotId),report);
+  await assert.rejects(acquireGpd33Snapshot(staging,registry,merchantId), /requested snapshot/);
+  const badRegistry = {...trust, issuers:{'../unknown':trust.issuers.orders}};
+  await writeFile(registry,JSON.stringify(badRegistry));
+  await assert.rejects(acquireGpd33Snapshot(staging,registry,snapshotId), /Invalid evidence issuer names/);
+  await writeFile(registry,JSON.stringify(trust));
+
+  const receiptsFile = join(staging,'receipts.json');
+  await rm(receiptsFile);
+  await assert.rejects(acquireGpd33Snapshot(staging,registry,snapshotId), {code:'ENOENT'});
+  await symlink(join(staging,'orders.json'),receiptsFile);
+  await assert.rejects(acquireGpd33Snapshot(staging,registry,snapshotId), {code:'ELOOP'});
+  await rm(receiptsFile);
+  await writeFile(receiptsFile,JSON.stringify(seal('orders')));
+  await assert.rejects(acquireGpd33Snapshot(staging,registry,snapshotId), /configured issuer/);
+  await truncate(receiptsFile,12*1024*1024+1);
+  await assert.rejects(acquireGpd33Snapshot(staging,registry,snapshotId), /bounded regular file/);
+} finally {
+  await rm(staging,{recursive:true,force:true});
+}
+console.log('PASS read-only acquisition of signed local issuer snapshots and unsafe-file rejection');

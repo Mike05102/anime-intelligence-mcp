@@ -264,9 +264,11 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await db.query("alter table merchants add metadata jsonb");
   await db.query("update merchants set metadata=jsonb_build_object('system_managed',true) where id=$1",[other]);
   await db.query(await readSql('supabase/migrations/20261125103000_gpd33_offer_bound_handoff.sql'));
+  await db.query(await readSql('supabase/migrations/20261125104500_gpd33_growth_signals.sql'));
   await db.query('set role anon');
   await assert.rejects(sql('select public.gpd33_create_buyer_handoff(null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
+  await assert.rejects(sql('select public.gpd33_catalog_planning_growth()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
   await db.query('reset role; set role service_role');
   const nonParticipating = await one('select public.gpd33_request_buyer_handoff($1,$2,$3,1,$4,null) result',

@@ -175,6 +175,16 @@ export async function testHandoffJourney(query, seller, offer) {
     }
     assert.equal((await createBuyer({...input,request_id:randomUUID()})).status,429);
     assert.equal((await createBuyer(input)).status,200);
+    const planning = () => query('select public.gpd33_catalog_planning_growth() result');
+    assert.deepEqual((await planning()).account_handoff_signals,{});
+    const secondBuyer=randomUUID();
+    const second=await query('select public.gpd33_request_buyer_handoff($1,$2,$3,1,$4,$5) result',
+      [secondBuyer,randomUUID(),offer,'JP',generic.product.gtin]);
+    assert.equal(second.ok,true);
+    await query('select public.gpd33_record_handoff_event($1,$2,$3,$4,null) result',
+      [seller,second.handoff_id,randomUUID(),'accepted']);
+    assert.deepEqual((await planning()).account_handoff_signals,{food_grocery:{buyers:2,responsive_sellers:1}});
+
 
   } finally {
     await Promise.allSettled(pending);

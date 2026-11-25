@@ -117,6 +117,9 @@ SQL
     if [[ "$(sql -c "select to_regprocedure('public.gpd33_request_buyer_handoff(uuid,uuid,uuid,integer,text,text)') is not null")" != t ]]; then
       sql -f supabase/migrations/20261125103000_gpd33_offer_bound_handoff.sql
     fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_catalog_planning_growth()') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125104500_gpd33_growth_signals.sql
+    fi
     [[ "$(sql -c "select public.gpd33_coverage(array['food_grocery']) ? 'food_grocery'")" == t ]]
     [[ "$(sql -c 'select pg_database_size(current_database()) < 400000000')" == t ]]
     ;;

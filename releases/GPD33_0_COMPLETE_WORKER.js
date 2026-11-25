@@ -6837,7 +6837,7 @@ function gpd33CoverageTotals(coverage){
     new_24h:rows.reduce((sum,row)=>sum+row.new_24h,0),new_7d:rows.reduce((sum,row)=>sum+row.new_7d,0),
     attainment_percent:Math.round(canonical/target*10000)/100};
 }
-function gpd33SelectDomain(slot,coverage,efficiency={}){
+function gpd33SelectDomain(slot,coverage,efficiency={},accountSignals={}){
   const domains=UNIVERSAL_GENERIC_DOMAINS;
   const baseline=domains[slot%domains.length];
   // Every first cycle of a two-cycle block serves all 24 domains.
@@ -6846,8 +6846,10 @@ function gpd33SelectDomain(slot,coverage,efficiency={}){
   for(let i=0;i<domains.length;i++){
     const d=domains[(slot+i)%domains.length],data=coverage[d];
     if(!data)continue;
+    const buyers=Number(accountSignals[d]?.buyers)||0,sellers=Number(accountSignals[d]?.responsive_sellers)||0;
+    const demand=buyers>=2?Math.min(0.25,0.025*buyers+0.025*sellers):0;
     const score=data.remaining/UNIVERSAL_GENERIC_DOMAIN_TARGET*
-      (1+Math.min(1,(efficiency[d]?.new||0)/(5+Number(efficiency[d]?.runs||0))));
+      (1+Math.min(1,(efficiency[d]?.new||0)/(5+Number(efficiency[d]?.runs||0)))+demand);
     if(score>best){best=score;domain=d;}
   }
   return domain;
@@ -6876,10 +6878,10 @@ function gpd33RankQuery(row){
 async function gpd33Plan(env,job){
   const [coverage,planning,paid]=await Promise.all([
     job.coverage||gpd33Coverage(env),
-    gpd33Rpc(env,"catalog_planning",{}).catch(()=>null),
+    gpd33Rpc(env,env.GPD_BUYER_GROWTH_SIGNALS==="1"?"catalog_planning_growth":"catalog_planning",{}).catch(()=>null),
     sbOptional(env,"/api_events?select=occurred_at,payer_hash,metadata&event_type=eq.paid_call&order=occurred_at.desc&limit=12")
   ]);
-  const domain=gpd33SelectDomain(job.slot,coverage,planning?.efficiency);
+  const domain=gpd33SelectDomain(job.slot,coverage,planning?.efficiency,planning?.account_handoff_signals);
   const anchors=genericDomainProfile(domain).anchors||[];
   const {cycle,phase}=gpd33PlanPhase(job.slot);
   const now=Date.now();
