@@ -1,0 +1,21 @@
+# GPD 33 storage maintenance
+
+Run `gpd33_storage_audit.sql` in SQL Editor to obtain a read-only report. It returns event counts, estimated stored payload bytes and the payload eligible for removal, along with the largest relations and their actual bytes. Shared index, TOAST and page overhead are not allocated to individual event types. An expired-payload estimate is not a forecast of disk space reclaimed.
+
+The retention policy keeps 14 days of diagnostic history. Only the listed diagnostic and autonomous exploration events are eligible. Payment events, payment-related fields, product-linked events, purchase decisions and market snapshots are preserved. Unknown types are preserved. The policy does not change product rows, observations, payments or billing tables.
+
+For a direct PostgreSQL connection or Supabase session pooler, run the following from the repository using an existing operator account and standard psql connection settings. Keep connection details out of command history and shared outputs.
+
+```sh
+bash supabase/maintenance/run_gpd33_storage.sh --audit
+bash supabase/maintenance/run_gpd33_storage.sh --prune
+bash supabase/maintenance/run_gpd33_storage.sh --reclaim
+```
+
+After the audit and physical headroom check, `--apply` runs the prune and reclaim steps in one invocation. Review the audit before pruning. The prune command installs the dedicated retention RPC if needed, removes bounded batches in separate transactions, runs ordinary VACUUM ANALYZE and reports the result. Ordinary VACUUM makes pages reusable and might not shrink the relation on disk. If the project is read-only or the estimate does not leave enough room for the catalog, reassess before proceeding.
+
+The reclaim command uses a separate autocommitted VACUUM FULL with a two-second lock wait. Run it only in a maintenance window with adequate physical space for the rewritten live rows, indexes and WAL. It takes an exclusive lock on the event table. The command reports actual sizes afterward. If there is insufficient space, use ordinary VACUUM for reuse and arrange a separately verified export and rewrite. Do not use VACUUM FULL on the entire database for this procedure.
+
+After the Worker is deployed, the service role can invoke the restricted retention RPC once daily. It removes up to 1,500 eligible events. The scheduled path logs errors without disrupting catalog expansion. New scheduled candidate diagnostics omit fields that are available in retained market snapshots or unnecessary for the metrics. Financial and market history still require monitored capacity. New catalog inserts omit null metadata values. The catalog batch pauses above 490 million database bytes to leave a small operating margin.
+
+Database size and physical disk usage are separate limits. Before opening catalog growth, verify the organization's usage and include the retained data, future product rows, indexes, preserved events and a working margin. The audit and test fixture are not measurements of how many bytes production will reclaim. [Supabase size limits](https://supabase.com/docs/guides/platform/database-size) · [PostgreSQL VACUUM](https://www.postgresql.org/docs/17/sql-vacuum.html)

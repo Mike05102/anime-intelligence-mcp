@@ -123,6 +123,11 @@ begin
   if lease is not null and not exists(
     select 1 from public.gpd33_job where singleton and owner=lease and expires_at>clock_timestamp() for update
   ) then raise exception 'GPD discovery lease expired'; end if;
+  -- Keep a small margin for the transaction, indexes and operational writes.
+  -- This is a per-database guard, independent of the organization's billing quota.
+  if jsonb_array_length(rows)>0 and pg_database_size(current_database())>=490000000 then
+    raise exception 'GPD catalog write paused: database storage budget';
+  end if;
   -- Serialize against legacy writers for the alias lookup and batch transaction.
   lock table public.products in share row exclusive mode;
   for item in select value from jsonb_array_elements(rows) loop
@@ -168,7 +173,7 @@ begin
           source_product_key,product_type,product_status,identification_confidence,source_last_checked_at,metadata)
       values (product.canonical_name_ja,product.canonical_name_en,product.manufacturer,product.jan_code,
           product.image_status,product.source_product_key,product.product_type,product.product_status,
-          product.identification_confidence,product.source_last_checked_at,product.metadata);
+          product.identification_confidence,product.source_last_checked_at,jsonb_strip_nulls(product.metadata));
       inserted := inserted+1;
       continue;
     end if;

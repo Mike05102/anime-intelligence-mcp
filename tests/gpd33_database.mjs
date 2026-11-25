@@ -91,5 +91,40 @@ await action('plan',owner,120,{plan:{domain:'food_grocery'}});
 await action('stage',owner,120,{rows:[],metrics:{}});
 await action('commit',owner,120);
 assert.equal(await one('select count(*)::int result from api_events'),1);
+await db.query('reset role');
+await db.query(await readSql('supabase/migrations/20261125060000_gpd33_event_retention.sql'));
+await db.query(`insert into api_events(event_type,endpoint,occurred_at,metadata)
+  select 'universal_discovery_batch','autonomous_discovery',now()-interval '30 days',
+    jsonb_build_object('fixture', (select string_agg(md5(n::text || '-' || i::text),'') from generate_series(1,90) i))
+  from generate_series(1,6000) n`);
+await db.query(`insert into api_events(event_type,endpoint,occurred_at,metadata,amount_usdc,product_id)
+  values
+  ('paid_call',null,now()-interval '40 days','{}',0.1,null),
+  ('universal_product_snapshot',null,now()-interval '40 days','{}',null,null),
+  ('universal_discovery_batch','purchase_decision_live',now()-interval '40 days','{}',null,null),
+  ('universal_discovery_batch','autonomous_discovery',now()-interval '40 days','{"payment":true}',null,null),
+  ('universal_discovery_batch','autonomous_discovery',now()-interval '40 days','{}',null,'important'),
+  ('universal_discovery_batch','autonomous_discovery',now(),'{}',null,null)`);
+const audit=async()=>JSON.parse((await db.query(await readSql('supabase/maintenance/gpd33_storage_audit.sql'))).rows[0].gpd33_storage_audit);
+const before=await audit();
+assert.equal(before.events.reduce((sum,event)=>sum+event.eligible_rows,0),6001);
+await db.query('set role anon');
+await assert.rejects(sql('select public.gpd33_prune_events()'),/permission denied/);
+await db.query('reset role; set role service_role');
+assert.equal(await one('select public.gpd33_prune_events() result'),1500);
+await db.query('reset role');
+assert.equal(await one('select gpd33_maintenance.prune_events(5000) result'),4501);
+assert.equal(await one('select gpd33_maintenance.prune_events(5000) result'),0);
+assert.equal(await one('select count(*)::integer result from api_events'),6);
+for(const predicate of ["event_type='universal_product_snapshot'","endpoint='purchase_decision_live'",
+  "metadata ? 'payment'","product_id='important'","occurred_at>=now()-interval '1 day'"]){
+  assert.equal(await one('select count(*)::integer result from api_events where '+predicate),1);
+}
+assert.equal(await one("select amount_usdc::text result from api_events where event_type='paid_call'"),'0.100000');
+await db.query(await readSql('supabase/maintenance/gpd33_reclaim_events.sql'));
+const after=await audit();
+assert.equal(after.events.reduce((sum,event)=>sum+event.eligible_rows,0),0);
+assert.ok(after.events_total_bytes<before.events_total_bytes/2);
+console.log(`PASS retention protection and physical compaction (${before.events_total_bytes} -> ${after.events_total_bytes} bytes)`);
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');
