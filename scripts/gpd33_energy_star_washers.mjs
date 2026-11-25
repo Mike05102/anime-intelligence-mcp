@@ -54,7 +54,11 @@ export function collectEnergyStarWasherEvidence(rows,now=Date.now()){
     if(item.error){rejected[item.error]=(rejected[item.error]||0)+1;continue;}
     const modelKey=item.brand.toUpperCase()+'|'+item.model.toUpperCase();
     const prior=byCode.get(item.gtin),priorModel=byModel.get(modelKey),priorRecord=byRecord.get(item.source_record_id);
-    if(prior&&prior.modelKey!==modelKey)conflicts.add(item.gtin);
+    if(prior&&(prior.modelKey!==modelKey||
+      prior.item.source_model_id!==item.source_model_id||
+      prior.item.registered_market_countries.join(',')!==item.registered_market_countries.join(','))){
+      conflicts.add(item.gtin);
+    }
     if(priorModel&&priorModel!==item.gtin){conflicts.add(priorModel);conflicts.add(item.gtin);}
     if(priorRecord&&(priorRecord.gtin!==item.gtin||priorRecord.source_model_id!==item.source_model_id||
       priorRecord.registered_market_countries.join(',')!==item.registered_market_countries.join(','))){

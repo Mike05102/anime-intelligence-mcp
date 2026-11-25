@@ -33,7 +33,13 @@ assert.deepEqual(parsed.products,[{
 const alternate={...exact,pd_id:'999999',markets:'United States, Canada'};
 const duplicate=collectEnergyStarWasherEvidence([exact,alternate],now);
 assert.equal(duplicate.duplicate_rows,1);
-assert.deepEqual(duplicate.products[0].registered_market_countries,['CA']);
+assert.deepEqual(duplicate.products,[]);
+assert.equal(duplicate.conflicting_gtins,1);
+assert.deepEqual(collectEnergyStarWasherEvidence([alternate,exact],now).products,[]);
+assert.deepEqual(collectEnergyStarWasherEvidence([exact,exact],now).products,parsed.products);
+assert.deepEqual(collectEnergyStarWasherEvidence([
+  exact,{...exact,pd_id:'999998',energy_star_model_identifier:'ES_other'}
+],now).products,[]);
 const wide=collectEnergyStarWasherEvidence([alternate],now);
 assert.deepEqual(wide.products[0].registered_market_countries,['CA','US']);
 for(const [other,count] of [

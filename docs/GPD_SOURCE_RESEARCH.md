@@ -69,3 +69,7 @@
 ## フランス BnF の公開照会
 
 2026-11-25 UTC、公式SRUで ISBN `9782070612758` の完全一致検索を認証なしで実施した。最大2件・64 KiBの取得枠で、UNIMARCの書誌1件と構造化ISBN欄（010）1件を確認した。フランス語圏の版同定の候補。商品価格、販売可否、配送は含まれず、隔離用の `python3 scripts/gpd33_bnf_edition.py <ISBN> <SRU応答.xml>` は単一の版と検査済みISBNが一致する場合に書誌証拠を返す。カタログへの適用は未実施。 [BnF公式SRU仕様](https://api.bnf.fr/fr/api-sru-catalogue-general)
+
+## ENERGY STAR 先頭ページの実測
+
+2026-11-25 UTCに、家庭用洗濯機を `pd_id` 昇順で最大40件取得した。選択した列だけの応答は9,611バイト。40行のうち38行は型式などが曖昧、2行はUPC要件を満たさず、このページでは識別合格が0件だった。前回の別の5件サンプルでは1件合格しているため、先頭ページの値を全データの合格率には使わない。同一UPCに別の認証モデルIDや登録市場がある場合も、行順に左右されないよう候補を隔離する。 [EPAの公式データ](https://data.energystar.gov/Active-Specifications/ENERGY-STAR-Certified-Residential-Clothes-Washers/bghd-e2wd/data)
