@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {Readable} from 'node:stream';
+import {fingerprintPartnerReview,publishApprovedMerchantFeed} from '../scripts/gpd33_merchant_feed_publish.mjs';
 import {assertReconciliationFromHandoff} from './gpd33_reconcile_journey.mjs';
 import {createHash, createHmac, generateKeyPairSync, randomUUID, sign} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
@@ -8,12 +10,14 @@ export async function testHandoffJourney(query, seller, offer) {
   const {default: worker} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
   const env = {REFRESH_KEY: 'fixture-admin', SUPABASE_URL: 'https://isolated-db.example', SUPABASE_SECRET_KEY: 'fixture-db'};
   const buyer = randomUUID();
+  const merchantKey='mai_000000000000000000000000fixture';
   const buyerToken = 'fixture.buyer.token';
   const keys = generateKeyPairSync('ed25519');
   const rawKey = Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url').toString('hex');
   env.GPD_MERCHANT_SIGNING_KEYS = JSON.stringify({[seller]:rawKey});
   const rpc = {
     gpd33_create_handoff: ['handoff', 'offer', 'units'],
+    gpd33_import_merchant_feed: ['seller','offers'],
     gpd33_request_buyer_handoff: ['buyer', 'request_key', 'offer', 'units', 'country','expected_gtin'],
     gpd33_record_handoff_event: ['seller', 'handoff', 'event', 'new_state', 'reference_hash'],
     gpd33_buyer_handoff_status: ['handoff'],
@@ -52,7 +56,7 @@ export async function testHandoffJourney(query, seller, offer) {
       ]);
     }
     if (url.pathname === '/rest/v1/merchants') {
-      const merchantKeyHash = createHash('sha256').update('fixture-merchant').digest('hex');
+      const merchantKeyHash = createHash('sha256').update(merchantKey).digest('hex');
       if (url.searchParams.has('merchant_api_key_hash')) {
         assert.equal(url.searchParams.get('merchant_api_key_hash'), 'eq.' + merchantKeyHash);
       } else {
@@ -67,7 +71,7 @@ export async function testHandoffJourney(query, seller, offer) {
     const keys = rpc[method];
     const parameters = keys.map((_, i) => '$' + (i + 1));
     assert.ok(!init.body.includes('fixture-order'));
-    return Response.json(await query('select public.' + method + '(' + parameters.join(',') + ') result', keys.map(key => body[key])));
+    return Response.json(await query('select public.' + method + '(' + parameters.join(',') + ') result', keys.map(key => key==='offers'?JSON.stringify(body[key]):body[key])));
   };
   const request = (path, headers, body, bindings=env) => worker.fetch(new Request('https://gpd.example' + path, {
     method: body ? 'POST' : 'GET', headers: {'content-type': 'application/json', ...headers},
@@ -75,6 +79,44 @@ export async function testHandoffJourney(query, seller, offer) {
   }), bindings, {waitUntil(task) { pending.push(task); }});
   try {
     const admin = {'x-refresh-key': env.REFRESH_KEY};
+    const merchantHeaders={'x-merchant-key':merchantKey};
+    const feedPath='/v1/merchant/offers/feed-import';
+    const feedOffer={merchant_sku:'fixture-sku',manufacturer:'Example',part_number:'EX-123',
+      title:'Updated fixture',gtin:'012345678905',stock_status:'in_stock',price:'12.50',currency:'JPY',
+      ships_to:['JP'],product_url:'https://merchant.example/fixture',source_updated_at:new Date().toISOString()};
+    const importFeed=(item,merchantId=seller)=>request(feedPath,merchantHeaders,{merchant_id:merchantId,offers:[item]});
+    assert.equal((await importFeed(feedOffer,randomUUID())).status,403);
+    assert.equal((await request(feedPath,merchantHeaders,{merchant_id:seller,offers:[feedOffer,feedOffer]})).status,400);
+    const approvalExpiry=new Date(Date.now()+86400000).toISOString();
+    const approval={merchant_id:seller,feed_url:'https://merchant.example/feed.json',
+      approved_until:approvalExpiry,product_origins:['https://merchant.example']};
+    const review={schema:'gpd-partner-review-v1',status:'review_required',snapshot_id:randomUUID(),
+      merchant_feed:{schema:'gpd-merchant-offer-feed-preview-v1',status:'operator_review_required',
+        merchant_id:seller,feed_url:approval.feed_url,offer_count:1,upsert_payload:{offers:[feedOffer]}}};
+    const writeApproval={schema:'gpd-merchant-feed-write-approval-v1',allow_publish:true,
+      snapshot_id:review.snapshot_id,merchant_id:seller,approved_until:approvalExpiry,worker_origin:'https://gpd.example',
+      report_sha256:fingerprintPartnerReview(review)};
+    const written=await publishApprovedMerchantFeed(review,approval,writeApproval,{
+      apiKey:merchantKey,resolve:async()=> '93.184.215.14',
+      request:async (url,options)=>{
+        const response=url.pathname==='/v1/merchant/me'
+          ?Response.json({ok:true,merchant:{id:seller,verified:true}})
+          :await request(url.pathname,options.headers,JSON.parse(options.body));
+        return Object.assign(Readable.from([Buffer.from(await response.text())]),
+          {statusCode:response.status,headers:Object.fromEntries(response.headers)});
+      }
+    });
+    assert.equal(written.new_or_updated,1);
+    assert.equal((await (await importFeed(feedOffer)).json()).ignored,1);
+    assert.equal((await (await importFeed({...feedOffer,price:'1',source_updated_at:new Date(Date.now()-86400000).toISOString()})).json()).ignored,1);
+    const savedOffer=await query("select jsonb_build_object('id',id,'price',price) result from merchant_offers where merchant_sku='fixture-sku'");
+    assert.deepEqual(savedOffer,{id:offer,price:12.5});
+    const conflict={...feedOffer,part_number:'EX-456',source_updated_at:new Date(Date.now()+60_000).toISOString()};
+    assert.equal((await (await importFeed(conflict)).json()).ignored,1);
+    const freshOffer={...feedOffer,merchant_sku:'new-fixture-sku'};
+    assert.equal((await (await importFeed(freshOffer)).json()).new_or_updated,1);
+    assert.equal((await (await importFeed(freshOffer)).json()).ignored,1);
+
     const search = '/v1/merchant/search?part_number=EX-123&manufacturer=Example';
     const unscoped = await (await request(search, {})).json();
     assert.equal(unscoped.handoff_candidate_offer_id, null);
@@ -134,7 +176,7 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal((await readStatus([handoff,expired,expiredSignature].join('.'))).status,401);
     assert.equal(dbCalls, countBefore, 'Invalid credentials must be rejected before querying Postgres');
     assert.equal((await (await readStatus(token)).json()).handoff_state, 'requested');
-    const merchant = {'x-merchant-key':'fixture-merchant'};
+    const merchant = {'x-merchant-key':merchantKey};
     const inbox = await (await request('/v1/merchant/handoffs?handoff_id='+handoff,merchant)).json();
     assert.equal(inbox.handoffs[0].destination,'JP');
     assert.ok(!JSON.stringify(inbox).includes(buyer));

@@ -265,10 +265,20 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await db.query("update merchants set metadata=jsonb_build_object('system_managed',true) where id=$1",[other]);
   await db.query(await readSql('supabase/migrations/20261125103000_gpd33_offer_bound_handoff.sql'));
   await db.query(await readSql('supabase/migrations/20261125104500_gpd33_growth_signals.sql'));
+  await db.query(`alter table merchant_offers add merchant_sku text, add part_number text,
+    add normalized_part_number text, add title text, add mpn text, add condition text,
+    add price numeric, add currency text, add product_url text, add source_updated_at timestamptz,
+    add observed_at timestamptz, add updated_at timestamptz, add metadata jsonb,
+    add unique(merchant_id,merchant_sku);
+    grant insert,update on merchant_offers to service_role`);
+  await db.query(`update merchant_offers set merchant_sku='fixture-sku',part_number='EX-123',
+    normalized_part_number='EX-123',mpn='EX-123',source_updated_at=now()-interval '5 days' where id=$1`,[offer]);
+  await db.query(await readSql('supabase/migrations/20261125110000_gpd33_merchant_feed_import.sql'));
   await db.query('set role anon');
   await assert.rejects(sql('select public.gpd33_create_buyer_handoff(null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_catalog_planning_growth()'),/permission denied/);
+  await assert.rejects(sql('select public.gpd33_import_merchant_feed(null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
   await db.query('reset role; set role service_role');
   const nonParticipating = await one('select public.gpd33_request_buyer_handoff($1,$2,$3,1,$4,null) result',

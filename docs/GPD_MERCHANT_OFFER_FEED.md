@@ -19,3 +19,16 @@ node scripts/gpd33_merchant_feed_fetch.mjs approval.json
 ```
 
 承認ファイルのURLだけに認証情報なしのGETを1回送る。接続先を公開IPv4に限定し、名前解決したIPに接続を固定する。リダイレクト、HTTP、プライベートアドレス、圧縮応答は拒否する。接続と応答を通した時間制限は8秒で、最大256 KiBのJSONだけを読み取る。取込結果は同じプレビュー形式で、公開・登録・注文は行わない。IPv6専用配信や認証が必要なフィードは、許可された経路で取得したファイルをオフライン確認に渡す。
+
+## 独立承認後の公開
+
+公開対象の [パートナー確認レポート](GPD_PARTNER_REVIEW.md) に対し、運用者が別の書込み承認ファイルを作成する。読み取り用のフィード承認やレポート自体に公開権限はない。
+
+```sh
+node scripts/gpd33_merchant_feed_publish.mjs --digest private/report.json
+node scripts/gpd33_merchant_feed_publish.mjs private/report.json private/feed-approval.json private/write-approval.json
+```
+
+書込み承認の `schema` は `gpd-merchant-feed-write-approval-v1`。`allow_publish: true`、`merchant_id`、`snapshot_id`、左記ダイジェストを入れた `report_sha256`、末尾スラッシュのないHTTPSの `worker_origin`、UTCの `approved_until` を指定する。書込みを許すWorkerと承認対象の内容・期限を事前に確認する。販売業者キーは既存の `GPD_MERCHANT_API_KEY` 環境変数でプロセスに渡す。承認ファイル、レポート、キーを公開リポジトリやログに置かない。
+
+公開処理はレポートをフィード承認と照合し直し、Workerにキーの所有者と確認済み状態を照会する。照合済みの対象にだけ専用フィード登録APIを呼ぶ。古い更新や同じ観測の再送は反映されず、既存オファーのIDを維持する。応答で反映件数と見送り件数を確認する。通信障害で応答が得られないときはこの処理から成功を判断できないため、同じ承認・同じレポートで状態を確認する。実取引や収益の確定処理とは独立している。

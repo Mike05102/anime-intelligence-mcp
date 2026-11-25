@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {generateKeyPairSync, randomUUID, sign} from 'node:crypto';
 import {mkdtemp, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Readable} from 'node:stream';
+import {setTimeout as delay} from 'node:timers/promises';
 import {runPartnerReview} from '../scripts/gpd33_partner_review.mjs';
 
 const directory = await mkdtemp(join(tmpdir(),'gpd-partner-fixture-'));
@@ -33,7 +36,7 @@ try {
   const approvalFile=join(directory,'approval.json'), registryFile=join(directory,'trust.json');
   await writeFile(approvalFile,JSON.stringify(approval),{mode:0o600});
   await writeFile(registryFile,JSON.stringify(trust),{mode:0o600});
-  let calls=0, failEvidence=true;
+  let calls=0, feedCalls=0, failEvidence=true;
   let started, resume;
   const feedStarted=new Promise(resolve=>{ started=resolve; });
   const continueFeed=new Promise(resolve=>{ resume=resolve; });
@@ -44,6 +47,7 @@ try {
       request:async (url) => {
         assert.equal(url.href,approval.feed_url);
         calls++;
+        feedCalls++;
         if(!failEvidence){
           started();
           await continueFeed;
@@ -62,18 +66,67 @@ try {
   };
   const review = () => runPartnerReview(approvalFile,registryFile,snapshot,directory,options);
   await assert.rejects(review(),/acquisition failed/);
-  assert.deepEqual((await readdir(directory)).sort(),['approval.json','trust.json']);
+  const lockName = '.gpd-partner-review.lock';
+  assert.deepEqual((await readdir(directory)).sort(),[lockName,'approval.json','trust.json']);
+  const lockPath = join(directory,lockName);
+  const lockInode = (await stat(lockPath)).ino;
+  assert.equal((await stat(lockPath)).mode & 0o777,0o600);
+
+  const reviewModule = new URL('../scripts/gpd33_partner_review.mjs',import.meta.url).href;
+  const readyPath = join(directory,'child-ready');
+  const holdReview = `
+    import {writeFile} from 'node:fs/promises';
+    import {runPartnerReview} from ${JSON.stringify(reviewModule)};
+    setInterval(() => {},1000);
+    await runPartnerReview(...process.argv.slice(1,-1),{
+      feedOptions:{now:Date.parse('2026-11-25T03:00:00Z'),resolve:async () => {
+        await writeFile(process.argv.at(-1),'locked',{mode:0o600});
+        return new Promise(() => {});
+      }},
+      evidenceOptions:{fetchImpl:async () => new Promise(() => {})}
+    });
+  `;
+  const worker = spawn(process.execPath,['--input-type=module','-e',holdReview,approvalFile,registryFile,snapshot,directory,readyPath],
+    {stdio:['ignore','ignore','inherit']});
+  const workerExit = once(worker,'exit');
+  const staleName = '.gpd-partner-review-' + randomUUID() + '.tmp';
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 200 && worker.exitCode === null; attempt++) {
+      const message = await readFile(readyPath,'utf8').catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return '';
+      });
+      if (message === 'locked') {
+        ready = true;
+        break;
+      }
+      await delay(15);
+    }
+    assert.equal(ready,true,'Review child must acquire its lock');
+    await writeFile(join(directory,staleName),'partial',{mode:0o600});
+    const beforeContention = calls;
+    assert.equal((await review()).status,'review_in_progress');
+    assert.equal(calls,beforeContention);
+  } finally {
+    worker.kill('SIGKILL');
+    assert.equal((await workerExit)[1],'SIGKILL');
+  }
   failEvidence=false;
   const pending = review();
   await feedStarted;
   try {
-    await assert.rejects(review(),{code:'EEXIST'});
+    const beforeContention = feedCalls;
+    assert.equal((await review()).status,'review_in_progress');
+    assert.equal(feedCalls,beforeContention);
   } finally {
     resume();
     await pending;
   }
   const reportPath=join(directory,snapshot+'.json');
   assert.equal((await stat(reportPath)).mode & 0o777,0o600);
+  assert.equal((await stat(lockPath)).ino,lockInode);
+  assert.ok(!(await readdir(directory)).includes(staleName));
   const report=JSON.parse(await readFile(reportPath,'utf8'));
   assert.equal(report.merchant_feed.upsert_payload.offers[0].gtin,'4901234567894');
   assert.equal(report.reconciliation.scope,'test_only');

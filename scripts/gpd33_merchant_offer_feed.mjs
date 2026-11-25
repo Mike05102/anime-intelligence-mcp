@@ -83,14 +83,14 @@ export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
     feed_url:feedUrl.href,offer_count:offers.length,upsert_payload:{offers}};
 }
 
-export async function readBoundedJson(path){
+export async function readBoundedJson(path,maxBytes=MAX_BYTES){
   const info=await stat(path);
-  if(!info.isFile()||info.size>MAX_BYTES)throw new Error('input_file_must_be_regular_and_at_most_256_KiB');
+  if(!info.isFile()||info.size>maxBytes)throw new Error('input_file_must_be_bounded_and_regular');
   const chunks=[];
   let size=0;
-  for await(const chunk of createReadStream(path,{end:MAX_BYTES})){
+  for await(const chunk of createReadStream(path,{end:maxBytes})){
     size+=chunk.length;
-    if(size>MAX_BYTES)throw new Error('input_file_exceeds_256_KiB');
+    if(size>maxBytes)throw new Error('input_file_exceeds_byte_limit');
     chunks.push(chunk);
   }
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
@@ -100,7 +100,7 @@ export async function readBoundedJson(path){
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   try{
     if(process.argv.length!==4)throw new Error('Usage: node scripts/gpd33_merchant_offer_feed.mjs <approval.json> <feed.json>');
-    const [approval,manifest]=await Promise.all(process.argv.slice(2).map(readBoundedJson));
+    const [approval,manifest]=await Promise.all(process.argv.slice(2).map(path=>readBoundedJson(path)));
     process.stdout.write(JSON.stringify(prepareMerchantOfferFeed(approval,manifest),null,2)+'\n');
   }catch(error){
     process.stderr.write('Merchant offer feed rejected: '+error.message+'\n');

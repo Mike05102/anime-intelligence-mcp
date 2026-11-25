@@ -5990,6 +5990,57 @@ async function upsertMerchantOffers(env,merchant,body){
   await sbOptional(env,`/merchants?id=eq.${encodeURIComponent(merchant.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({last_feed_at:new Date().toISOString(),updated_at:new Date().toISOString()})});
   return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,merchant:merchantPublicShape(merchant),offers_received:rows.length,offers:rows.slice(0,20).map(merchantOfferShape)};
 }
+async function gpd33ImportMerchantFeed(request,env){
+  const headers={"cache-control":"no-store"};
+  const merchant=await merchantByApiKey(env,request);
+  if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401,headers);
+  if(merchant.verified!==true||String(merchant.metadata?.system_managed)==="true"){
+    return json({ok:false,error:"verified_merchant_required"},403,headers);
+  }
+  let rows;
+  try{
+    const reader=request.body.getReader();
+    const decoder=new TextDecoder("utf-8",{fatal:true});
+    let size=0,payload="";
+    try{
+      for(;;){
+        const {done,value}=await reader.read();
+        if(done)break;
+        size+=value.byteLength;
+        if(size>256*1024)throw new Error("feed_too_large");
+        payload+=decoder.decode(value,{stream:true});
+      }
+      payload+=decoder.decode();
+    }finally{
+      await reader.cancel();
+      reader.releaseLock();
+    }
+    const body=JSON.parse(payload);
+    if(body.merchant_id!==merchant.id)return json({ok:false,error:"merchant_scope_mismatch"},403,headers);
+    if(!Array.isArray(body.offers)||!body.offers.length||body.offers.length>200)throw new Error("invalid_feed");
+    const skus=new Set(),now=Date.now();
+    rows=body.offers.map(item=>{
+      const {merchant_sku,manufacturer,part_number,title,gtin,price,currency,stock_status,ships_to,
+        product_url,source_updated_at}=item;
+      const observed=Date.parse(source_updated_at);
+      if(!Number.isFinite(observed)||observed>now+300000||observed<now-7*86400000||
+        (gtin!=null&&!gpd33Barcode(gtin)))throw new Error("invalid_feed_evidence");
+      const row=normalizeMerchantOfferInput({merchant_sku,manufacturer,part_number,title,gtin,price,currency,
+        stock_status,ships_to,product_url,source_updated_at:new Date(observed).toISOString()},merchant.id);
+      if(skus.has(row.merchant_sku))throw new Error("duplicate_feed_sku");
+      skus.add(row.merchant_sku);
+      return row;
+    });
+  }catch{
+    return json({ok:false,error:"invalid_merchant_feed"},400,headers);
+  }
+  try{
+    const result=await gpd33Rpc(env,"import_merchant_feed",{seller:merchant.id,offers:rows});
+    return json(result,result.ok?200:(result.status||400),headers);
+  }catch{
+    return json({ok:false,error:"merchant_feed_import_unavailable"},503,headers);
+  }
+}
 async function updateMerchantProfile(env,merchant,body,origin){
   const checkoutMode=["link_out","agent_checkout","api_checkout"].includes(String(body?.checkout_mode||""))?String(body.checkout_mode):"link_out";
   const capabilities=body?.capabilities&&typeof body.capabilities==="object"&&!Array.isArray(body.capabilities)?body.capabilities:(merchant.capabilities||{});
@@ -10158,6 +10209,12 @@ function openapi(origin){
         order_reference:{type:"string",maxLength:128},signed_at:{type:"integer",description:"Unix seconds for merchants with configured signing keys"},signature:{type:"string",pattern:"^[0-9a-f]{128}$",description:"Ed25519 signature in lowercase hex for configured merchants"}}}}}},
     responses:{"200":{description:"Event recorded or safely replayed"},"400":{description:"Invalid event"},
       "401":{description:"Invalid merchant key"},"404":{description:"Handoff unavailable"},"409":{description:"Conflicting event or transition"}}}};
+  paths["/v1/merchant/offers/feed-import"]={post:{operationId:"importVerifiedMerchantFeed",
+    summary:"Import fresh offers for the authenticated verified merchant",
+    tags:["merchant-intelligence"],security:[{MerchantApiKey:[]}],
+    responses:{200:{description:"Applied and ignored offer counts"},400:{description:"Invalid offer feed"},
+      401:{description:"Invalid merchant key"},403:{description:"Merchant scope or verification required"},
+      503:{description:"Import temporarily unavailable"}}}};
   paths["/v1/merchant/offers/upsert"]={post:{operationId:"upsertMerchantOffers",summary:"Publish or update merchant offers",description:"Authenticated merchant write endpoint. Send x-merchant-key.",tags:["merchant-intelligence","merchant-feed"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Offers accepted"},400:{description:"Invalid offer"},401:{description:"Invalid merchant key"}}}};
   paths["/v1/merchant/profile/update"]={post:{operationId:"updateMerchantAgentProfile",summary:"Update merchant agent-commerce profile",description:"Authenticated merchant write endpoint. Send x-merchant-key.",tags:["merchant-intelligence","merchant-feed"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Profile updated"},400:{description:"Invalid profile"},401:{description:"Invalid merchant key"}}}};
   paths["/v1/product/resolve"]={get:{operationId:"resolveUniversalProductIdentity",summary:"Normalize universal product identity",description:"Resolve GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN signals into a stable identity key and product domain before purchase-decision execution.",tags:["universal-commerce","product-identity"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"gtin",schema:{type:"string"}},{in:"query",name:"isbn",schema:{type:"string"}},{in:"query",name:"mpn",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}}],responses:{200:{description:"Normalized product identity"}}}};
@@ -13449,6 +13506,7 @@ export default{
         return json(out,out.status||200,{"cache-control":out.ok?"public, max-age=60":"no-store"});
       }
       if(url.pathname==="/v1/merchant/diagnostic"&&request.method==="GET"){const out=await merchantDiagnosticApi(env,url);return json(out,out?.status||200);}
+      if(url.pathname==="/v1/merchant/offers/feed-import"&&request.method==="POST")return gpd33ImportMerchantFeed(request,env);
       if(url.pathname==="/v1/merchant/offers/upsert"&&request.method==="POST"){const merchant=await merchantByApiKey(env,request);if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401);let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await upsertMerchantOffers(env,merchant,body),200,{"cache-control":"no-store"});}catch(e){return json({ok:false,error:"merchant_offer_upsert_failed",detail:safeError(e)},400);}}
       if(url.pathname==="/v1/handoffs"&&request.method==="POST")return gpd33CreateBuyerHandoff(request,env);
       if(url.pathname==="/v1/handoffs/status"&&request.method==="GET")return gpd33BuyerHandoffStatus(request,env);

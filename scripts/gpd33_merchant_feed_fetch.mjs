@@ -1,5 +1,5 @@
 import {Resolver} from 'node:dns/promises';
-import {get} from 'node:https';
+import {get,request as httpsRequest} from 'node:https';
 import {BlockList,isIPv4} from 'node:net';
 import {pathToFileURL} from 'node:url';
 import {prepareMerchantOfferFeed,readBoundedJson,validateMerchantFeedApproval} from './gpd33_merchant_offer_feed.mjs';
@@ -29,10 +29,12 @@ export async function resolvePinnedPublicIpv4(hostname,signal,resolve=resolvePub
   return addresses[0];
 }
 
-export function requestPinnedHttps(url,{address,signal,headers={accept:'application/json','accept-encoding':'identity'}},getResponse=get){
+export function requestPinnedHttps(url,{
+  address,signal,headers={accept:'application/json','accept-encoding':'identity'},method='GET',body
+},transport=method==='GET'?get:httpsRequest){
   return new Promise((resolve,reject)=>{
-    const request=getResponse(url,{
-      agent:false,family:4,autoSelectFamily:false,signal,rejectUnauthorized:true,
+    const request=transport(url,{
+      agent:false,family:4,autoSelectFamily:false,signal,rejectUnauthorized:true,method,
       lookup:(_hostname,_options,callback)=>callback(null,address,4),
       headers
     },response=>{
@@ -44,6 +46,7 @@ export function requestPinnedHttps(url,{address,signal,headers={accept:'applicat
       resolve(response);
     });
     request.on('error',reject);
+    if(method!=='GET')request.end(body);
   });
 }
 
