@@ -34,23 +34,27 @@ function currencyPrice(value){
   return value;
 }
 
-export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
+export function validateMerchantFeedApproval(approval,now=Date.now()){
   const selected=approval?.merchant_id;
   const approvedUntil=utcTime(approval?.approved_until);
   const feedUrl=safeHttps(approval?.feed_url);
-  if(!UUID.test(selected||'')||!Number.isFinite(approvedUntil)||approvedUntil<=now
-    ||manifest?.schema!=='gpd-merchant-offer-feed-input-v1'||manifest?.merchant_id!==selected
-    ||safeHttps(manifest?.feed_url).href!==feedUrl.href)throw new Error('feed_approval_required');
-
-  const observed=utcTime(manifest.observed_at);
-  if(!Number.isFinite(observed)||observed<now-FRESHNESS_MS||observed>now+300000)throw new Error('stale_or_invalid_feed');
-  if(!Array.isArray(manifest.offers)||!manifest.offers.length||manifest.offers.length>200)throw new Error('offer_count_outside_limit');
+  if(!UUID.test(selected||'')||!Number.isFinite(approvedUntil)||approvedUntil<=now)throw new Error('feed_approval_required');
   if(!Array.isArray(approval.product_origins)||!approval.product_origins.length||approval.product_origins.length>10)throw new Error('approved_product_origins_required');
   const origins=new Set(approval.product_origins.map(value=>{
     const url=safeHttps(value);
     if(url.pathname!=='/')throw new Error('approved_product_origins_required');
     return url.origin;
   }));
+  return {selected,feedUrl,origins};
+}
+
+export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
+  const {selected,feedUrl,origins}=validateMerchantFeedApproval(approval,now);
+  if(manifest?.schema!=='gpd-merchant-offer-feed-input-v1'||manifest?.merchant_id!==selected
+    ||safeHttps(manifest?.feed_url).href!==feedUrl.href)throw new Error('feed_approval_required');
+  const observed=utcTime(manifest.observed_at);
+  if(!Number.isFinite(observed)||observed<now-FRESHNESS_MS||observed>now+300000)throw new Error('stale_or_invalid_feed');
+  if(!Array.isArray(manifest.offers)||!manifest.offers.length||manifest.offers.length>200)throw new Error('offer_count_outside_limit');
   const skus=new Set();
   const offers=manifest.offers.map((offer,index)=>{
     try{
@@ -79,7 +83,7 @@ export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
     feed_url:feedUrl.href,offer_count:offers.length,upsert_payload:{offers}};
 }
 
-async function readBoundedJson(path){
+export async function readBoundedJson(path){
   const info=await stat(path);
   if(!info.isFile()||info.size>MAX_BYTES)throw new Error('input_file_must_be_regular_and_at_most_256_KiB');
   const chunks=[];

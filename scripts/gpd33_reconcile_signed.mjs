@@ -27,7 +27,7 @@ function bytes(value, max) {
   return decoded;
 }
 
-function validatedRegistry(trust, environment) {
+export function validateGpd33EvidenceRegistry(trust, environment) {
   if (!trust || trust.schema_version !== 1 || trust.environment !== environment ||
     !trust.issuers || typeof trust.issuers !== 'object') {
     throw new Error('Environment trust policy is missing');
@@ -52,6 +52,9 @@ function validatedRegistry(trust, environment) {
         !authority.networks.every(network => typeof network === 'string' && qualifiedNetwork.test(network)))) {
       throw new Error('Settlement issuer scope is missing');
     }
+  }
+  if (authorities.size > 64 || !roles.every(role => [...authorities.values()].some(authority => authority.role === role))) {
+    throw new Error('Required evidence authority is missing');
   }
   return authorities;
 }
@@ -111,7 +114,7 @@ export function reconcileSignedGpd33Evidence(bundle, trust) {
     !Array.isArray(bundle.envelopes) || !bundle.envelopes.length || bundle.envelopes.length > 64) {
     throw new Error('Invalid signed evidence bundle');
   }
-  const authorities = validatedRegistry(trust, bundle.environment);
+  const authorities = validateGpd33EvidenceRegistry(trust, bundle.environment);
   const input = {schema_version:1,environment:bundle.environment,handoffs:[],orders:[],fees:[],receipts:[]};
   const includedIssuers = new Set();
   let metadata;
@@ -132,8 +135,7 @@ export function reconcileSignedGpd33Evidence(bundle, trust) {
 
   // Require every pinned authority so dropping an issuer's envelope cannot silently remove conflicting
   // records or refunds. A trusted source with no records must sign an explicit empty array.
-  if (includedIssuers.size !== authorities.size ||
-    roles.some(role => !Array.from(authorities.values()).some(authority => authority.role === role))) {
+  if (includedIssuers.size !== authorities.size) {
     throw new Error('Required evidence issuer is missing');
   }
   return {...reconcileGpd33Evidence(input), ...metadata, evidence:'signed_pinned_sources'};

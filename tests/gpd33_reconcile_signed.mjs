@@ -4,6 +4,7 @@ import {mkdtemp, rm, symlink, truncate, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {acquireGpd33Snapshot} from '../scripts/gpd33_reconcile_acquire.mjs';
+import {acquireHttpsGpd33Snapshot} from '../scripts/gpd33_reconcile_https.mjs';
 import {reconcileSignedGpd33Evidence} from '../scripts/gpd33_reconcile_signed.mjs';
 
 const handoffId = '00000000-0000-4000-8000-000000000001';
@@ -99,3 +100,61 @@ try {
   await rm(staging,{recursive:true,force:true});
 }
 console.log('PASS read-only acquisition of signed local issuer snapshots and unsafe-file rejection');
+
+
+const httpsTrust = {...trust, https_sources:Object.fromEntries(roles.map(role => [role,{
+  url:'https://evidence.example/snapshots/' + role,
+  ...(role === 'receipts' ? {authorization_env:'TEST_LEDGER_TOKEN'} : {})
+}]))};
+const headers = {'content-type':'application/json; charset=utf-8'};
+const calls = [];
+const httpsFetch = async (url, init) => {
+  const role = new URL(url).pathname.split('/').at(-1);
+  calls.push(role);
+  assert.equal(init.method,'GET');
+  assert.equal(init.redirect,'error');
+  assert.equal(init.headers.authorization,role === 'receipts' ? 'Bearer fixture-token' : undefined);
+  assert.equal(init.headers['accept-encoding'],'identity');
+  return new Response(JSON.stringify(seal(role)),{headers});
+};
+const httpsOptions = {fetchImpl:httpsFetch,env:{TEST_LEDGER_TOKEN:'fixture-token'}};
+assert.deepEqual(await acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,httpsOptions),report);
+assert.deepEqual(calls,roles);
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,merchantId,httpsOptions), /requested snapshot/);
+const rejectedSource = url => ({
+  ...httpsTrust, https_sources:{...httpsTrust.https_sources,handoffs:{url}}
+});
+for (const url of ['http://evidence.example/handoffs','https://user:secret@evidence.example/handoffs','https://127.0.0.1/handoffs',
+  'https://ledger.internal/handoffs','https://evidence.example/handoffs?access_token=mock',
+  'https://evidence.example:444/handoffs','https://evidence.example/snapshots/orders']) {
+  const prior = calls.length;
+  await assert.rejects(acquireHttpsGpd33Snapshot(rejectedSource(url),snapshotId,httpsOptions), /Invalid or repeated approved/);
+  assert.equal(calls.length,prior);
+}
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,{...httpsOptions,env:{}}), /bearer token/);
+const mocked = response => ({...httpsOptions,fetchImpl:async () => response});
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,mocked(Response.redirect('https://redirect.example'))), /Rejected evidence HTTPS/);
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,mocked(new Response('html'))), /Rejected evidence HTTPS/);
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,mocked(new Response('{}',{
+  headers:{...headers,'content-length':'1048577'}
+}))), /Rejected evidence HTTPS/);
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,mocked(new Response('{}',{
+  headers:{...headers,'content-encoding':'gzip'}
+}))), /Rejected evidence HTTPS/);
+const oversized = new ReadableStream({start(controller){
+  controller.enqueue(new Uint8Array(1024*1024));
+  controller.enqueue(new Uint8Array(1));
+  controller.close();
+}});
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,mocked(new Response(oversized,{headers}))), /exceeded the byte limit/);
+await assert.rejects(acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,mocked(new Response(JSON.stringify(seal('orders')),{headers}))), /configured evidence issuer/);
+const stopped = new AbortController();
+let cancelled = false;
+const stalled = new ReadableStream({cancel(){cancelled = true;}});
+const pending = acquireHttpsGpd33Snapshot(httpsTrust,snapshotId,{
+  ...mocked(new Response(stalled,{headers})),signal:stopped.signal
+});
+setTimeout(() => stopped.abort(), 10);
+await assert.rejects(pending,{name:'AbortError'});
+assert.equal(cancelled,true);
+console.log('PASS bounded approved HTTPS evidence acquisition with mocked responses and cancellation');

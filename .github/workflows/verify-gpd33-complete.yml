@@ -13,6 +13,8 @@ on:
       - scripts/gpd33_reconcile*.mjs
       - scripts/gpd33_seller_discovery.mjs
       - scripts/gpd33_merchant_offer_feed.mjs
+      - scripts/gpd33_merchant_feed_fetch.mjs
+      - scripts/gpd33_partner_review.mjs
       - tests/gpd33_*
       - .github/workflows/verify-gpd33-complete.yml
   workflow_dispatch:
@@ -44,6 +46,8 @@ jobs:
       - run: node tests/gpd33_reconcile_signed.mjs
       - run: node tests/gpd33_seller_discovery.mjs
       - run: node tests/gpd33_merchant_offer_feed.mjs
+      - run: node tests/gpd33_merchant_feed_fetch.mjs
+      - run: node tests/gpd33_partner_review.mjs
       - run: npm install --prefix "${RUNNER_TEMP}/gpd33" pg@8.16.3
       - run: GPD33_PG_MODULE="${RUNNER_TEMP}/gpd33/node_modules/pg/lib/index.js" node tests/gpd33_database.mjs
         env:

@@ -38,12 +38,16 @@ async function readBoundedJson(file, limit) {
   }
 }
 
+export async function readGpd33EvidenceRegistry(registryFile) {
+  return (await readBoundedJson(registryFile,maxRegistryBytes)).data;
+}
+
 export async function acquireGpd33Snapshot(directory, registryFile, expectedSnapshotId) {
   if (typeof expectedSnapshotId !== 'string' || !snapshotId.test(expectedSnapshotId)) {
     throw new Error('Expected snapshot UUID is required');
   }
   if (!(await lstat(directory)).isDirectory()) throw new Error('Evidence path must be a staging directory');
-  const {data:trust} = await readBoundedJson(registryFile,maxRegistryBytes);
+  const trust = await readGpd33EvidenceRegistry(registryFile);
   const issuers = Object.keys(trust?.issuers ?? {});
   if (!issuers.length || issuers.length > 64 || !issuers.every(name => issuerName.test(name))) {
     throw new Error('Invalid evidence issuer names');
