@@ -176,15 +176,28 @@ assert.equal(staged.metrics.ebay_calls,2);
 assert.ok(requests.some(url=>url.searchParams.get('fieldgroups')==='PRODUCT'));
 assert.ok(requests.length<=24,'Discovery used '+requests.length+' subrequests');
 assert.equal(fallback.new,1);
-const buildDecision=()=>api.buildUniversalPurchaseDecision(new Request(origin+'/v1/purchase-decision'),
+const buildDecision=(quantity=1)=>api.buildUniversalPurchaseDecision(new Request(origin+'/v1/purchase-decision'),
   {...env,EBAY_CLIENT_ID:'e',EBAY_CLIENT_SECRET:'s'},
-  {domain:'food_grocery',query:'Example Pasta',gtin:'012345678905',buyer_country:'JP'},origin);
+  {domain:'food_grocery',query:'Example Pasta',gtin:'012345678905',buyer_country:'JP',quantity},origin);
 mode='decision_verified';
 requests.length=0;
 assert.equal((await buildDecision()).purchase.handoff_offer_lookup_url,
   origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP');
 assert.equal(requests.filter(url=>url.pathname==='/rest/v1/products').length,1);
 assert.ok(!requests.some(url=>url.pathname==='/rest/v1/merchant_offers'));
+const bulkDecision=await buildDecision(3);
+assert.equal(bulkDecision.purchase.handoff_offer_lookup_url,
+  origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP&quantity=3');
+assert.equal((await buildDecision(101)).purchase.handoff_offer_lookup_url,null);
+for(const [quantity,status,blocker] of [
+  [undefined,'unknown','stock_quantity_unknown'],[2,'insufficient','stock_quantity_insufficient'],[3,'sufficient',null]
+]){
+  const evaluation=api.evaluateGenericOffer('food_grocery',
+    {stock_status:'in_stock',stock_quantity:quantity},{quantity:3,destination:{country:'JP'},requirements:{}}).purchase_evaluation;
+  assert.equal(evaluation.stock_quantity_evidence,status);
+  assert.equal(evaluation.hard_blockers.some(value=>value.startsWith('stock_quantity_')),Boolean(blocker));
+  if(blocker)assert.ok(evaluation.hard_blockers.includes(blocker));
+}
 mode='decision_unverified';
 assert.equal((await buildDecision()).purchase.handoff_offer_lookup_url,null);
 mode='http';
