@@ -10,6 +10,7 @@ on:
       - supabase/maintenance/github_*
       - .github/workflows/gpd33-production-maintenance.yml
       - supabase/gpd33_production_preflight.sql
+      - scripts/gpd33_reconcile.mjs
       - tests/gpd33_*
       - .github/workflows/verify-gpd33-complete.yml
   workflow_dispatch:
@@ -37,6 +38,7 @@ jobs:
           node-version: 24
       - run: node --check releases/GPD33_0_COMPLETE_WORKER.js
       - run: node tests/gpd33_worker.mjs
+      - run: node tests/gpd33_reconcile.mjs
       - run: npm install --prefix "${RUNNER_TEMP}/gpd33" pg@8.16.3
       - run: GPD33_PG_MODULE="${RUNNER_TEMP}/gpd33/node_modules/pg/lib/index.js" node tests/gpd33_database.mjs
         env:

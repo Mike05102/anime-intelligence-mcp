@@ -31,3 +31,9 @@
 UUIDは小文字。参照番号がある場合、`reference_hash` は `gpd33-order|<merchant_id>|<前後の空白を除いた参照番号>` のSHA-256を小文字16進にした値。参照番号がない場合はJSONの `null`。イベント本文にUnix秒の `signed_at` と署名を小文字16進128文字で送る。許容時刻差は5分。期限切れを再送するときは同じイベントUUIDと内容に新しい時刻で署名する。
 
 署名は受付時に検証する。追跡・集計上の証拠は引き続き販売業者の報告として扱う。外部注文台帳、実入金、仲介料との照合は別途必要。
+
+## 買い手のセルフサービス試験
+
+`POST /v1/handoffs` は既存Supabase Authでメールまたは電話の確認を済ませたアカウントのアクセストークンを受け取る。アカウントはSupabase Auth側で作成・確認する。Workerは `/auth/v1/user` で毎回認証し、本文の買い手IDは使用しない。買い手が在庫・配送と取引条件を確認したうえで `request_id`、`offer_id`、`quantity`、`buyer_country`、`buyer_authorized: true` を送る。同一の買い手とリクエストIDで再送すると同じ引き渡しを返す。販売業者には配送先の国だけを提示する。
+
+本番では既定で無効。起動条件は移行SQLの適用、既存Authの登録・本人確認経路の確認、`SUPABASE_PUBLISHABLE_KEY` または `SUPABASE_ANON_KEY`、`GPD_BUYER_SELF_SERVICE=1`。有効時はUTC日単位で1買い手3件・全体30件、数量100以下に制限する。商品在庫や配送の情報は販売業者の登録内容を参照し、注文や決済を実行しない。

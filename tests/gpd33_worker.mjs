@@ -63,6 +63,22 @@ globalThis.fetch=async (target,options={})=>{
       network:'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',extra:{feePayer:env.X402_WALLET_ADDRESS}}]});
   }
   if(url.pathname==='/rest/v1/merchants'){
+    if(mode==='directory-error')return Response.json({message:'unavailable'},{status:503});
+    if(mode==='directory'){
+      assert.equal(url.searchParams.get('select'),'id,slug,name,website_url,country_code');
+      assert.equal(url.searchParams.get('verified'),'eq.true');
+      assert.equal(url.searchParams.get('status'),'eq.active');
+      assert.equal(url.searchParams.get('order'),'id.asc');
+      assert.equal(url.searchParams.get('country_code'),'eq.JP');
+      assert.equal(url.searchParams.get('limit'),'2');
+      const rows=[
+        {id:'10000000-0000-4000-8000-000000000001',slug:'first',name:'First',country_code:'JP',
+          website_url:'https://merchant.example',merchant_api_key_hash:'must-not-leak'},
+        {id:'10000000-0000-4000-8000-000000000002',slug:'second',name:'Second',country_code:'JP',
+          website_url:'javascript:alert(1)'}
+      ];
+      return Response.json(url.searchParams.get('id')==='gt.'+rows[0].id?rows.slice(1):rows);
+    }
     return Response.json([{id:'10000000-0000-4000-8000-000000000001',status:'active'}]);
   }
   if(url.pathname.startsWith('/rest/v1/rpc/gpd33_')&&/handoff/.test(url.pathname)){
@@ -134,6 +150,7 @@ mode='catalog';
 simulateFailure=true;
 await assert.rejects(api.checkpointedUniversalDemandRefresh(env,1,'test',11*600000),/DB unavailable/);
 assert.equal(staged.rows.length,1);
+assert.equal(staged.metrics.query_family,'food_grocery:coffee');
 mode='resume';
 simulateFailure=false;
 requests.length=0;
@@ -145,6 +162,7 @@ mode='fallback';
 requests.length=0;
 const fallback=await api.checkpointedUniversalDemandRefresh({...env,YAHOO_CLIENT_ID:'y',EBAY_CLIENT_ID:'e',EBAY_CLIENT_SECRET:'s'},1,'test',13*600000);
 assert.equal(staged.catalog_limited,true);
+assert.equal(staged.metrics.query_family,'food_grocery:pasta');
 assert.equal(staged.metrics.catalog_errors,1);
 assert.ok(staged.metrics.yahoo_calls>=1);
 assert.equal(staged.metrics.ebay_calls,2);
@@ -188,4 +206,33 @@ assert.equal((await repeatHealth.json()).growth_24h.read_ok,true);
 assert.equal(requests.filter(url=>url.hostname==='db.example').length,3);
 assert.ok(requests.every(url=>!url.pathname.endsWith('/api_events')));
 delete globalThis.caches;
+mode='directory';
+const directory='/v1/merchant/directory?country=jp&limit=1';
+requests.length=0;
+assert.equal((await call(directory+'&after=bad')).status,400);
+assert.equal((await call('/v1/merchant/directory?limit=51')).status,400);
+assert.equal(requests.length,0,'Invalid directory parameters should not reach the database');
+const firstPage=await call(directory);
+assert.equal(firstPage.status,200);
+assert.match(firstPage.headers.get('cache-control'),/max-age=60/);
+const firstDirectory=await firstPage.json();
+assert.equal(firstDirectory.merchant_country,'JP');
+assert.equal(firstDirectory.merchants.length,1);
+assert.match(firstDirectory.merchants[0].offer_feed_url,/\/v1\/merchant\/feed\?merchant=first$/);
+assert.ok(!JSON.stringify(firstDirectory).includes('must-not-leak'));
+const lastPage=await (await call(directory+'&after='+firstDirectory.next_cursor)).json();
+assert.equal(lastPage.merchants[0].slug,'second');
+assert.equal(lastPage.merchants[0].website_url,null);
+assert.equal(lastPage.next_cursor,null);
+assert.equal(requests.length,2,'A directory page should use one Supabase request');
+const toolsResponse=await (await post('/mcp',{jsonrpc:'2.0',id:20,method:'tools/list',params:{}})).json();
+assert.ok(toolsResponse.result.tools.some(tool=>tool.name==='merchant_directory'));
+const mcpDirectory=await (await post('/mcp',{jsonrpc:'2.0',id:21,method:'tools/call',params:{
+  name:'merchant_directory',arguments:{country:'JP',limit:1}
+}})).json();
+assert.deepEqual(mcpDirectory.result.structuredContent,firstDirectory);
+mode='directory-error';
+assert.equal((await call(directory)).status,503);
+const directorySpec=await (await call('/openapi.json')).json();
+assert.equal(directorySpec.paths['/v1/merchant/directory'].get.operationId,'listVerifiedMerchants');
 console.log('PASS Worker routes, MCP, x402, identification, variants, source fallback, DB recovery and subrequest budget');

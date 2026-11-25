@@ -5499,6 +5499,46 @@ async function gpd33HandoffTrackingKey(env){
 function gpd33HandoffTrackingMessage(handoff,expires){
   return new TextEncoder().encode("gpd-handoff-read-v1|"+handoff+"|"+expires);
 }
+async function gpd33HandoffTrackingReceipt(env,result){
+  const expires=Math.floor(Date.now()/1000)+7*86400;
+  const signature=await crypto.subtle.sign("HMAC",await gpd33HandoffTrackingKey(env),
+    gpd33HandoffTrackingMessage(result.handoff_id,expires));
+  const encoded=Array.from(new Uint8Array(signature),byte=>byte.toString(16).padStart(2,"0")).join("");
+  return {...result,tracking_token:[result.handoff_id,expires,encoded].join("."),
+    tracking_expires_at:new Date(expires*1000).toISOString()};
+}
+async function gpd33CreateBuyerHandoff(request,env){
+  const headers={"cache-control":"no-store"};
+  const apiKey=env.SUPABASE_PUBLISHABLE_KEY||env.SUPABASE_ANON_KEY;
+  if(env.GPD_BUYER_SELF_SERVICE!=="1"||!env.REFRESH_KEY||!env.SUPABASE_URL||!apiKey){
+    return json({ok:false,error:"buyer_self_service_unavailable"},503,headers);
+  }
+  const authorization=request.headers.get("authorization")||"";
+  const invalid=()=>json({ok:false,error:"verified_buyer_required"},401,headers);
+  if(!/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(authorization)||authorization.length>8192)return invalid();
+  let body;
+  try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400,headers);}
+  const requestKey=gpd33HandoffId(body?.request_id),offer=gpd33HandoffId(body?.offer_id);
+  const country=typeof body?.buyer_country==="string"?body.buyer_country.trim().toUpperCase():"";
+  const units=body?.quantity;
+  if(!requestKey||!offer||!Number.isInteger(units)||units<1||units>100||!/^[A-Z]{2}$/.test(country)||body?.buyer_authorized!==true){
+    return json({ok:false,error:"buyer_consent_and_valid_offer_required"},400,headers);
+  }
+  try{
+    const response=await fetch(String(env.SUPABASE_URL).replace(/\/$/,"")+"/auth/v1/user",{
+      headers:{apikey:apiKey,authorization},redirect:"error",signal:AbortSignal.timeout(4000)
+    });
+    if([400,401,403].includes(response.status))return invalid();
+    if(!response.ok)throw new Error("buyer_auth_unavailable");
+    const user=await response.json(),buyer=gpd33HandoffId(user.id);
+    if(!buyer||user.is_anonymous===true||!(user.email_confirmed_at||user.phone_confirmed_at))return invalid();
+    const result=await gpd33Rpc(env,"create_buyer_handoff",{buyer,request_key:requestKey,offer,units,country});
+    return json(result.ok?await gpd33HandoffTrackingReceipt(env,result):result,
+      result.ok?200:(result.status||400),headers);
+  }catch{
+    return json({ok:false,error:"buyer_self_service_unavailable"},503,headers);
+  }
+}
 async function gpd33BuyerHandoffStatus(request,env){
   const headers={"cache-control":"no-store"};
   const credential=/^Bearer ([0-9a-f-]{36})\.([0-9]{10})\.([a-f0-9]{64})$/.exec(request.headers.get("authorization")||"");
@@ -5579,12 +5619,7 @@ async function gpd33HandoffApi(request,env,merchant=null){
   try{
     const result=await gpd33Rpc(env,method,args);
     if(method==="create_handoff"&&result.ok){
-      const expires=Math.floor(Date.now()/1000)+7*86400;
-      const signature=await crypto.subtle.sign("HMAC",await gpd33HandoffTrackingKey(env),
-        gpd33HandoffTrackingMessage(args.handoff,expires));
-      const encoded=Array.from(new Uint8Array(signature),byte=>byte.toString(16).padStart(2,"0")).join("");
-      return json({...result,tracking_token:[args.handoff,expires,encoded].join("."),
-        tracking_expires_at:new Date(expires*1000).toISOString()},200,headers);
+      return json(await gpd33HandoffTrackingReceipt(env,result),200,headers);
     }
     return json(result,result.ok?200:(result.status||400),headers);
   }catch{
@@ -5932,6 +5967,39 @@ async function updateMerchantProfile(env,merchant,body,origin){
 async function loadMerchantBySlug(env,slug){
   const rows=await sbOptional(env,`/merchants?select=*&slug=eq.${encodeURIComponent(String(slug||""))}&status=eq.active&limit=1`);
   return Array.isArray(rows)&&rows.length?rows[0]:null;
+}
+async function merchantDirectory(env,url,origin){
+  const country=(url.searchParams.get("country")||"").trim().toUpperCase();
+  const after=url.searchParams.get("after")||"";
+  const limit=Number(url.searchParams.get("limit")??20);
+  if((country&&!/^[A-Z]{2}$/.test(country))||(after&&!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(after))
+    ||!Number.isInteger(limit)||limit<1||limit>50){
+    return {ok:false,status:400,error:"invalid_directory_filter"};
+  }
+  const filters=new URLSearchParams({select:"id,slug,name,website_url,country_code",status:"eq.active",
+    verified:"eq.true",order:"id.asc",limit:String(limit+1)});
+  if(country)filters.set("country_code","eq."+country);
+  if(after)filters.set("id","gt."+after);
+  let rows;
+  try{
+    rows=await sb(env,"/merchants?"+filters);
+    if(!Array.isArray(rows))throw new Error("invalid_merchant_directory_response");
+  }catch{
+    return {ok:false,status:503,error:"merchant_directory_unavailable"};
+  }
+  const page=rows.slice(0,limit);
+  const merchants=page.map(row=>{
+    const slug=encodeURIComponent(row.slug);
+    const website=safeMerchantUrl(row.website_url);
+    const websiteAddress=website?new URL(website):null;
+    const websiteWithCredentials=websiteAddress?.username||websiteAddress?.password;
+    return {id:row.id,slug:row.slug,name:row.name,website_url:websiteWithCredentials?null:website,
+      country_code:row.country_code,profile_url:`${origin}/v1/merchant/profile?merchant=${slug}`,
+      offer_feed_url:`${origin}/v1/merchant/feed?merchant=${slug}`};
+  });
+  return {ok:true,schema:"gpd-merchant-directory-v1",merchants,merchant_country:country||null,
+    next_cursor:rows.length>limit?page.at(-1).id:null,merchant_onboarding_url:`${origin}/v1/merchant/register`,
+    offer_search_url:`${origin}/v1/merchant/search`};
 }
 async function merchantProfileApi(env,url,origin){
   const slug=url.searchParams.get("merchant")||url.searchParams.get("slug")||"";
@@ -6684,9 +6752,21 @@ function gpd33SelectDomain(slot,coverage,efficiency={}){
   }
   return domain;
 }
-function gpd33SelectQuery(domain,queries,history,now){
-  const ranked=[...new Set(queries)].map(query=>({query,
-    ...adaptiveExplorationScore({domain,query,source:"exploration"},history,now)}));
+function gpd33PlanPhase(slot){
+  const count=UNIVERSAL_GENERIC_DOMAINS.length;
+  const cycle=Math.floor(slot/(2*count));
+  return {cycle,phase:(cycle+slot%count)%4};
+}
+function gpd33PlanQueries(phase,longTail,rotated){
+  return phase===2&&longTail.length?longTail:rotated;
+}
+function gpd33SelectQuery(domain,queries,history,now,queriesSummary={}){
+  const ranked=[...new Set(queries)].map(query=>{
+    const family=universalQueryFamily(domain,query),recent=queriesSummary[family];
+    const base=adaptiveExplorationScore({domain,query,source:"exploration"},history,now);
+    return {query,...base,last_run_age_hours:recent?.last_at?(now-Date.parse(recent.last_at))/3600000:base.last_run_age_hours,
+      score:base.score+Math.min(12,12*Number(recent?.new||0)/(5+Number(recent?.calls||0)))};
+  });
   const fresh=ranked.filter(row=>row.last_run_age_hours===null||row.last_run_age_hours>=UNIVERSAL_DISCOVERY_POLICY.query_cooldown_hours);
   return (fresh.length?fresh:ranked).sort((a,b)=>gpd33RankQuery(b)-gpd33RankQuery(a))[0]?.query;
 }
@@ -6694,36 +6774,30 @@ function gpd33RankQuery(row){
   return row.score+universalIdentityRoleScore(row)+Math.min(3,Number(row.history_canonical_per_provider_call||0));
 }
 async function gpd33Plan(env,job){
-  const [coverage,events,paid]=await Promise.all([
+  const [coverage,planning,paid]=await Promise.all([
     job.coverage||gpd33Coverage(env),
-    sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.universal_discovery_batch&order=occurred_at.desc&limit=36"),
+    gpd33Rpc(env,"catalog_planning",{}).catch(()=>null),
     sbOptional(env,"/api_events?select=occurred_at,payer_hash,metadata&event_type=eq.paid_call&order=occurred_at.desc&limit=12")
   ]);
-  const efficiency={};
-  for(const row of Array.isArray(events)?events:[]){
-    const m=row.metadata||{};
-    if(m.exploration_source!=="scheduled_catalog")continue;
-    const d=efficiency[m.domain]||={new:0,runs:0};
-    d.new+=Number(m.canonical_new||0);d.runs++;
-  }
-  const domain=gpd33SelectDomain(job.slot,coverage,efficiency);
+  const domain=gpd33SelectDomain(job.slot,coverage,planning?.efficiency);
   const anchors=genericDomainProfile(domain).anchors||[];
-  const visit=Math.floor(job.slot/UNIVERSAL_GENERIC_DOMAINS.length);
-  const history=explorationHistoryFromRows(events,Date.now());
-  const rotated=anchors.map((_,i)=>anchors[(visit+i)%anchors.length]);
+  const {cycle,phase}=gpd33PlanPhase(job.slot);
+  const now=Date.now();
+  const history=explorationHistoryFromRows([],now);
   history.paidFamilies=new Map();
+  const rotated=anchors.map((_,i)=>anchors[(cycle+i)%anchors.length]);
   for(const row of paid||[]){
     if(isAdminE2ETestEvent(row,env)||isKnownSelfTestSignatureEvent(row))continue;
     const family=row?.metadata?.query_family||row?.metadata?.purchase_attribution?.query_family;
     if(family)history.paidFamilies.set(family,(history.paidFamilies.get(family)||0)+1);
   }
-  const frontier=visit%4===2?await sbOptional(env,
+  const frontier=phase===2?await sbOptional(env,
     `/api_events?select=metadata&event_type=eq.universal_catalog_frontier&metadata->>domain=eq.${encodeURIComponent(domain)}&order=occurred_at.desc&limit=4`):[];
   const longTail=(frontier||[]).filter(row=>row.metadata?.domain===domain)
     .flatMap(row=>Array.isArray(row.metadata?.candidates)?row.metadata.candidates.slice(0,2):[])
     .map(item=>item.query).filter(q=>typeof q==="string"&&q.length>=2&&q.length<=180);
-  let query=gpd33SelectQuery(domain,visit%4===2&&longTail.length?longTail:rotated,history,Date.now());
-  if(visit%4===3){
+  let query=gpd33SelectQuery(domain,gpd33PlanQueries(phase,longTail,rotated),history,now,planning?.queries?.[domain]);
+  if(phase===3){
     const stale=await sbOptional(env,"/products?select=metadata&product_type=eq."+domain+
       "&metadata->>gpd33_verified=eq.true&order=source_last_checked_at.asc.nullsfirst&limit=1");
     const gtin=gpd33StructuredGtin(stale?.[0]?.metadata?.identifiers?.gtin);
@@ -6734,15 +6808,16 @@ async function gpd33Plan(env,job){
   return {plan:{domain,query,catalog,page:job.source_page},...(job.coverage?{}:{coverage})};
 }
 async function gpd33FetchCatalog(plan){
+  const query=GPD33_USDA_QUERIES[plan.page%GPD33_USDA_QUERIES.length];
   const params=new URLSearchParams({api_key:"DEMO_KEY",dataType:"Branded",
-    query:GPD33_USDA_QUERIES[plan.page%GPD33_USDA_QUERIES.length],pageSize:String(GPD33_BUDGET.catalogPage),
+    query,pageSize:String(GPD33_BUDGET.catalogPage),
     pageNumber:String(1+Math.floor(plan.page/GPD33_USDA_QUERIES.length)%100)});
   const response=await fetch("https://api.nal.usda.gov/fdc/v1/foods/search?"+params,{signal:AbortSignal.timeout(12000)});
   if(response.status===429)return {limited:true};
   if(!response.ok)throw new Error("usda_http_"+response.status);
   const data=await response.json();
   if(!Array.isArray(data.foods))throw new Error("invalid_usda_response");
-  return {advance:true,candidates:Math.min(data.foods.length,GPD33_BUDGET.catalogPage),
+  return {advance:true,query,candidates:Math.min(data.foods.length,GPD33_BUDGET.catalogPage),
     rows:gpd33UsdaRows(data.foods,new Date().toISOString())};
 }
 async function universalDemandRefresh(env,plan,job){
@@ -6776,12 +6851,15 @@ async function checkpointedUniversalDemandRefresh(env,limit=1,trigger="scheduled
   const run_id=String(lease.slot),started_at=new Date().toISOString();
   const event=(phase,metadata={})=>logEvent(env,"universal_discovery_attempt",{endpoint:"cron",
     metadata:{run_id,trigger,phase,version:VERSION,started_at,...metadata}});
+  let plan;
   const commit=async(rows,metrics,catalog={})=>{
-    await call("stage",{rows,metrics,catalog_advance:!!catalog.advance,catalog_limited:!!catalog.limited});
+    const queryFamily=universalQueryFamily(plan.domain,metrics.provider==="usda_fdc"?catalog.query:plan.query);
+    await call("stage",{rows,metrics:{...metrics,query_family:queryFamily},
+      catalog_advance:!!catalog.advance,catalog_limited:!!catalog.limited});
     return call("commit");
   };
   try{
-    const plan=lease.plan||await call("plan",await gpd33Plan(env,lease));
+    plan=lease.plan||await call("plan",await gpd33Plan(env,lease));
     const result=lease.staged?await call("commit"):await universalDemandRefresh(env,plan,{commit,reserveCatalog:()=>call("reserve_catalog"),catalogLimited:()=>call("catalog_limited")});
     const finished_at=new Date().toISOString();
     const metrics={canonical_new:result.new,selected_queries:1,resumed:!!lease.staged,finished_at};
@@ -6923,7 +7001,8 @@ function universalSelftest(){
   add("candidate_relevance_gate",typeof universalCandidateRelevance==="function"&&UNIVERSAL_DISCOVERY_POLICY.canonical_relevance_floor>=UNIVERSAL_DISCOVERY_POLICY.relevance_floor);
   add("adaptive_exploration_scoring",gpd33RankQuery({score:0,history_candidates:30,history_gtin_candidates:10,history_canonical_new_count:4,history_runs:1})>gpd33RankQuery({score:0,history_candidates:30,history_runs:1}));
   add("query_family_cooldown",UNIVERSAL_DISCOVERY_POLICY.query_cooldown_hours>=24&&gpd33SelectQuery.toString().includes("last_run_age_hours"));
-  add("long_tail_guardrail",gpd33Plan.toString().includes("visit%4===2&&longTail.length?longTail:rotated"));
+  add("long_tail_guardrail",gpd33PlanQueries(2,["frontier"],["anchor"])[0]==="frontier"&&
+    gpd33PlanQueries(2,[],["anchor"])[0]==="anchor"&&gpd33PlanQueries(1,["frontier"],["anchor"])[0]==="anchor");
   add("domain_gap_guardrail",gpd33SelectDomain(24,{food_grocery:{remaining:10000},consumer_electronics:{remaining:0}})==="food_grocery");
   add("canonical_new_vs_upserted_metrics",persistUniversalCommerceObservations.toString().includes("canonical_new")&&persistUniversalCommerceObservations.toString().includes("canonical_upserted"));
   add("unknown_stock_fail_closed",evaluateGenericOffer.toString().includes("stock_status_unknown"));
@@ -9927,7 +10006,25 @@ function openapi(origin){
   paths["/v1/merchant/search"]={get:{operationId:"searchAgentReadyMerchantOffers",summary:"Search merchant offers optimized for AI purchasing agents",description:"Exact-MPN merchant offer search ranked by discoverability, trust, purchase readiness, fulfillment and evidence. Paid placement does not affect ranking.",tags:["merchant-intelligence","agent-commerce","parts"],security:[],parameters:[{in:"query",name:"part_number",required:true,schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}},{in:"query",name:"buyer_country",schema:{type:"string"}},{in:"query",name:"limit",schema:{type:"integer",default:20}}],responses:{200:{description:"Ranked merchant offers"},400:{description:"Exact part number required"}}}};
   paths["/v1/merchant/profile"]={get:{operationId:"getMerchantAgentProfile",summary:"Get merchant agent-commerce profile",tags:["merchant-intelligence","agent-commerce"],security:[],parameters:[{in:"query",name:"merchant",required:true,schema:{type:"string"}}],responses:{200:{description:"Merchant profile"},404:{description:"Merchant not found"}}}};
   paths["/v1/merchant/feed"]={get:{operationId:"getMerchantAgentFeed",summary:"Get machine-readable merchant offer feed",tags:["merchant-intelligence","agent-commerce"],security:[],parameters:[{in:"query",name:"merchant",required:true,schema:{type:"string"}},{in:"query",name:"limit",schema:{type:"integer",default:100}}],responses:{200:{description:"Merchant offer feed"}}}};
+  paths["/v1/merchant/directory"]={get:{operationId:"listVerifiedMerchants",summary:"Discover active verified merchants",
+    description:"Country filters the merchant's location. Check the merchant's offers for delivery coverage.",
+    tags:["merchant-intelligence","agent-commerce"],security:[],
+    parameters:[{in:"query",name:"country",schema:{type:"string",pattern:"^[A-Za-z]{2}$"}},
+      {in:"query",name:"after",schema:{type:"string",format:"uuid"},description:"Use next_cursor from the previous page with the same country filter."},
+      {in:"query",name:"limit",schema:{type:"integer",minimum:1,maximum:50,default:20}}],
+    responses:{200:{description:"Directory page with links to merchant profiles and offer feeds"},
+      400:{description:"Invalid directory filter"},503:{description:"Directory temporarily unavailable"}}}};
   paths["/v1/merchant/diagnostic"]={get:{operationId:"getMerchantAgentDiagnostic",summary:"Diagnose why an AI purchasing agent may or may not select a merchant",description:"Returns Agent Discoverability, Trust, Purchase Readiness, Compatibility Evidence and Fulfillment scores plus prioritized improvements.",tags:["merchant-intelligence","merchant-optimization"],security:[],parameters:[{in:"query",name:"merchant",required:true,schema:{type:"string"}}],responses:{200:{description:"Merchant optimization diagnostic"}}}};
+  paths["/v1/handoffs"]={post:{operationId:"createBuyerHandoff",summary:"Request a handoff as a verified buyer",
+    tags:["agent-commerce"],security:[{BuyerAccessToken:[]}],
+    requestBody:{required:true,content:{"application/json":{schema:{type:"object",
+      required:["request_id","offer_id","quantity","buyer_country","buyer_authorized"],
+      properties:{request_id:{type:"string",format:"uuid"},offer_id:{type:"string",format:"uuid"},
+        quantity:{type:"integer",minimum:1,maximum:100},buyer_country:{type:"string",pattern:"^[A-Z]{2}$"},
+        buyer_authorized:{type:"boolean",const:true}}}}}},
+    responses:{200:{description:"Handoff and tracking token"},401:{description:"Verified buyer required"},
+      404:{description:"Offer unavailable"},409:{description:"Request conflict"},429:{description:"Pilot limit reached"},
+      503:{description:"Self-service unavailable"}}}};
   paths["/v1/handoffs/status"]={get:{operationId:"getBuyerHandoffStatus",summary:"Read one authorized purchase handoff",
     tags:["agent-commerce"],security:[{HandoffTrackingToken:[]}],
     responses:{200:{description:"Current seller-reported state"},401:{description:"Invalid or expired tracking token"},
@@ -9954,7 +10051,7 @@ function openapi(origin){
   for(const s of INDEX402_SERVICES){if(s.path==="/v1/parts-intelligence")continue;const d=DISCOVERY_CONFIG[s.path];paths[s.path]={get:{operationId:s.path.slice(4).replace(/-([a-z])/g,(_,c)=>c.toUpperCase()).replace(/\//g,""),summary:s.name,description:`${d.description} WHEN TO USE: ${d.when_to_use} WHY PAY: ${d.why_pay||AGENT_SELECTION_POLICY.why_pay} BUYER OUTCOME: ${d.buyer_outcome||d.value}. ${s.path==="/v1/full-intelligence"?"Prefer this endpoint when the task needs two or more paid signals or a complete purchase decision.":"Use this specialist endpoint when its single signal fully answers the task; otherwise prefer Full Intelligence."}`,tags:[...(d.tags||[]),...(d.selection_triggers||[])],parameters:[{in:"query",name:"query",description:"Ordinary shopping request OR exact identity. Examples: 'I want a ONE PIECE figure', 'I want a ONE PIECE T-shirt', 'Hatsune Miku figure under $100', 'Naruto figure gift', character/franchise/category-only text, Japanese or multilingual descriptions, JAN/EAN-13, model number or canonical id. The interpreter distinguishes franchise merchandise such as 'ワンピースのTシャツ' from ordinary garment language such as '夏用のワンピース'. Broad requests are interpreted and ranked to a recommended canonical product before x402. The default favors relevance first, then popularity/demand, recency, data quality and purchasability; registered affiliate availability can improve purchasability but cannot override relevance. Exact canonical id remains the most deterministic option.",schema:{type:"string"},examples:{primary:{value:d.examples?.[0]||"Nendoroid Hatsune Miku"},secondary:{value:d.examples?.[1]||"4580590123456"}}},{in:"query",name:"id",description:"ANIME INTELLIGENCE canonical product UUID. Use either id or query.",schema:{type:"string",format:"uuid"}},{in:"query",name:"lang",schema:{type:"string",enum:DISCOVERY_LANGUAGES},example:"en"},{in:"query",name:"refresh",description:"Set to 1 to explicitly request a live market refresh where supported.",schema:{type:"string",enum:["0","1"]}},{in:"query",name:"buyer_country",description:"ISO alpha-2 buyer destination. Used by the country-aware purchase routing engine to rank actual purchase feasibility, ease, proxy need and known cost; defaults to JP.",schema:{type:"string",default:"JP"}},{in:"query",name:"postal_code",description:"Optional buyer destination postal code.",schema:{type:"string"}},{in:"query",name:"listing_url",description:"Optional listing URL for listing-match.",schema:{type:"string",format:"uri"}},{in:"query",name:"listing_title",description:"Optional listing title for listing-match when URL is unavailable.",schema:{type:"string"}}],"x-agent-intent":d.intent,"x-when-to-use":d.when_to_use,"x-why-pay":d.why_pay||AGENT_SELECTION_POLICY.why_pay,"x-buyer-outcome":d.buyer_outcome||d.value,"x-selection-triggers":d.selection_triggers||[],"x-prefer-over-generic-web":d.prefer_over||AGENT_SELECTION_POLICY.prefer_over_generic_web,"x-do-not-use-for":AGENT_SELECTION_POLICY.do_not_use_for,"x-agent-selection":agentSelectionMetadata(s.path),"x-agent-task-queries":discoveryTaskQueries(s.path),"x-commercial-discovery-keywords":COMMERCIAL_DISCOVERY_KEYWORDS,"x-value":d.value,"x-output-fields":d.output_fields,"x-search-languages":DISCOVERY_LANGUAGES,"x-multilingual-examples":MULTILINGUAL_DISCOVERY_EXAMPLES,"x-discovery-keywords":combinedDiscoveryKeywords(),"x-vague-intent-terms":GLOBAL_VAGUE_INTENT_TERMS,"x-payment-info":{protocol:"x402",protocols:["x402"],version:2,price:{mode:"fixed",currency:"USD",amount:s.price_usd.toFixed(3).replace(/0+$/g,"").replace(/\.$/,"")},price_usdc:s.price_usd,price_display:`${s.price_usd} USDC`,protocol_amount_atomic:String(Math.round(s.price_usd*1000000)),asset_decimals:6,protocol_amount_unit:"atomic token units",currency:"USDC",network:SOLANA_MAINNET},responses:{200:{description:"Paid intelligence response after x402 settlement",content:{"application/json":{schema:paidResponse,examples:{representative:{value:bazaarOutputExample(s.path)}}}}},402:{description:"x402 payment required. Read the canonical PAYMENT-REQUIRED header and retry the same URL with PAYMENT-SIGNATURE. X-PAYMENT is also accepted as a compatibility alias for AgentCore clients.",headers:{"PAYMENT-REQUIRED":{description:"Base64-encoded x402 v2 PaymentRequired object",schema:{type:"string"}}}},404:{description:"Product could not be resolved before payment; charged=false."},409:{description:"Reserved for exceptional identity conflicts. Normal multi-candidate shopping queries do not stop here; they are ranked to a commercial default before payment."},503:{description:"Payment infrastructure or required configuration is unavailable."}}}};}
   for(const p of Object.keys(paths))if(p.startsWith("/v1/travel/"))delete paths[p];
   for(const k of Object.keys(paths))if(k.startsWith("/v1/travel/"))delete paths[k];
-  return {openapi:"3.1.0",info:{title:"GLOBAL PURCHASE DECISION API",version:VERSION,description:"AI-native multilingual purchase decision infrastructure for physical products worldwide. The primary /v1/purchase-decision endpoint is cross-domain and x402-paid. Universal Product Graph identity supports GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN signals, autonomous demand-driven database growth, evidence freshness and merchant-market observation memory. Legacy Japanese anime collectible specialist endpoints remain available. Start from ordinary or highly ambiguous multilingual buyer language such as 'I want a ONE PIECE figure', 'a big cheap Pikachu plush', '部屋に飾れるかっこいいゾロ', or 'the Luffy figure I saw on TikTok'. The service separates hard identity constraints from soft preferences, exposes missing external context instead of inventing it, verifies maximum-budget matches before charging, requires exact identity for BUY-WAIT timing, separates noisy marketplace listing titles from canonical display identity, and can proceed when character, product, JAN and edition are initially unknown. ANIME INTELLIGENCE interprets the request, ranks canonical products and can then add price, risk, timing and buyer-country-aware purchase routing according to the paid endpoint selected. Search and identify figures, Nendoroid, Pokemon cards, ONE PIECE cards, plush, Gunpla and model kits, Ichiban Kuji prizes, acrylic stands, keychains, badges, limited goods, collaboration sneakers and anime apparel; then buy current price and market value, resale value, rarity, rerelease risk, counterfeit and bootleg risk, BUY-WAIT timing, where-to-buy routing or a complete purchase decision via x402. Discovery officially supports Japanese, English, Simplified/Traditional Chinese, Korean, Spanish, French and German. Other languages are best-effort only and are not part of readiness certification. Generic requests such as anime merch and category-only requests such as anime figure and Pokemon plush are supported. Generic vague requests enter a quality-ranked, category-diverse broad catalog mode. High-intent agent jobs include figure valuation and appraisal, exact-edition identification, resale-value checks, rarity and rerelease-risk analysis, bootleg or counterfeit screening, buy-or-wait timing, seller comparison and best-place-to-buy routing."},servers:[{url:origin}],"x-search-languages":DISCOVERY_LANGUAGES,"x-multilingual-examples":MULTILINGUAL_DISCOVERY_EXAMPLES,"x-discovery-keywords":combinedDiscoveryKeywords(),"x-vague-intent-terms":GLOBAL_VAGUE_INTENT_TERMS,"x-agent-selection-policy":AGENT_SELECTION_POLICY,"x-commercial-discovery-keywords":COMMERCIAL_DISCOVERY_KEYWORDS,"x-agent-task-queries":DISCOVERY_TASK_QUERIES,tags:[{name:"free-search",description:"Free canonical product discovery."},{name:"anime-collectibles",description:"Paid x402 intelligence for Japanese anime collectibles."},{name:"merchant-intelligence",description:"Merchant onboarding, machine-readable offers, diagnostics and agent-commerce profiles."}],components:{securitySchemes:{MerchantApiKey:{type:"apiKey",in:"header",name:"x-merchant-key",description:"One-time-issued Merchant API Key. Store securely; the server stores only its SHA-256 hash."},HandoffTrackingToken:{type:"http",scheme:"bearer"}}},paths};
+  return {openapi:"3.1.0",info:{title:"GLOBAL PURCHASE DECISION API",version:VERSION,description:"AI-native multilingual purchase decision infrastructure for physical products worldwide. The primary /v1/purchase-decision endpoint is cross-domain and x402-paid. Universal Product Graph identity supports GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN signals, autonomous demand-driven database growth, evidence freshness and merchant-market observation memory. Legacy Japanese anime collectible specialist endpoints remain available. Start from ordinary or highly ambiguous multilingual buyer language such as 'I want a ONE PIECE figure', 'a big cheap Pikachu plush', '部屋に飾れるかっこいいゾロ', or 'the Luffy figure I saw on TikTok'. The service separates hard identity constraints from soft preferences, exposes missing external context instead of inventing it, verifies maximum-budget matches before charging, requires exact identity for BUY-WAIT timing, separates noisy marketplace listing titles from canonical display identity, and can proceed when character, product, JAN and edition are initially unknown. ANIME INTELLIGENCE interprets the request, ranks canonical products and can then add price, risk, timing and buyer-country-aware purchase routing according to the paid endpoint selected. Search and identify figures, Nendoroid, Pokemon cards, ONE PIECE cards, plush, Gunpla and model kits, Ichiban Kuji prizes, acrylic stands, keychains, badges, limited goods, collaboration sneakers and anime apparel; then buy current price and market value, resale value, rarity, rerelease risk, counterfeit and bootleg risk, BUY-WAIT timing, where-to-buy routing or a complete purchase decision via x402. Discovery officially supports Japanese, English, Simplified/Traditional Chinese, Korean, Spanish, French and German. Other languages are best-effort only and are not part of readiness certification. Generic requests such as anime merch and category-only requests such as anime figure and Pokemon plush are supported. Generic vague requests enter a quality-ranked, category-diverse broad catalog mode. High-intent agent jobs include figure valuation and appraisal, exact-edition identification, resale-value checks, rarity and rerelease-risk analysis, bootleg or counterfeit screening, buy-or-wait timing, seller comparison and best-place-to-buy routing."},servers:[{url:origin}],"x-search-languages":DISCOVERY_LANGUAGES,"x-multilingual-examples":MULTILINGUAL_DISCOVERY_EXAMPLES,"x-discovery-keywords":combinedDiscoveryKeywords(),"x-vague-intent-terms":GLOBAL_VAGUE_INTENT_TERMS,"x-agent-selection-policy":AGENT_SELECTION_POLICY,"x-commercial-discovery-keywords":COMMERCIAL_DISCOVERY_KEYWORDS,"x-agent-task-queries":DISCOVERY_TASK_QUERIES,tags:[{name:"free-search",description:"Free canonical product discovery."},{name:"anime-collectibles",description:"Paid x402 intelligence for Japanese anime collectibles."},{name:"merchant-intelligence",description:"Merchant onboarding, machine-readable offers, diagnostics and agent-commerce profiles."}],components:{securitySchemes:{MerchantApiKey:{type:"apiKey",in:"header",name:"x-merchant-key",description:"One-time-issued Merchant API Key. Store securely; the server stores only its SHA-256 hash."},HandoffTrackingToken:{type:"http",scheme:"bearer"},BuyerAccessToken:{type:"http",scheme:"bearer",bearerFormat:"JWT"}}},paths};
 }
 
 function llmsTxt(origin){return `# GLOBAL PURCHASE DECISION
@@ -9964,6 +10061,7 @@ Build: ${BUILD_ID}
 GLOBAL PURCHASE DECISION is a multilingual paid purchase-decision layer for AI agents across products and industrial parts. Primary paid endpoint: POST/GET /v1/purchase-decision at 0.10 USDC via x402. It routes exact industrial parts to Parts Intelligence, anime collectibles to specialist collectible intelligence, and all other product categories to evidence-preserving generic commerce adapters. Database growth is autonomous: anime catalog collection, parts collection, generic demand observations, exact-GTIN promotion, and scheduled demand refresh. Legacy ANIME INTELLIGENCE specialist endpoints remain available for backwards compatibility.
 
 ## Merchant matching and buyer tracking
+- GET /v1/merchant/directory and the MCP merchant_directory tool list active verified merchants and link to their public profiles and offer feeds. Filter by merchant country and follow next_cursor for more results.
 - GET /v1/merchant/search with manufacturer, exact part_number and buyer_country. A handoff_candidate_offer_id identifies a verified merchant's matching offer with reported stock and destination coverage. Confirm the current terms and obtain buyer authorization before arranging a handoff.
 - GET /v1/handoffs/status with the issued bearer token returns the seller-reported state for one handoff. See ${origin}/openapi.json.
 
@@ -10226,6 +10324,14 @@ const MCP_TOOLS=[
     annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
   },
   {
+    name:"merchant_directory",
+    title:"Verified Merchant Directory",
+    description:"Discover active, verified merchants and their public offer feeds. Country is the merchant's location. Use each offer's delivery evidence for buyer eligibility.",
+    inputSchema:{type:"object",properties:{country:{type:"string",pattern:"^[A-Za-z]{2}$"},after:{type:"string",format:"uuid"},limit:{type:"integer",minimum:1,maximum:50,default:20}}},
+    outputSchema:{type:"object",additionalProperties:true},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}
+  },
+  {
     name:"merchant_agent_profile",
     title:"Merchant Agent Profile",
     description:"Read a merchant's machine-readable agent-commerce profile and feed endpoints.",
@@ -10306,6 +10412,12 @@ async function mcp(request,env,origin){
     if(name==="merchant_offer_search"){
       const data=await searchMerchantOffers(env,{part_number:args.part_number||"",manufacturer:args.manufacturer||"",buyer_country:args.buyer_country||"JP",limit:args.limit||20});
       return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="merchant_directory"){
+      const u=new URL(`${origin}/v1/merchant/directory`);
+      for(const name of ["country","after","limit"]){if(args[name]!==undefined)u.searchParams.set(name,args[name]);}
+      const data=await merchantDirectory(env,u,origin);
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data,...(!data.ok?{isError:true}:{})});
     }
     if(name==="merchant_agent_profile"){
       const u=new URL(`${origin}/v1/merchant/profile`);u.searchParams.set("merchant",args.merchant||"");
@@ -13201,8 +13313,13 @@ export default{
       if(url.pathname==="/v1/merchant/search"&&request.method==="GET"){const out=await searchMerchantOffers(env,{part_number:url.searchParams.get("part_number")||url.searchParams.get("mpn")||"",manufacturer:url.searchParams.get("manufacturer")||"",buyer_country:url.searchParams.get("buyer_country")||"",limit:url.searchParams.get("limit")||20});return json(out,out?.status||200);}
       if(url.pathname==="/v1/merchant/profile"&&request.method==="GET"){const out=await merchantProfileApi(env,url,origin);return json(out,out?.status||200);}
       if(url.pathname==="/v1/merchant/feed"&&request.method==="GET"){const out=await merchantFeedApi(env,url);return json(out,out?.status||200,{"cache-control":"public, max-age=60"});}
+      if(url.pathname==="/v1/merchant/directory"&&request.method==="GET"){
+        const out=await merchantDirectory(env,url,origin);
+        return json(out,out.status||200,{"cache-control":out.ok?"public, max-age=60":"no-store"});
+      }
       if(url.pathname==="/v1/merchant/diagnostic"&&request.method==="GET"){const out=await merchantDiagnosticApi(env,url);return json(out,out?.status||200);}
       if(url.pathname==="/v1/merchant/offers/upsert"&&request.method==="POST"){const merchant=await merchantByApiKey(env,request);if(!merchant)return json({ok:false,error:"invalid_merchant_key"},401);let body={};try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}try{return json(await upsertMerchantOffers(env,merchant,body),200,{"cache-control":"no-store"});}catch(e){return json({ok:false,error:"merchant_offer_upsert_failed",detail:safeError(e)},400);}}
+      if(url.pathname==="/v1/handoffs"&&request.method==="POST")return gpd33CreateBuyerHandoff(request,env);
       if(url.pathname==="/v1/handoffs/status"&&request.method==="GET")return gpd33BuyerHandoffStatus(request,env);
       if((url.pathname==="/v1/merchant/handoffs"&&request.method==="GET")||
           (url.pathname==="/v1/merchant/handoffs/events"&&request.method==="POST")){

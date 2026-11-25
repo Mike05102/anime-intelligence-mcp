@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {testCatalogPlanning} from './gpd33_catalog_planning.mjs';
 import {testHandoffJourney} from './gpd33_handoff_journey.mjs';
 import {pathToFileURL} from 'node:url';
 
@@ -20,6 +21,7 @@ assert.equal(preflight.tables.products.columns.id.type,'uuid');
 assert.equal(preflight.tables.products.indexes.products_pkey.valid,true);
 assert.deepEqual(preflight.gpd33_relation_names,[]);
 await db.query(await readSql('supabase/migrations/20261125053000_gpd33_catalog.sql'));
+await db.query(await readSql('supabase/migrations/20261125093500_gpd33_catalog_planning.sql'));
 const indexCheck=await db.query("select to_regclass('public.gpd33_source_product_key')::text as extra, to_regclass('public.fixture_product_key_idx')::text as existing");
 assert.deepEqual(indexCheck.rows[0],{extra:null,existing:'fixture_product_key_idx'});
 const sql=async(q,args=[])=>(await db.query(q,args)).rows;
@@ -44,7 +46,7 @@ const claims=await Promise.all([action('claim',tokenA,100),
 assert.equal(claims.filter(x=>x.claimed).length,1);
 const owner=claims[0].claimed?tokenA:tokenB, other=claims[0].claimed?tokenB:tokenA;
 await action('plan',owner,100,{plan:{domain:'food_grocery',query:'pasta'}});
-await action('stage',owner,100,{rows,metrics:{provider:'usda_fdc',calls:1,provider_errors:0,candidates:2,identified:2},catalog_advance:true});
+await action('stage',owner,100,{rows,metrics:{provider:'usda_fdc',calls:1,provider_errors:0,candidates:2,identified:2,query_family:'food_grocery:pasta'},catalog_advance:true});
 await assert.rejects(action('commit',other,100),/lease expired/);
 await db.query('reset role');
 await db.query("alter table public.products add check (source_product_key not like '%12345670')");
@@ -78,8 +80,10 @@ assert.equal(coverage.books_media.canonical,0);
 const metrics=await one('select public.gpd33_run_metrics() result');
 assert.equal(metrics.jobs_completed_24h,1);
 assert.equal(metrics.providers_7d.usda_fdc.new,1);
+await testCatalogPlanning(one);
 await db.query('reset role; set role anon');
 await assert.rejects(sql('select public.gpd33_run_metrics()'),/permission denied/);
+await assert.rejects(sql('select public.gpd33_catalog_planning()'),/permission denied/);
 await db.query('reset role; set role service_role');
 const racePayload=JSON.stringify([product('4901234567894')]);
 const concurrentWrites=await Promise.all([one('select public.gpd33_catalog_batch($1) result',[racePayload]),
@@ -248,7 +252,11 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
     handoffs_created:2,merchant_acceptances:2,orders_reported_by_merchants:1,cancellations_reported_by_merchants:1});
   await db.query('reset role');
   await db.query(await readSql('supabase/migrations/20261125090000_gpd33_buyer_tracking.sql'));
+  await db.query("alter table merchant_offers add stock_status text, add ships_to text[], add stock_quantity int");
+  await db.query("update merchant_offers set stock_status='in_stock',ships_to=array['JP'],stock_quantity=2 where id=$1",[offer]);
+  await db.query(await readSql('supabase/migrations/20261125100000_gpd33_buyer_self_service.sql'));
   await db.query('set role anon');
+  await assert.rejects(sql('select public.gpd33_create_buyer_handoff(null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
   await db.query('reset role; set role service_role');

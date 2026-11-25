@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {assertReconciliationFromHandoff} from './gpd33_reconcile_journey.mjs';
 import {createHash, createHmac, generateKeyPairSync, randomUUID, sign} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 
@@ -6,13 +7,17 @@ export async function testHandoffJourney(query, seller, offer) {
   const source = await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js', import.meta.url), 'utf8');
   const {default: worker} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
   const env = {REFRESH_KEY: 'fixture-admin', SUPABASE_URL: 'https://isolated-db.example', SUPABASE_SECRET_KEY: 'fixture-db'};
+  const buyer = randomUUID();
+  const buyerToken = 'fixture.buyer.token';
   const keys = generateKeyPairSync('ed25519');
   const rawKey = Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url').toString('hex');
   env.GPD_MERCHANT_SIGNING_KEYS = JSON.stringify({[seller]:rawKey});
   const rpc = {
     gpd33_create_handoff: ['handoff', 'offer', 'units'],
+    gpd33_create_buyer_handoff: ['buyer', 'request_key', 'offer', 'units', 'country'],
     gpd33_record_handoff_event: ['seller', 'handoff', 'event', 'new_state', 'reference_hash'],
     gpd33_buyer_handoff_status: ['handoff'],
+    gpd33_merchant_handoffs: ['seller','lookup'],
     gpd33_handoff_outcomes: [],
     gpd33_business_outcomes: []
   };
@@ -23,6 +28,12 @@ export async function testHandoffJourney(query, seller, offer) {
     const url = new URL(input);
     assert.equal(url.origin, env.SUPABASE_URL);
     dbCalls++;
+    if (url.pathname === '/auth/v1/user') {
+      assert.equal(init.headers.apikey, 'fixture-publishable');
+      return init.headers.authorization === 'Bearer ' + buyerToken
+        ? Response.json({id:buyer,email_confirmed_at:'2026-11-25T00:00:00Z'})
+        : Response.json({error:'unauthenticated'}, {status:401});
+    }
     if (url.pathname === '/rest/v1/merchant_offers') {
       assert.equal(url.searchParams.get('normalized_part_number'), 'eq.EX-123');
       const eligible = await query("select to_jsonb(o) result from merchant_offers o where id=$1 and active", [offer]);
@@ -56,7 +67,6 @@ export async function testHandoffJourney(query, seller, offer) {
     body: body ? JSON.stringify(body) : undefined
   }), env, {waitUntil(task) { pending.push(task); }});
   try {
-    const handoff = randomUUID();
     const admin = {'x-refresh-key': env.REFRESH_KEY};
     const search = '/v1/merchant/search?part_number=EX-123&manufacturer=Example';
     const unscoped = await (await request(search, {})).json();
@@ -64,11 +74,25 @@ export async function testHandoffJourney(query, seller, offer) {
     const scoped = await (await request(search + '&buyer_country=JP', {})).json();
     assert.equal(scoped.handoff_candidate_offer_id, offer);
     assert.equal(scoped.offers.filter(item => item.handoff_candidate).length, 1);
-    const create = await request('/admin/handoffs', admin, {
-      handoff_id:handoff, offer_id:scoped.handoff_candidate_offer_id, quantity:1, buyer_authorized:true
-    });
-    assert.equal(create.status, 200);
-    const {tracking_token: token} = await create.json();
+    const buyerHeaders = {authorization:'Bearer '+buyerToken};
+    const input = {request_id:randomUUID(),offer_id:scoped.handoff_candidate_offer_id,
+      quantity:1,buyer_country:'JP',buyer_authorized:true,buyer_id:randomUUID()};
+    const createBuyer = (body,headers=buyerHeaders) => request('/v1/handoffs',headers,body);
+    assert.equal((await createBuyer(input)).status,503);
+    env.GPD_BUYER_SELF_SERVICE='1';
+    env.SUPABASE_PUBLISHABLE_KEY='fixture-publishable';
+    assert.equal((await createBuyer(input,{authorization:'Bearer bad.test.token'})).status,401);
+    assert.equal((await createBuyer({...input,buyer_authorized:false})).status,400);
+    assert.equal((await createBuyer({...input,buyer_country:'US'})).status,404);
+    assert.equal((await createBuyer({...input,quantity:3})).status,404);
+    const [create,retry] = await Promise.all([createBuyer(input),createBuyer(input)]);
+    assert.equal(create.status,200,await create.clone().text());
+    assert.equal(retry.status,200,await retry.clone().text());
+    const created = await create.json(), repeated = await retry.json();
+    const {tracking_token:token,handoff_id:handoff} = created;
+    assert.equal(repeated.handoff_id,handoff);
+    assert.equal(await query('select buyer_id result from gpd33_buyer_handoffs where handoff_id=$1',[handoff]),buyer);
+    assert.equal((await createBuyer({...input,quantity:2})).status,409);
     const [id, expiry, signature] = token.split('.');
     assert.equal(id, handoff);
     const readStatus = (credential) => request('/v1/handoffs/status', {authorization:'Bearer ' + credential});
@@ -80,6 +104,9 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal(dbCalls, countBefore, 'Invalid credentials must be rejected before querying Postgres');
     assert.equal((await (await readStatus(token)).json()).handoff_state, 'requested');
     const merchant = {'x-merchant-key':'fixture-merchant'};
+    const inbox = await (await request('/v1/merchant/handoffs?handoff_id='+handoff,merchant)).json();
+    assert.equal(inbox.handoffs[0].destination,'JP');
+    assert.ok(!JSON.stringify(inbox).includes(buyer));
     for (const state of ['accepted', 'order_reported', 'cancelled']) {
       const body = {handoff_id:handoff,event_id:randomUUID(),state};
       if (state !== 'accepted') body.order_reference = 'fixture-order';
@@ -106,11 +133,18 @@ export async function testHandoffJourney(query, seller, offer) {
       assert.equal(result.handoff_state, state);
       const replay = await request(eventPath,merchant,signed);
       assert.equal((await replay.json()).replayed, true);
+      if (state === 'order_reported' || state === 'cancelled') await assertReconciliationFromHandoff(query,handoff);
     }
     const outcomes = await (await request('/admin/business-outcomes', admin)).json();
     assert.equal(outcomes.merchant_reported_handoffs.orders_reported_by_merchants, 2);
     assert.equal(outcomes.metrics.verified_outcomes.confirmed_goods_transactions, null);
     assert.equal(outcomes.metrics.verified_outcomes.reconciled_external_revenue_usdc, null);
+    for(let i=0;i<2;i++){
+      assert.equal((await createBuyer({...input,request_id:randomUUID()})).status,200);
+    }
+    assert.equal((await createBuyer({...input,request_id:randomUUID()})).status,429);
+    assert.equal((await createBuyer(input)).status,200);
+
   } finally {
     await Promise.allSettled(pending);
     globalThis.fetch = originalFetch;
