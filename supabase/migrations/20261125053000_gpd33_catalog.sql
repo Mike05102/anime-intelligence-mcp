@@ -1,5 +1,9 @@
 begin;
 
+-- Abort on lock contention or a long index build so the transaction can roll back.
+set local lock_timeout = '2s';
+set local statement_timeout = '30s';
+
 create function public.gpd33_barcode(value text) returns text
 language sql immutable strict parallel safe set search_path = '' as $$
   select case when value ~ '^([0-9]{8}|[0-9]{12,14})$'
@@ -18,7 +22,7 @@ create index gpd33_product_legacy_key on public.products
 create index gpd33_product_metadata_barcode on public.products
   (public.gpd33_barcode(metadata->'identifiers'->>'gtin'))
   where metadata->'identifiers'->>'gtin' is not null;
-create index if not exists gpd33_source_product_key on public.products (source_product_key);
+create index gpd33_source_product_key on public.products (source_product_key);
 create unique index gpd33_verified_key on public.products (source_product_key)
   where metadata->>'gpd33_verified' = 'true';
 
@@ -255,14 +259,6 @@ begin
     if event_slot%24=0 then
       delete from public.gpd33_runs
         where slot in (select slot from public.gpd33_runs where attempted_at<now()-interval '30 days' order by slot limit 288);
-      delete from public.api_events e where e.ctid in (
-        select ctid from public.api_events
-        where occurred_at<now()-interval '14 days' and metadata->>'version'='33.0.0'
-          and (event_type in ('universal_discovery_attempt','universal_provisional_catalog_batch','universal_catalog_frontier','universal_expansion_run')
-            or (event_type='universal_discovery_batch' and metadata->>'exploration_source'='scheduled_catalog')
-            or (event_type='universal_product_snapshot' and metadata->>'gpd33_scheduled'='true'))
-        order by occurred_at limit 400
-      );
     end if;
     return result;
   elsif action='failed' then

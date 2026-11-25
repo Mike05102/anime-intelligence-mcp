@@ -8,6 +8,8 @@
 - [Supabase スキーマ変更](../supabase/migrations/20261125053000_gpd33_catalog.sql)
 - [Worker 統合テスト](../tests/gpd33_worker.mjs) と [PostgreSQL 統合テスト](../tests/gpd33_database.mjs)
 
+本番適用前の [読み取り専用スキーマ確認SQL](../supabase/gpd33_production_preflight.sql) を用意した。移行SQLはトランザクション内でロック待ちを2秒、各文を30秒に制限する。既存の `api_events` は定期削除の対象から外し、GPD専用ジョブ履歴の保持期限は30日とする。
+
 本番 Worker への貼り付け用ファイルは Cloudflare の ES module 形式。既存のバインディングと10分 Cron を使用する。一般商品探索の稼働には、同梱の SQL を先に適用した Supabase が必要。公開ヘルスの `verified_catalog` と `operations` が `null` の場合、RPC の利用可否を確認する。v32.9 を再デプロイすることで Worker のロールバックができる。追加した DB オブジェクトや登録済み商品は保持する。
 
 ## 局所検証

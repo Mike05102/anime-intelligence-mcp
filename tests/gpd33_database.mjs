@@ -9,9 +9,15 @@ const connection={host:process.env.PGHOST,port:process.env.PGPORT,user:process.e
 const db=new pg.Client(connection);
 const concurrent=new pg.Client(connection);
 await Promise.all([db.connect(),concurrent.connect()]);
-for(const file of ['tests/gpd33_fixture.sql','supabase/migrations/20261125053000_gpd33_catalog.sql']){
-  await db.query(await readFile(new URL('../'+file,import.meta.url),'utf8'));
-}
+const readSql=(path)=>readFile(new URL('../'+path,import.meta.url),'utf8');
+await db.query(await readSql('tests/gpd33_fixture.sql'));
+await db.query(`insert into api_events(event_type,occurred_at,metadata)
+  values ('universal_expansion_run',now()-interval '40 days','{"version":"33.0.0"}')`);
+const preflight=JSON.parse((await db.query(await readSql('supabase/gpd33_production_preflight.sql'))).rows[0].gpd33_preflight);
+assert.equal(preflight.tables.products.columns.metadata.type,'jsonb');
+assert.equal(preflight.tables.products.indexes.products_pkey.valid,true);
+assert.deepEqual(preflight.gpd33_relation_names,[]);
+await db.query(await readSql('supabase/migrations/20261125053000_gpd33_catalog.sql'));
 const sql=async(q,args=[])=>(await db.query(q,args)).rows;
 const one=async(q,args=[])=>(await sql(q,args))[0].result;
 const tokenA='00000000-0000-0000-0000-000000000001';
@@ -75,5 +81,11 @@ const concurrentWrites=await Promise.all([one('select public.gpd33_catalog_batch
   concurrent.query('select public.gpd33_catalog_batch($1) result',[racePayload]).then(r=>r.rows[0].result)]);
 assert.equal(concurrentWrites.reduce((sum,x)=>sum+x.new,0),1);
 assert.equal(await one("select count(*)::int result from products where source_product_key='universal:gtin:04901234567894'"),1);
+await db.query("reset role; revoke delete on api_events from service_role; update gpd33_job set expires_at=now()-interval '1 second'; set role service_role");
+assert.equal((await action('claim',owner,120)).claimed,true);
+await action('plan',owner,120,{plan:{domain:'food_grocery'}});
+await action('stage',owner,120,{rows:[],metrics:{}});
+await action('commit',owner,120);
+assert.equal(await one('select count(*)::int result from api_events'),1);
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');

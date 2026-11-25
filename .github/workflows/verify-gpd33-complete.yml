@@ -5,6 +5,7 @@ on:
     paths:
       - releases/GPD33_0_COMPLETE_WORKER.js
       - supabase/migrations/20261125053000_gpd33_catalog.sql
+      - supabase/gpd33_production_preflight.sql
       - tests/gpd33_*
       - .github/workflows/verify-gpd33-complete.yml
   workflow_dispatch:
