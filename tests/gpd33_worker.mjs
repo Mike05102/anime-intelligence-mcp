@@ -241,6 +241,17 @@ assert.equal(catalogReads.length,1);
 assert.equal(catalogReads[0].searchParams.get('select'),'source_product_key,manufacturer,product_type,gpd33_verified:metadata->gpd33_verified');
 assert.equal(catalogReads[0].searchParams.get('source_product_key'),'eq.universal:gtin:00012345678905');
 assert.ok(!requests.some(url=>url.hostname==='api.ebay.com'||url.hostname.endsWith('yahooapis.jp')));
+const decisionWithManufacturer=(manufacturer)=>api.buildUniversalPurchaseDecision(
+  new Request(origin+'/v1/purchase-decision'),env,
+  {product:{gtin:'012345678905',manufacturer},buyer_country:'JP'},origin);
+assert.equal((await decisionWithManufacturer('EXAMPLE')).purchase.handoff_offer_lookup_url,
+  origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP&manufacturer=EXAMPLE');
+assert.equal((await decisionWithManufacturer('Other')).purchase.handoff_offer_lookup_url,null);
+for(const [brand,matched] of [['Example',true],['Other',false],[null,false]]){
+  const evaluation=api.evaluateGenericOffer('food_grocery',{brand,gtin:'012345678905'},
+    {product:{manufacturer:'Example',identifiers:{gtin:'012345678905'}}}).purchase_evaluation;
+  assert.equal(evaluation.identity.match,matched);
+}
 const bulkDecision=await buildDecision(3);
 assert.equal(bulkDecision.purchase.handoff_offer_lookup_url,
   origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP&quantity=3');

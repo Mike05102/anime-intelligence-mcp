@@ -6375,7 +6375,12 @@ function genericOfferIdentityMatch(domain,o,intent,body={}){
   const ids=intent?.product?.identifiers||normalizeUniversalIdentifiers(body,intent?.original_query||"");
   const og=gpd33Barcode(o?.gtin||o?.jan_code);
   const explicit=ids.gtin||((ids.isbn&&validGtin(ids.isbn))?ids.isbn:null);
-  if(explicit){const match=!!og&&og===gpd33Barcode(explicit);return {known:true,match,method:"gtin_or_isbn",confidence:match?1:0};}
+  if(explicit){
+    const expectedMaker=gpd33Part(body?.product?.manufacturer||body?.manufacturer||intent?.product?.manufacturer);
+    const offeredMaker=gpd33Part(o?.manufacturer||o?.brand);
+    const match=!!og&&og===gpd33Barcode(explicit)&&(!expectedMaker||offeredMaker===expectedMaker);
+    return {known:true,match,method:"gtin_or_isbn",confidence:match?1:0};
+  }
   const wanted=gpd33Variant(intent?.product?.mpn||body?.model||body?.sku||ids.mpn||ids.sku);
   if(wanted){
     const asMpn=!!(intent?.product?.mpn||ids.mpn), actual=asMpn?(o?.mpn||o?.manufacturer_part_number):body?.model?o?.model_number:o?.sku;
@@ -6778,14 +6783,16 @@ async function persistUniversalCommerceObservations(env,body,result,job=null){
         const canonicalProducts=await sbOptional(env,"/products?select="+encodeURIComponent(fields)+
           "&source_product_key=eq."+encodeURIComponent(productKey)+"&limit="+limit);
         const rows=Array.isArray(canonicalProducts)?canonicalProducts:[];
-        if(rows.some(product=>
-          UNIVERSAL_GENERIC_DOMAINS.includes(product.product_type)&&(product.product_type===domain||domain==="general_commerce")&&
-          (product.metadata?.gpd33_verified===true||product.gpd33_verified===true)&&gpd33Part(product.manufacturer)&&
-          product.source_product_key===productKey)){
+        const wantedMaker=gpd33Part(body?.product?.manufacturer||body?.manufacturer);
+        const matching=rows.filter(product=>product.source_product_key===productKey&&
+          (!wantedMaker||gpd33Part(product.manufacturer)===wantedMaker));
+        if(matching.some(product=>UNIVERSAL_GENERIC_DOMAINS.includes(product.product_type)&&
+          (product.product_type===domain||domain==="general_commerce")&&
+          (product.metadata?.gpd33_verified===true||product.gpd33_verified===true)&&gpd33Part(product.manufacturer))){
           verifiedCatalogGtin=barcode;
         }
         if(canResolveEbay){
-          canonicalOfferResolution=await resolveCanonicalOffersForProducts(env,rows,domain,query);
+          canonicalOfferResolution=await resolveCanonicalOffersForProducts(env,matching,domain,query);
           for(const linked of canonicalOfferResolution.offers)discovery.push(canonicalLinkedOfferRecord(domain,query,linked));
         }
       }catch(e){canonicalOfferResolution.errors.push({stage:"resolver_outer",error:safeError(e)});}
@@ -7624,7 +7631,7 @@ function inferPurchaseDomain(body={},query="",mpn=""){
   if(/anime|nendoroid|figma|pokemon|one piece|naruto|hatsune|miku|フィギュア|アニメ|ポケモン|ワンピース|ねんどろいど/.test(q))return "anime_collectibles";
   const industrial=/\b(?:plc|servo|inverter|encoder|bearing|linear guide|relay|sensor|proximity|contactor|connector|mosfet|igbt|gan|sic|mcu|fpga|pneumatic|solenoid|actuator|reducer|gearbox|motor driver|industrial|mro|fa)\b|サーボ|インバータ|エンコーダ|ベアリング|センサ|近接|リレー|コネクタ|減速機|アクチュエータ|産業部品|FA部品/i.test(String(query||""));
   const knownMfr=!!inferPurchaseManufacturer(query,body?.manufacturer||body?.product?.manufacturer||"");
-  if(industrial||knownMfr)return "parts";
+  if(industrial||(knownMfr&&(mpn||!normalizeUniversalIdentifiers(body,query).gtin)))return "parts";
   if(/\b(?:brake pad|oil filter|spark plug|oe number|oem number|vehicle fitment|car part|auto part)\b|自動車部品|車種適合|純正品番/i.test(String(query||"")))return "automotive_parts";
   if(/\b(?:laptop|notebook|smartphone|phone|tablet|camera|headphones?|earbuds?|television|tv|monitor|router|ssd|gpu|cpu|keyboard|mouse|console)\b|スマホ|ノートPC|パソコン|カメラ|イヤホン|テレビ|モニター|ルーター/i.test(String(query||"")))return "consumer_electronics";
   if(/\b(?:refrigerator|washing machine|vacuum|microwave|air conditioner|rice cooker)\b|冷蔵庫|洗濯機|掃除機|電子レンジ|エアコン|炊飯器/i.test(String(query||"")))return "home_appliances";
@@ -7819,8 +7826,10 @@ async function buildUniversalPurchaseDecision(request,env,body,origin){
   const generic=await genericCommerceSearch(env,{...body,domain:intent.domain,query:intent.original_query||body?.query||"",mpn:intent.product.mpn||undefined,part_number:intent.product.mpn||undefined,gtin:intent.product.gtin||undefined,language:intent.language,buyer_country:intent.destination.country,currency:intent.requirements.currency,quantity:intent.quantity,max_total_cost:intent.requirements.max_total_cost,delivery_deadline:intent.requirements.delivery_deadline,authenticity_required:intent.requirements.authenticity_required,limit:30,_persist:true,_decision_live:true});
   const evaluated=(generic?.offers||[]).map(o=>o?.purchase_evaluation?o:evaluateGenericOffer(intent.domain,o,intent,body));const gd=decideGenericPurchase(intent.domain,evaluated,intent),best=gd.best;
   const verifiedGtin=generic?.persistence?.verified_catalog_gtin;
+  const requestedMaker=String(body?.product?.manufacturer||body?.manufacturer||"").trim();
+  const handoffMaker=requestedMaker?"&manufacturer="+encodeURIComponent(requestedMaker):"";
   const handoffOfferLookup=verifiedGtin&&intent.quantity<=100?
-    `${origin}/v1/merchant/search?gtin=${verifiedGtin}&buyer_country=${encodeURIComponent(intent.destination.country)}${intent.quantity>1?"&quantity="+intent.quantity:""}`:null;
+    `${origin}/v1/merchant/search?gtin=${verifiedGtin}&buyer_country=${encodeURIComponent(intent.destination.country)}${intent.quantity>1?"&quantity="+intent.quantity:""}${handoffMaker}`:null;
   return {ok:!!generic?.ok,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,schema_version:"purchase-decision.v3",domain:intent.domain,normalized_intent:intent,resolved_identity:{identity_key:generic?.identity_key||null,identifiers:generic?.identifiers||{},confidence:best?.purchase_evaluation?.identity?.confidence??null,method:best?.purchase_evaluation?.identity?.method||null},decision:{action:gd.action,can_purchase:gd.can_purchase,requires_user_confirmation:true,reason_codes:gd.reason_codes,decision_quality:"domain_profile_evidence_gated",domain_profile:genericDomainProfile(intent.domain)},best_offer:best,candidate_offers:evaluated.slice(0,30),provider_errors:generic?.provider_errors||[],response_path:generic?.response_path||"request_time_live_enrichment_plus_cache",live_enrichment_performed:!!generic?.live_enrichment_performed,answerability:{answered_in_same_request:true,live_offers_found:Number(generic?.live_count||0),fallback_memory_offers:Number(generic?.memory_count||0),insufficient_evidence:gd.action==="NO_EVIDENCE"},persistence:generic?.persistence||null,landed_cost:{mode:"known-components-only",best_known_total:best?.purchase_evaluation?.known_total??null,currency:best?.purchase_evaluation?.currency??null,unknown_components:best?.purchase_evaluation?.unknowns||["shipping","tax_or_vat_or_duty_if_cross_border"],policy:"unknown_components_are_never_assumed_zero"},evaluation:{identity:best?.purchase_evaluation?.identity||null,hard_blockers:best?.purchase_evaluation?.hard_blockers||[],unknowns:best?.purchase_evaluation?.unknowns||[],budget_ok:best?.purchase_evaluation?.budget_ok??null,delivery_ok:best?.purchase_evaluation?.delivery_ok??null,stock_ok:best?.purchase_evaluation?.stock_ok??null,stock_quantity_evidence:best?.purchase_evaluation?.stock_quantity_evidence??"unknown",returns_known:best?.returns_accepted!=null,warranty_known:best?.warranty!=null,authenticity_evidence:!!(best?.authenticity_evidence_url||best?.merchant_verified)},evidence_policy:{paid_placement:false,domain_specific_hard_gates:true,compatibility_claims_require_evidence:true,authenticity_claims_require_evidence:true,unknown_shipping_tax_duty_returns_warranty_explicit:true,marketplace_observation_is_not_manufacturer_truth:true},purchase:{purchase_intent_endpoint:`${origin}/v1/purchase-intent`,purchase_url:best?.url||null,handoff_offer_lookup_url:handoffOfferLookup,requires_user_confirmation:true},internationalization:{request_language:intent.language,response_language:intent.language,canonical_fact_fields_not_translated:true,destination_country:intent.destination.country,currency:intent.requirements.currency},generated_at:new Date().toISOString()};
 }
 
