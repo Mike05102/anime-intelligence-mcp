@@ -1,4 +1,8 @@
+import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {constants} from 'node:fs';
+import {link,lstat,open,unlink} from 'node:fs/promises';
+import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {prepareMerchantOfferFeed,readBoundedJson} from './gpd33_merchant_offer_feed.mjs';
 import {requestPinnedHttps,resolvePinnedPublicIpv4} from './gpd33_merchant_feed_fetch.mjs';
@@ -6,6 +10,7 @@ import {requestPinnedHttps,resolvePinnedPublicIpv4} from './gpd33_merchant_feed_
 const UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const MAX_RESPONSE_BYTES=64*1024;
 const MAX_REPORT_BYTES=1024*1024;
+const MAX_RECEIPT_BYTES=4096;
 
 export function fingerprintPartnerReview(report){
   return createHash('sha256').update(JSON.stringify(report)).digest('hex');
@@ -67,13 +72,107 @@ async function responseJson(response,signal){
   }
 }
 
+function tryReceiptLock(descriptor){
+  return new Promise((resolve,reject)=>{
+    // FD 3 shares the parent's open-file description, so termination releases the lock.
+    const child=spawn('flock',['-n','-E','75','3'],{stdio:['ignore','ignore','ignore',descriptor.fd]});
+    child.once('error',reject);
+    child.once('exit',code=>{
+      if(code===0||code===75)resolve(code===0);
+      else reject(new Error('private_receipt_lock_unavailable'));
+    });
+  });
+}
+
+async function requirePrivateFile(descriptor){
+  const st=await descriptor.stat();
+  if(!st.isFile()||st.mode&0o077||st.uid!==process.getuid())throw new Error('private_receipt_file_required');
+  return st;
+}
+
+async function readReceipt(path,scope,offersReceived){
+  let file;
+  try{
+    file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  }catch(error){
+    if(error.code==='ENOENT')return null;
+    throw error;
+  }
+  try{
+    const st=await requirePrivateFile(file);
+    if(st.size<1||st.size>MAX_RECEIPT_BYTES)throw new Error('invalid_publish_receipt');
+    const buffer=Buffer.alloc(MAX_RECEIPT_BYTES+1);
+    let used=0;
+    while(used<buffer.length){
+      const {bytesRead}=await file.read(buffer,used,buffer.length-used,used);
+      if(!bytesRead)break;
+      used+=bytesRead;
+    }
+    if(used!==st.size)throw new Error('invalid_publish_receipt');
+    const saved=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(buffer.subarray(0,used)));
+    if(saved?.schema!=='gpd-merchant-feed-publish-receipt-v1'||saved.status!=='import_confirmed'
+      ||Object.entries(scope).some(([key,value])=>saved[key]!==value)
+      ||saved.offers_received!==offersReceived
+      ||![saved.new_or_updated,saved.ignored].every(count=>Number.isSafeInteger(count)&&count>=0)
+      ||saved.new_or_updated+saved.ignored!==offersReceived)throw new Error('invalid_publish_receipt');
+    return {status:'already_imported',snapshot_id:scope.snapshot_id,merchant_id:scope.merchant_id,
+      offers_received:offersReceived,new_or_updated:saved.new_or_updated,ignored:saved.ignored};
+  }finally{
+    await file.close();
+  }
+}
+
+async function withPublishReceipt(directory,scope,offersReceived,publish){
+  const st=await lstat(directory);
+  if(!st.isDirectory()||st.mode&0o077||st.uid!==process.getuid())throw new Error('private_receipt_directory_required');
+  const basename='merchant-feed-'+fingerprintPartnerReview(scope);
+  const receiptPath=join(directory,basename+'.json');
+  const tempPath=join(directory,'.'+basename+'.tmp');
+  const lock=await open(join(directory,'.merchant-feed-publish.lock'),
+    constants.O_CREAT|constants.O_RDWR|constants.O_NOFOLLOW|constants.O_NONBLOCK,0o600);
+  try{
+    await requirePrivateFile(lock);
+    if(!await tryReceiptLock(lock))return {status:'import_in_progress',snapshot_id:scope.snapshot_id,merchant_id:scope.merchant_id};
+    const confirmed=await readReceipt(receiptPath,scope,offersReceived);
+    if(confirmed)return confirmed;
+    await unlink(tempPath).catch(error=>{if(error.code!=='ENOENT')throw error;});
+    // Open the private output directory before publishing so local setup failures are discovered first.
+    const dir=await open(directory,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+    try{
+      const out=await open(tempPath,'wx',0o600);
+      try{
+        const result=await publish();
+        await out.writeFile(JSON.stringify({schema:'gpd-merchant-feed-publish-receipt-v1',...scope,...result})+'\n');
+        await out.sync();
+        await link(tempPath,receiptPath);
+        await dir.sync();
+        return result;
+      }finally{
+        await out.close();
+        await unlink(tempPath);
+      }
+    }finally{
+      await dir.close();
+    }
+  }finally{
+    await lock.close();
+  }
+}
+
 export async function publishApprovedMerchantFeed(report,feedApproval,writeApproval,{
-  apiKey,now=Date.now(),resolve=resolvePinnedPublicIpv4,request=requestPinnedHttps
+  apiKey,now=Date.now(),resolve=resolvePinnedPublicIpv4,request=requestPinnedHttps,receiptDirectory
 }={}){
   const origin=approvedWorker(writeApproval,report,now);
   const offers=revalidatePreview(report,feedApproval,now);
+  const scope={snapshot_id:report.snapshot_id,merchant_id:writeApproval.merchant_id,
+    worker_origin:origin.origin,report_sha256:writeApproval.report_sha256};
+  const publish=()=>sendApprovedOffers(origin,scope,offers,{apiKey,resolve,request});
+  return receiptDirectory===undefined?publish():withPublishReceipt(receiptDirectory,scope,offers.length,publish);
+}
+
+async function sendApprovedOffers(origin,scope,offers,{apiKey,resolve,request}){
   if(typeof apiKey!=='string'||!/^mai_[A-Za-z0-9]{20,100}$/.test(apiKey))throw new Error('merchant_key_required');
-  const merchantId=writeApproval.merchant_id;
+  const merchantId=scope.merchant_id;
   const signal=AbortSignal.timeout(12000);
   const address=await resolve(origin.hostname,signal);
   const headers={accept:'application/json','accept-encoding':'identity','x-merchant-key':apiKey};
@@ -88,7 +187,7 @@ export async function publishApprovedMerchantFeed(report,feedApproval,writeAppro
   if(result?.ok!==true||result.merchant_id!==merchantId||result.offers_received!==offers.length
     ||![result.new_or_updated,result.ignored].every(count=>Number.isSafeInteger(count)&&count>=0)
     ||result.new_or_updated+result.ignored!==offers.length)throw new Error('feed_import_confirmation_invalid');
-  return {status:'import_confirmed',snapshot_id:report.snapshot_id,merchant_id:merchantId,
+  return {status:'import_confirmed',snapshot_id:scope.snapshot_id,merchant_id:merchantId,
     offers_received:offers.length,new_or_updated:result.new_or_updated,ignored:result.ignored};
 }
 
@@ -97,12 +196,12 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
     if(process.argv.length===4&&process.argv[2]==='--digest'){
       process.stdout.write(fingerprintPartnerReview(await readBoundedJson(process.argv[3],MAX_REPORT_BYTES))+'\n');
     }else{
-      if(process.argv.length!==5)throw new Error('Expected a local review report, feed approval and write approval');
-      const [reportFile,feedFile,writeFile]=process.argv.slice(2);
+      if(process.argv.length!==5&&process.argv.length!==6)throw new Error('Expected a local review report, feed approval and write approval');
+      const [reportFile,feedFile,writeFile,receiptDirectory]=process.argv.slice(2);
       const [report,feedApproval,writeApproval]=await Promise.all([
         readBoundedJson(reportFile,MAX_REPORT_BYTES),readBoundedJson(feedFile),readBoundedJson(writeFile)
       ]);
-      const result=await publishApprovedMerchantFeed(report,feedApproval,writeApproval,{apiKey:process.env.GPD_MERCHANT_API_KEY});
+      const result=await publishApprovedMerchantFeed(report,feedApproval,writeApproval,{apiKey:process.env.GPD_MERCHANT_API_KEY,receiptDirectory});
       process.stdout.write(JSON.stringify(result)+'\n');
     }
   }catch{

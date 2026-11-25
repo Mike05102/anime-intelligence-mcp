@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
 import {EventEmitter} from 'node:events';
+import {chmod,mkdtemp,readFile,readdir,rm,stat,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {fingerprintPartnerReview,publishApprovedMerchantFeed} from '../scripts/gpd33_merchant_feed_publish.mjs';
 import {prepareMerchantOfferFeed} from '../scripts/gpd33_merchant_offer_feed.mjs';
 import {requestPinnedHttps} from '../scripts/gpd33_merchant_feed_fetch.mjs';
@@ -80,4 +83,54 @@ await requestPinnedHttps(new URL(writeApproval.worker_origin),options,(_url,requ
   return emitter;
 });
 assert.equal(posted,transportBody);
-console.log('PASS manifest approval, revalidation, merchant binding, pinned POST and replay-safe import receipt with mocks');
+
+const directory=await mkdtemp(join(tmpdir(),'gpd-feed-receipt-'));
+try{
+  let signalFirst;
+  let releaseFirst;
+  const firstStarted=new Promise(resolve=>{signalFirst=resolve;});
+  const firstContinue=new Promise(resolve=>{releaseFirst=resolve;});
+  calls.length=0;
+  const first=publishApprovedMerchantFeed(report,feedApproval,writeApproval,{
+    ...defaultDependencies,receiptDirectory:directory,
+    request:async(url,options)=>{
+      if(url.pathname==='/v1/merchant/me'){
+        signalFirst();
+        await firstContinue;
+      }
+      return defaultDependencies.request(url,options);
+    }
+  });
+  await firstStarted;
+  assert.equal((await publishApprovedMerchantFeed(report,feedApproval,writeApproval,{
+    ...noNetwork,receiptDirectory:directory
+  })).status,'import_in_progress');
+  releaseFirst();
+  assert.equal((await first).status,'import_confirmed');
+
+  const [receiptFile]= (await readdir(directory)).filter(name=>name.endsWith('.json'));
+  const receiptPath=join(directory,receiptFile);
+  assert.equal((await stat(receiptPath)).mode&0o077,0);
+  const receipt=await readFile(receiptPath,'utf8');
+  assert.ok(!receipt.includes(apiKey));
+  assert.ok(!receipt.includes(offer.product_url));
+  assert.deepEqual(await publishApprovedMerchantFeed(report,feedApproval,writeApproval,{
+    ...noNetwork,apiKey:undefined,receiptDirectory:directory
+  }),{status:'already_imported',snapshot_id:report.snapshot_id,merchant_id:feedApproval.merchant_id,
+    offers_received:1,new_or_updated:0,ignored:1});
+  assert.deepEqual(calls,['/v1/merchant/me','/v1/merchant/offers/feed-import']);
+  await assert.rejects(publishApprovedMerchantFeed(report,feedApproval,{...writeApproval,allow_publish:false},{
+    ...noNetwork,receiptDirectory:directory
+  }),/write_approval_required/);
+  const tampered=JSON.parse(receipt);
+  tampered.worker_origin='https://other.example';
+  await writeFile(receiptPath,JSON.stringify(tampered));
+  await assert.rejects(publishApprovedMerchantFeed(report,feedApproval,writeApproval,{
+    ...noNetwork,receiptDirectory:directory
+  }),/invalid_publish_receipt/);
+  await chmod(directory,0o755);
+  await assert.rejects(publishApprovedMerchantFeed(report,feedApproval,writeApproval,{
+    ...noNetwork,receiptDirectory:directory
+  }),/private_receipt_directory_required/);
+}finally{await rm(directory,{recursive:true,force:true});}
+console.log('PASS approval, merchant binding, pinned POST, concurrent import guard and durable private receipt reuse');

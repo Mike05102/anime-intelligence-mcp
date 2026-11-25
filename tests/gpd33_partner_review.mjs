@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Readable} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
+import {fingerprintPartnerReview,publishApprovedMerchantFeed} from '../scripts/gpd33_merchant_feed_publish.mjs';
 import {runPartnerReview} from '../scripts/gpd33_partner_review.mjs';
 
 const directory = await mkdtemp(join(tmpdir(),'gpd-partner-fixture-'));
@@ -131,9 +132,40 @@ try {
   assert.equal(report.merchant_feed.upsert_payload.offers[0].gtin,'4901234567894');
   assert.equal(report.reconciliation.scope,'test_only');
   assert.equal(report.reconciliation.evidence,'signed_pinned_sources');
+  const permission={schema:'gpd-merchant-feed-write-approval-v1',allow_publish:true,
+    snapshot_id:snapshot,merchant_id:merchant,approved_until:approval.approved_until,
+    report_sha256:fingerprintPartnerReview(report),worker_origin:'https://gpd.example'};
+  let writes=0, publishes=0;
+  const publish=()=>publishApprovedMerchantFeed(report,approval,permission,{
+    now:options.feedOptions.now,apiKey:'mai_000000000000000000000000fixture',
+    receiptDirectory:directory,resolve:async()=> '93.184.215.14',
+    request:async (url,settings)=>{
+      publishes++;
+      let result={ok:true,merchant:{id:merchant,verified:true}};
+      if(url.pathname==='/v1/merchant/offers/feed-import'){
+        writes++;
+        assert.equal(JSON.parse(settings.body).offers[0].gtin,'4901234567894');
+        result={ok:true,merchant_id:merchant,offers_received:1,new_or_updated:1,ignored:0};
+      }else assert.equal(url.pathname,'/v1/merchant/me');
+      return Object.assign(Readable.from([Buffer.from(JSON.stringify(result))]),{
+        statusCode:200,headers:{'content-type':'application/json'}
+      });
+    }
+  });
+  assert.equal((await publish()).status,'import_confirmed');
+  assert.equal((await publish()).status,'already_imported');
+  assert.equal(writes,1);
+  assert.equal(publishes,2);
   const beforeReplay=calls;
   assert.equal((await review()).status,'already_reviewed');
   assert.equal(calls,beforeReplay);
+  await writeFile(approvalFile,JSON.stringify({...approval,approved_until:'2026-12-03T00:00:00Z'}));
+  await assert.rejects(review(),/differs from the requested configuration/);
+  await writeFile(approvalFile,JSON.stringify(approval));
+  await writeFile(reportPath,'invalid-json');
+  await assert.rejects(review(),/cached partner review is unreadable/i);
+  assert.equal(calls,beforeReplay);
+
 } finally {
   await rm(directory,{recursive:true,force:true});
 }

@@ -11,7 +11,7 @@ const maxEnvelopeBytes = 12 * 1024 * 1024;
 const maxSnapshotBytes = 32 * 1024 * 1024;
 const utf8 = new TextDecoder('utf-8', {fatal:true});
 
-async function readBoundedJson(file, limit) {
+export async function readBoundedJson(file, limit) {
   // O_NONBLOCK prevents opening a FIFO from waiting on a writer. Only regular files qualify.
   const descriptor = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {

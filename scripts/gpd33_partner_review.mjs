@@ -1,12 +1,14 @@
 import {spawn} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {link, lstat, open, readdir, unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {fetchApprovedMerchantOfferFeed, readMerchantFeedApproval} from './gpd33_merchant_feed_fetch.mjs';
 import {acquireHttpsGpd33Snapshot, readHttpsEvidenceRegistry} from './gpd33_reconcile_https.mjs';
+import {readBoundedJson} from './gpd33_reconcile_acquire.mjs';
 
+const maxReportBytes = 1024 * 1024;
 const snapshotUuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 const temporaryReportName = /^\.gpd-partner-review-[a-f0-9-]{36}\.tmp$/;
@@ -48,15 +50,26 @@ export async function runPartnerReview(approvalFile, registryFile, snapshotId, p
     for (const name of await readdir(privateDirectory)) {
       if (temporaryReportName.test(name)) await unlink(join(privateDirectory,name));
     }
-    const exists = await lstat(reportPath).then(() => true, (error) => {
-      if (error.code === 'ENOENT') return false;
-      throw error;
-    });
-    if (exists) return {status:'already_reviewed',snapshot_id:snapshotId};
-
     const [approval, trust] = await Promise.all([
       readMerchantFeedApproval(approvalFile), readHttpsEvidenceRegistry(registryFile)
     ]);
+    const configurationSha256 = createHash('sha256').update(JSON.stringify([approval,trust])).digest('hex');
+    const cached = await readBoundedJson(reportPath,maxReportBytes).catch(error => {
+      if (error.code === 'ENOENT') return null;
+      throw new Error('Cached partner review is unreadable');
+    });
+    if (cached) {
+      const report = cached.data;
+      const expectedScope = trust.environment === 'live' ? 'supplied_live_evidence_only' : 'test_only';
+      if (report?.schema !== 'gpd-partner-review-v1' || report.status !== 'review_required' ||
+          report.snapshot_id !== snapshotId || report.configuration_sha256 !== configurationSha256 ||
+          report.merchant_feed?.merchant_id !== approval.merchant_id ||
+          report.reconciliation?.snapshot_id !== snapshotId || report.reconciliation.scope !== expectedScope ||
+          report.reconciliation.evidence !== 'signed_pinned_sources') {
+        throw new Error('Cached partner review differs from the requested configuration');
+      }
+      return {status:'already_reviewed',snapshot_id:snapshotId};
+    }
     const [merchantFeed, reconciliation] = await Promise.allSettled([
       fetchApprovedMerchantOfferFeed(approval, feedOptions),
       acquireHttpsGpd33Snapshot(trust, snapshotId, evidenceOptions)
@@ -68,14 +81,17 @@ export async function runPartnerReview(approvalFile, registryFile, snapshotId, p
       schema:'gpd-partner-review-v1',
       status:'review_required',
       snapshot_id:snapshotId,
+      configuration_sha256:configurationSha256,
       merchant_feed:merchantFeed.value,
       reconciliation:reconciliation.value
     };
+    const reportBytes=Buffer.from(JSON.stringify(report) + '\n');
+    if(reportBytes.length>maxReportBytes)throw new Error('Partner review exceeds the report size limit');
     const temporary = join(privateDirectory, '.gpd-partner-review-' + randomUUID() + '.tmp');
     const file = await open(temporary, 'wx', 0o600);
     try {
       try {
-        await file.writeFile(JSON.stringify(report) + '\n');
+        await file.writeFile(reportBytes);
         await file.sync();
       } finally {
         await file.close();

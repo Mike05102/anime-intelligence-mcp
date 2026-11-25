@@ -32,3 +32,5 @@ node scripts/gpd33_merchant_feed_publish.mjs private/report.json private/feed-ap
 書込み承認の `schema` は `gpd-merchant-feed-write-approval-v1`。`allow_publish: true`、`merchant_id`、`snapshot_id`、左記ダイジェストを入れた `report_sha256`、末尾スラッシュのないHTTPSの `worker_origin`、UTCの `approved_until` を指定する。書込みを許すWorkerと承認対象の内容・期限を事前に確認する。販売業者キーは既存の `GPD_MERCHANT_API_KEY` 環境変数でプロセスに渡す。承認ファイル、レポート、キーを公開リポジトリやログに置かない。
 
 公開処理はレポートをフィード承認と照合し直し、Workerにキーの所有者と確認済み状態を照会する。照合済みの対象にだけ専用フィード登録APIを呼ぶ。古い更新や同じ観測の再送は反映されず、既存オファーのIDを維持する。応答で反映件数と見送り件数を確認する。通信障害で応答が得られないときはこの処理から成功を判断できないため、同じ承認・同じレポートで状態を確認する。実取引や収益の確定処理とは独立している。
+
+同じレポートを繰り返し処理する運用では、公開コマンドの末尾に権限 `0700` の既存レシートディレクトリを指定する。Linuxの `flock` で並行公開を防ぎ、確認済みの応答だけを権限 `0600` のレシートとして保存する。同じWorker、販売業者、スナップショット、レポートの承認が再度確認できた場合は `already_imported` を返し、DNSやHTTPの通信を省く。`import_in_progress` は別プロセスが処理中であることを示す。レシート保存前に停止した場合は成功を確定できないため、同じ承認条件での再送をWorkerの冪等性で処理する。
