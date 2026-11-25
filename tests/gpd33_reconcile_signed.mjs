@@ -4,7 +4,7 @@ import {mkdtemp, rm, symlink, truncate, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {acquireGpd33Snapshot} from '../scripts/gpd33_reconcile_acquire.mjs';
-import {acquireHttpsGpd33Snapshot} from '../scripts/gpd33_reconcile_https.mjs';
+import {acquireHttpsGpd33Snapshot, assertFreshHttpsGpd33Evidence} from '../scripts/gpd33_reconcile_https.mjs';
 import {reconcileSignedGpd33Evidence} from '../scripts/gpd33_reconcile_signed.mjs';
 
 const handoffId = '00000000-0000-4000-8000-000000000001';
@@ -158,3 +158,45 @@ setTimeout(() => stopped.abort(), 10);
 await assert.rejects(pending,{name:'AbortError'});
 assert.equal(cancelled,true);
 console.log('PASS bounded approved HTTPS evidence acquisition with mocked responses and cancellation');
+
+
+const liveFixtureKeys = Object.fromEntries(roles.map(role => [role,generateKeyPairSync('ed25519')]));
+const liveFixtureTrust = {...httpsTrust, environment:'live', issuers:Object.fromEntries(roles.map(role => [role,{
+  ...trust.issuers[role],
+  public_key:Buffer.from(liveFixtureKeys[role].publicKey.export({format:'jwk'}).x,'base64url').toString('hex')
+}]))};
+const mockNow = 1795590000;
+function liveFixtureEnvelope(role,observedAt) {
+  const body = Buffer.from(JSON.stringify({
+    context:contexts[role],issuer:role,environment:'live',snapshot_id:snapshotId,observed_at:observedAt,
+    rows:rows[role].map(row => ({...row,environment:'live'}))
+  }));
+  return {issuer:role,payload:body.toString('base64url'),
+    signature:sign(null,body,liveFixtureKeys[role].privateKey).toString('base64url')};
+}
+const fetchMockLiveSnapshot = observedAt => acquireHttpsGpd33Snapshot(liveFixtureTrust,snapshotId,{
+  ...httpsOptions, now:() => mockNow * 1000,
+  fetchImpl:async url => Response.json(liveFixtureEnvelope(new URL(url).pathname.split('/').at(-1),observedAt))
+});
+assert.equal((await fetchMockLiveSnapshot(mockNow-86400)).confirmed_orders,1);
+assert.equal((await fetchMockLiveSnapshot(mockNow+300)).observed_at,mockNow+300);
+await assert.rejects(fetchMockLiveSnapshot(mockNow-86401), /outside the accepted time window/);
+await assert.rejects(fetchMockLiveSnapshot(mockNow+301), /outside the accepted time window/);
+assert.throws(() => assertFreshHttpsGpd33Evidence(mockNow,() => NaN), /Invalid HTTPS live evidence observation time/);
+assert.throws(() => assertFreshHttpsGpd33Evidence(0,() => mockNow*1000), /Invalid HTTPS live evidence observation time/);
+
+// A local historical review of the same stale signed fixture remains available.
+const archivalDirectory = await mkdtemp(join(tmpdir(),'gpd33-evidence-archive-'));
+try {
+  const registry = join(archivalDirectory,'trust.json');
+  await writeFile(registry,JSON.stringify(liveFixtureTrust),{mode:0o600});
+  for (const role of roles) {
+    await writeFile(join(archivalDirectory,role+'.json'),JSON.stringify(liveFixtureEnvelope(role,mockNow-86401)),{mode:0o600});
+  }
+  const archived = await acquireGpd33Snapshot(archivalDirectory,registry,snapshotId);
+  assert.equal(archived.observed_at,mockNow-86401);
+  assert.equal(archived.confirmed_orders,1);
+} finally {
+  await rm(archivalDirectory,{recursive:true,force:true});
+}
+console.log('PASS live HTTPS evidence freshness limits and historical file-only review with fixtures');

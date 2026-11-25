@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {generateKeyPairSync, randomUUID, sign} from 'node:crypto';
+import {createHash, generateKeyPairSync, randomUUID, sign} from 'node:crypto';
 import {mkdtemp, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -166,6 +166,20 @@ try {
   await assert.rejects(review(),/cached partner review is unreadable/i);
   assert.equal(calls,beforeReplay);
 
+  // Exercise a production-shaped cache fixture without contacting any live issuer.
+  const liveTrust={...trust,environment:'live'};
+  await writeFile(registryFile,JSON.stringify(liveTrust));
+  const observedAt=Math.floor(options.feedOptions.now/1000);
+  const liveReport={...report,
+    configuration_sha256:createHash('sha256').update(JSON.stringify([approval,liveTrust])).digest('hex'),
+    reconciliation:{...report.reconciliation,scope:'supplied_live_evidence_only',observed_at:observedAt}};
+  await writeFile(reportPath,JSON.stringify(liveReport));
+  const liveReview=(now)=>runPartnerReview(approvalFile,registryFile,snapshot,directory,{
+    ...options,evidenceOptions:{...options.evidenceOptions,now:()=>now}
+  });
+  assert.equal((await liveReview(observedAt*1000)).status,'already_reviewed');
+  await assert.rejects(liveReview((observedAt+25*3600)*1000),/outside the accepted time window/);
+  assert.equal(calls,beforeReplay);
 } finally {
   await rm(directory,{recursive:true,force:true});
 }

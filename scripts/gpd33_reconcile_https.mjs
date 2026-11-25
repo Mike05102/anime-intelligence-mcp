@@ -12,6 +12,21 @@ const perIssuerLimit = 1024 * 1024;
 const batchLimit = 4 * 1024 * 1024;
 const utf8 = new TextDecoder('utf-8', {fatal:true});
 
+const maxLiveEvidenceAgeSeconds = 24 * 60 * 60;
+const maxLiveEvidenceFutureSeconds = 5 * 60;
+
+export function assertFreshHttpsGpd33Evidence(observedAt,now=Date.now) {
+  const clock = typeof now === 'function' ? now() : null;
+  if (!Number.isSafeInteger(observedAt) || observedAt < 1 ||
+    !Number.isSafeInteger(clock) || clock < 1) {
+    throw new Error('Invalid HTTPS live evidence observation time');
+  }
+  const elapsedSeconds = Math.floor(clock / 1000) - observedAt;
+  if (elapsedSeconds > maxLiveEvidenceAgeSeconds || elapsedSeconds < -maxLiveEvidenceFutureSeconds) {
+    throw new Error('HTTPS live evidence observation is outside the accepted time window');
+  }
+}
+
 function configuredSources(trust, env) {
   const authorities = validateGpd33EvidenceRegistry(trust,trust.environment);
   const sources = trust.https_sources;
@@ -104,11 +119,12 @@ async function fetchEnvelope(source,fetchImpl,signal,byteLimit) {
   return {envelope,size};
 }
 
-export async function acquireHttpsGpd33Snapshot(trust,expectedSnapshotId,{fetchImpl=fetchPinnedEvidence,env=process.env,signal:callerSignal}={}) {
+export async function acquireHttpsGpd33Snapshot(trust,expectedSnapshotId,{fetchImpl=fetchPinnedEvidence,env=process.env,signal:callerSignal,now=Date.now}={}) {
   if (!trust || !['test','live'].includes(trust.environment) ||
     typeof expectedSnapshotId !== 'string' || !snapshotUuid.test(expectedSnapshotId)) {
     throw new Error('A pinned environment and expected snapshot UUID are required');
   }
+  if (trust.environment === 'live' && typeof now !== 'function') throw new Error('Invalid HTTPS evidence clock');
   const sources = configuredSources(trust,env);
   const deadline = AbortSignal.timeout(20_000);
   const signal = callerSignal ? AbortSignal.any([callerSignal,deadline]) : deadline;
@@ -122,5 +138,6 @@ export async function acquireHttpsGpd33Snapshot(trust,expectedSnapshotId,{fetchI
   }
   const report = reconcileSignedGpd33Evidence({schema_version:1,environment:trust.environment,envelopes},trust);
   if (report.snapshot_id !== expectedSnapshotId) throw new Error('HTTPS evidence does not match the requested snapshot');
+  if (trust.environment === 'live') assertFreshHttpsGpd33Evidence(report.observed_at,now);
   return report;
 }

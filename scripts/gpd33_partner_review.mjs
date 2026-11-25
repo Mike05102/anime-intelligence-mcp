@@ -5,7 +5,7 @@ import {link, lstat, open, readdir, unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {fetchApprovedMerchantOfferFeed, readMerchantFeedApproval} from './gpd33_merchant_feed_fetch.mjs';
-import {acquireHttpsGpd33Snapshot, readHttpsEvidenceRegistry} from './gpd33_reconcile_https.mjs';
+import {acquireHttpsGpd33Snapshot, assertFreshHttpsGpd33Evidence, readHttpsEvidenceRegistry} from './gpd33_reconcile_https.mjs';
 import {readBoundedJson} from './gpd33_reconcile_acquire.mjs';
 
 const maxReportBytes = 1024 * 1024;
@@ -67,6 +67,9 @@ export async function runPartnerReview(approvalFile, registryFile, snapshotId, p
           report.reconciliation?.snapshot_id !== snapshotId || report.reconciliation.scope !== expectedScope ||
           report.reconciliation.evidence !== 'signed_pinned_sources') {
         throw new Error('Cached partner review differs from the requested configuration');
+      }
+      if (trust.environment === 'live') {
+        assertFreshHttpsGpd33Evidence(report.reconciliation.observed_at,evidenceOptions?.now);
       }
       return {status:'already_reviewed',snapshot_id:snapshotId};
     }
