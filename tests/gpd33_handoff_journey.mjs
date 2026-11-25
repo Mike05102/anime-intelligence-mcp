@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import {createHash, createHmac, randomUUID} from 'node:crypto';
+import {createHash, createHmac, generateKeyPairSync, randomUUID, sign} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 
 export async function testHandoffJourney(query, seller, offer) {
   const source = await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js', import.meta.url), 'utf8');
   const {default: worker} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
   const env = {REFRESH_KEY: 'fixture-admin', SUPABASE_URL: 'https://isolated-db.example', SUPABASE_SECRET_KEY: 'fixture-db'};
+  const keys = generateKeyPairSync('ed25519');
+  const rawKey = Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url').toString('hex');
+  env.GPD_MERCHANT_SIGNING_KEYS = JSON.stringify({[seller]:rawKey});
   const rpc = {
     gpd33_create_handoff: ['handoff', 'offer', 'units'],
     gpd33_record_handoff_event: ['seller', 'handoff', 'event', 'new_state', 'reference_hash'],
@@ -80,7 +83,20 @@ export async function testHandoffJourney(query, seller, offer) {
     for (const state of ['accepted', 'order_reported', 'cancelled']) {
       const body = {handoff_id:handoff,event_id:randomUUID(),state};
       if (state !== 'accepted') body.order_reference = 'fixture-order';
-      const recorded = await request('/v1/merchant/handoffs/events', merchant, body);
+      const eventPath = '/v1/merchant/handoffs/events';
+      assert.equal((await request(eventPath,merchant,body)).status,401);
+      const referenceHash = body.order_reference
+        ? createHash('sha256').update('gpd33-order|' + seller + '|' + body.order_reference).digest('hex') : null;
+      const signedBody = (signedAt) => ({
+        ...body, signed_at:signedAt, signature:sign(null,Buffer.from(JSON.stringify([
+          'gpd-merchant-handoff-v1',seller,handoff,body.event_id,state,referenceHash,signedAt
+        ])),keys.privateKey).toString('hex')
+      });
+      const now = Math.floor(Date.now()/1000);
+      const signed = signedBody(now);
+      assert.equal((await request(eventPath,merchant,signedBody(now-301))).status,401);
+      assert.equal((await request(eventPath,merchant,{...signed,event_id:randomUUID()})).status,401);
+      const recorded = await request(eventPath,merchant,signed);
       assert.equal(recorded.status, 200, await recorded.clone().text());
       const status = await readStatus(token);
       assert.equal(status.headers.get('cache-control'), 'no-store');
@@ -88,7 +104,7 @@ export async function testHandoffJourney(query, seller, offer) {
       const result = await status.json();
       assert.equal(result.evidence,'merchant_reported');
       assert.equal(result.handoff_state, state);
-      const replay = await request('/v1/merchant/handoffs/events', merchant, body);
+      const replay = await request(eventPath,merchant,signed);
       assert.equal((await replay.json()).replayed, true);
     }
     const outcomes = await (await request('/admin/business-outcomes', admin)).json();

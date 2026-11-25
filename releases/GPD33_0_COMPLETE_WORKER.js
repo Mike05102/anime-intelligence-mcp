@@ -5519,6 +5519,22 @@ async function gpd33BuyerHandoffStatus(request,env){
     return json({ok:false,error:"handoff_service_unavailable"},503,headers);
   }
 }
+async function gpd33VerifyMerchantEvent(config,fields,body){
+  if(!config)return body.signature==null&&body.signed_at==null;
+  const registry=JSON.parse(config);
+  if(!registry||typeof registry!=="object"||Array.isArray(registry))throw new Error("invalid_merchant_signing_registry");
+  const registered=Object.hasOwn(registry,fields.seller);
+  if(!registered)return body.signature==null&&body.signed_at==null;
+  const publicKey=registry[fields.seller];
+  if(typeof publicKey!=="string"||!/^[0-9a-f]{64}$/.test(publicKey))throw new Error("invalid_merchant_signing_key");
+  if(!Number.isSafeInteger(body.signed_at)||Math.abs(Math.floor(Date.now()/1000)-body.signed_at)>300
+    ||typeof body.signature!=="string"||!/^[0-9a-f]{128}$/.test(body.signature))return false;
+  const decode=value=>Uint8Array.from(value.match(/../g),pair=>parseInt(pair,16));
+  const key=await crypto.subtle.importKey("raw",decode(publicKey),{name:"Ed25519"},false,["verify"]);
+  const message=JSON.stringify(["gpd-merchant-handoff-v1",fields.seller,fields.handoff,fields.event,
+    fields.new_state,fields.reference_hash,body.signed_at]);
+  return crypto.subtle.verify("Ed25519",key,decode(body.signature),new TextEncoder().encode(message));
+}
 async function gpd33HandoffApi(request,env,merchant=null){
   const headers={"cache-control":"no-store"};
   let method,args;
@@ -5544,6 +5560,13 @@ async function gpd33HandoffApi(request,env,merchant=null){
       const hash=reference===null?null:await sha256HexText("gpd33-order|"+merchant.id+"|"+reference.trim());
       method="record_handoff_event";
       args={seller:merchant.id,handoff,event,new_state:newState,reference_hash:hash};
+      try{
+        if(!await gpd33VerifyMerchantEvent(env.GPD_MERCHANT_SIGNING_KEYS,args,body)){
+          return json({ok:false,error:"invalid_merchant_event_signature"},401,headers);
+        }
+      }catch{
+        return json({ok:false,error:"merchant_signing_unavailable"},503,headers);
+      }
     }else{
       const offer=gpd33HandoffId(body?.offer_id),units=body?.quantity;
       if(body?.buyer_authorized!==true||!offer||!Number.isInteger(units)||units<1||units>1000){
@@ -9919,7 +9942,7 @@ function openapi(origin){
       type:"object",required:["handoff_id","event_id","state"],properties:{
         handoff_id:{type:"string",format:"uuid"},event_id:{type:"string",format:"uuid"},
         state:{type:"string",enum:["accepted","declined","order_reported","cancelled"]},
-        order_reference:{type:"string",maxLength:128}}}}}},
+        order_reference:{type:"string",maxLength:128},signed_at:{type:"integer",description:"Unix seconds for merchants with configured signing keys"},signature:{type:"string",pattern:"^[0-9a-f]{128}$",description:"Ed25519 signature in lowercase hex for configured merchants"}}}}}},
     responses:{"200":{description:"Event recorded or safely replayed"},"400":{description:"Invalid event"},
       "401":{description:"Invalid merchant key"},"404":{description:"Handoff unavailable"},"409":{description:"Conflicting event or transition"}}}};
   paths["/v1/merchant/offers/upsert"]={post:{operationId:"upsertMerchantOffers",summary:"Publish or update merchant offers",description:"Authenticated merchant write endpoint. Send x-merchant-key.",tags:["merchant-intelligence","merchant-feed"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Offers accepted"},400:{description:"Invalid offer"},401:{description:"Invalid merchant key"}}}};
