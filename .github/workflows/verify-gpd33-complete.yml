@@ -11,6 +11,7 @@ on:
       - .github/workflows/gpd33-production-maintenance.yml
       - supabase/gpd33_production_preflight.sql
       - scripts/gpd33_reconcile*.mjs
+      - scripts/gpd33_x402_reconcile.mjs
       - scripts/gpd33_export_handoff_evidence.mjs
       - scripts/gpd33_registry_draft.mjs
       - server.json
@@ -48,6 +49,7 @@ jobs:
           node-version: 24
       - run: node --check releases/GPD33_0_COMPLETE_WORKER.js
       - run: node tests/gpd33_worker.mjs
+      - run: node tests/gpd33_x402_reconcile.mjs
       - run: node tests/gpd33_registry_draft.mjs
       - run: node tests/gpd33_export_handoff_evidence.mjs
       - run: node tests/gpd33_reconcile.mjs

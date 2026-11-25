@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import {generateKeyPairSync} from 'node:crypto';
+import {generateKeyPairSync,randomUUID,sign} from 'node:crypto';
+import {reconcileSignedGpd33X402Evidence} from '../scripts/gpd33_x402_reconcile.mjs';
 import {readFile} from 'node:fs/promises';
 import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -169,6 +170,60 @@ for(const route of ['/v1/purchase-decision','/v1/buy-wait','/v1/full-intelligenc
   const challenge=header?JSON.parse(Buffer.from(header,'base64')):await response.json();
   assert.equal(challenge.x402Version,2);
   assert.match(challenge.accepts[0].network,/^solana:/);
+}
+const mockPaymentChallenge=await call('/v1/purchase-decision');
+const accepted=JSON.parse(Buffer.from(mockPaymentChallenge.headers.get('payment-required'),'base64')).accepts[0];
+const signedPayment=new Request(origin+'/v1/purchase-decision',{
+  headers:{'x-ai-test-mode':'x402_fixture','payment-signature':Buffer.from(JSON.stringify({x402Version:2,accepted,payload:{}})).toString('base64')}
+});
+const originalPaymentFetch=globalThis.fetch;
+const recordedPayments=[];
+const fixtureTransaction='1'.repeat(63)+'2';
+let mockSettlementSuccess=true;
+globalThis.fetch=async (target,options={})=>{
+  const url=new URL(target);
+  if(url.pathname.endsWith('/verify'))return Response.json({isValid:true});
+  if(url.pathname.endsWith('/settle'))return Response.json({success:mockSettlementSuccess,transaction:fixtureTransaction});
+  if(url.pathname==='/rest/v1/api_events'){
+    recordedPayments.push(JSON.parse(options.body));
+    return new Response(null,{status:204});
+  }
+  return originalPaymentFetch(target,options);
+};
+try {
+  const gated=await api.x402Gate(signedPayment,env,Number(accepted.amount),'test',async()=>({ok:true}),ctx);
+  assert.equal(gated.status,200);
+  await Promise.all(pending);
+  const [paid]=recordedPayments.filter(row=>row.event_type==='paid_call');
+  assert.equal(paid.transaction_hash,fixtureTransaction);
+  assert.equal(paid.metadata.test_mode,'test_x402_fixture');
+  assert.equal(paid.amount_atomic,Number(accepted.amount));
+  assert.equal(paid.payment_network,accepted.network);
+  assert.deepEqual(paid.metadata.x402_reconciliation_v1,{mint:accepted.asset,payee:accepted.payTo});
+  const environment='test', snapshot_id=randomUUID(), observed_at=Math.floor(Date.now()/1000);
+  const bundle={schema_version:1,environment,envelopes:[]}, trust={schema_version:1,environment,issuers:{}};
+  const chainTransfer={environment,transaction_hash:fixtureTransaction,payment_network:accepted.network,
+    mint:accepted.asset,payee:accepted.payTo,amount_atomic:accepted.amount,instruction_index:'2.0',
+    finality:'finalized',execution:'success'};
+  for(const [issuer,context,rows] of [
+    ['x402_expected','gpd33-x402-information-expected-v1',[{...paid,environment}]],
+    ['x402_finalized','gpd33-x402-solana-finalized-v1',[chainTransfer]]
+  ]){
+    const {publicKey,privateKey}=generateKeyPairSync('ed25519');
+    trust.issuers[issuer]={role:issuer,public_key:Buffer.from(publicKey.export({format:'jwk'}).x,'base64url').toString('hex')};
+    const payload=Buffer.from(JSON.stringify({issuer,context,environment,snapshot_id,observed_at,rows}));
+    bundle.envelopes.push({issuer,payload:payload.toString('base64url'),signature:sign(null,payload,privateKey).toString('base64url')});
+  }
+  const report=reconcileSignedGpd33X402Evidence(bundle,trust,snapshot_id);
+  assert.equal(report.scope,'test_only');
+  assert.equal(report.transactions.matched,1);
+  assert.equal(report.matched_information_fee_atomic[accepted.network+'|'+accepted.asset],accepted.amount);
+  mockSettlementSuccess=false;
+  assert.equal((await api.x402Gate(signedPayment,env,Number(accepted.amount),'test',async()=>({ok:true}),ctx)).status,402);
+  await Promise.all(pending);
+  assert.equal(recordedPayments.filter(row=>row.event_type==='paid_call').length,1);
+} finally {
+  globalThis.fetch=originalPaymentFetch;
 }
 const directGtin='/v1/purchase-decision?gtin=012345678905&buyer_country=JP';
 assert.equal((await call(directGtin)).status,402);

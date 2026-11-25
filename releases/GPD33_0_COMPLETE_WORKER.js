@@ -8910,6 +8910,7 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
         asset:"USDC",
         response_status:200,
         fee_payer:paidRequirement.extra.feePayer,
+        x402_reconciliation_v1:{mint:paidRequirement.asset,payee:paidRequirement.payTo},
         bazaar_catalog_response:settlement?.__extension_responses?.bazaar||null,
         purchase_attribution:paymentAttribution,
         attribution_key:paymentAttribution?.attribution_key||null,
