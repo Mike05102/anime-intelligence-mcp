@@ -1,0 +1,128 @@
+name: GPD 33 production maintenance
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Read-only connection check or production maintenance
+        type: choice
+        options: [check, maintain]
+        default: check
+      disk_free_bytes:
+        description: Recently verified free physical disk bytes shown in Supabase
+        type: string
+        default: '0'
+      deploy_worker:
+        description: Activate v33 only after maintenance and the storage gate pass
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpd33-production-maintenance
+  cancel-in-progress: false
+
+jobs:
+  maintenance:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate workflow inputs and connection
+        id: preflight
+        env:
+          GPD33_DATABASE_URL: ${{ secrets.GPD33_DATABASE_URL || secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+          GPD33_DB_CA_PEM: ${{ secrets.GPD33_DB_CA_PEM }}
+          BACKUP_PASSPHRASE: ${{ secrets.GPD33_BACKUP_PASSPHRASE }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MODE: ${{ inputs.mode }}
+          DEPLOY_WORKER: ${{ inputs.deploy_worker }}
+          DISK_FREE_BYTES: ${{ inputs.disk_free_bytes }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [[ -z "$GPD33_DATABASE_URL" ]]; then
+            echo "::notice::An existing Supabase connection is not available to this workflow."
+            [[ "$MODE" == check ]]
+            exit
+          fi
+          python3 supabase/maintenance/github_db_connection.py
+          docker pull postgres:17
+          bash supabase/maintenance/github_db_run.sh check
+          if [[ "$MODE" == maintain ]]; then
+            python3 supabase/maintenance/github_rewrite_headroom.py >/dev/null
+            [[ ${#BACKUP_PASSPHRASE} -ge 24 ]] || { echo "An independent backup passphrase of at least 24 characters is required."; exit 1; }
+            if [[ "$DEPLOY_WORKER" == true && ( -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ) ]]; then
+              echo "Existing Cloudflare deployment credentials are required for activation."
+              exit 1
+            fi
+          fi
+      - name: Create and encrypt a database backup
+        if: inputs.mode == 'maintain'
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.GPD33_BACKUP_PASSPHRASE }}
+        run: |
+          bash supabase/maintenance/github_db_run.sh backup
+          install -d -m 0700 "$RUNNER_TEMP/gpd33-artifact"
+          private="$RUNNER_TEMP/gpd33-private"
+          (
+            cd "$private"
+            sha256sum application.dump archive.fence > application.sha256
+            tar -cf - application.dump archive.fence application.sha256 |
+              gpg --batch --pinentry-mode loopback --passphrase-fd 3 --symmetric \
+                --cipher-algo AES256 --compress-algo none \
+                -o "$RUNNER_TEMP/gpd33-artifact/application.tar.gpg" 3<<<"$BACKUP_PASSPHRASE"
+          )
+          test "$(stat -c %s "$RUNNER_TEMP/gpd33-artifact/application.tar.gpg")" -lt 450000000 || {
+            echo "The encrypted backup exceeds the single-run artifact budget. Production cleanup withheld."
+            exit 1
+          }
+          rm -f "$private/application.dump" "$private/application.sha256" "$private/toc" "$private/archive.fence"
+      - name: Store the encrypted backup
+        if: inputs.mode == 'maintain'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpd33-encrypted-db-backup
+          path: ${{ runner.temp }}/gpd33-artifact/application.tar.gpg
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+      - name: Download the encrypted recovery copy
+        if: inputs.mode == 'maintain'
+        uses: actions/download-artifact@v4
+        with:
+          name: gpd33-encrypted-db-backup
+          path: ${{ runner.temp }}/gpd33-recovery
+      - name: Verify the recovery copy and perform guarded cleanup
+        if: inputs.mode == 'maintain'
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.GPD33_BACKUP_PASSPHRASE }}
+          DISK_FREE_BYTES: ${{ inputs.disk_free_bytes }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          GPD33_DATABASE_URL: ${{ secrets.GPD33_DATABASE_URL || secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+        run: |
+          set -o pipefail
+          private="$RUNNER_TEMP/gpd33-private"
+          gpg --batch --pinentry-mode loopback --passphrase-fd 3 --decrypt \
+            "$RUNNER_TEMP/gpd33-recovery/application.tar.gpg" 3<<<"$BACKUP_PASSPHRASE" |
+            tar -x -C "$private" application.dump archive.fence application.sha256
+          (cd "$private" && sha256sum -c application.sha256)
+          bash supabase/maintenance/github_restore_check.sh
+          headroom="$(python3 supabase/maintenance/github_rewrite_headroom.py)"
+          bash supabase/maintenance/github_db_run.sh apply "$headroom"
+          rm -f "$private/application.dump" "$private/application.sha256"
+      - name: Apply catalog schema and activate the Worker
+        if: inputs.mode == 'maintain' && inputs.deploy_worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          bash supabase/maintenance/github_db_run.sh catalog
+          python3 supabase/maintenance/github_worker_release.py
+      - name: Remove job-local credentials and plaintext
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/gpd33-private"

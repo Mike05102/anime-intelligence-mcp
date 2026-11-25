@@ -7,6 +7,8 @@ on:
       - supabase/migrations/*gpd33*.sql
       - supabase/maintenance/gpd33_*.sql
       - supabase/maintenance/run_gpd33_storage.sh
+      - supabase/maintenance/github_*
+      - .github/workflows/gpd33-production-maintenance.yml
       - supabase/gpd33_production_preflight.sql
       - tests/gpd33_*
       - .github/workflows/verify-gpd33-complete.yml
@@ -43,3 +45,18 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: local-ci-password
           PGDATABASE: postgres
+      - name: Exercise the production archive and isolated restore path on fixtures
+        run: |
+          bash -n supabase/maintenance/github_storage.sh
+          bash -n supabase/maintenance/github_db_run.sh
+          bash -n supabase/maintenance/github_restore_check.sh
+          private="$RUNNER_TEMP/gpd33-private"
+          install -d -m 0700 "$private"
+          (
+            umask 077
+            printf '%s\n' PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres \
+              PGDATABASE=postgres PGPASSWORD=local-ci-password > "$private/db.env"
+          )
+          bash supabase/maintenance/github_db_run.sh backup
+          bash supabase/maintenance/github_restore_check.sh
+          bash supabase/maintenance/github_db_run.sh apply 1000000000
