@@ -16,6 +16,7 @@ on:
       - scripts/gpd33_registry_draft.mjs
       - server.json
       - scripts/gpd33_seller_discovery.mjs
+      - scripts/gpd33_seller_opt_in.mjs
       - scripts/gpd33_apply_growth_evidence.mjs
       - scripts/gpd33_merchant_coverage_tick.mjs
       - scripts/gpd33_merchant_offer_feed.mjs
@@ -51,12 +52,14 @@ jobs:
       - run: node tests/gpd33_worker.mjs
       - run: node tests/gpd33_x402_reconcile.mjs
       - run: node tests/gpd33_registry_draft.mjs
+      - run: node tests/gpd33_agent_onboarding.mjs
       - run: node tests/gpd33_export_handoff_evidence.mjs
       - run: node tests/gpd33_reconcile.mjs
       - run: node tests/gpd33_reconcile_signed.mjs
       - run: node tests/gpd33_reconcile_domain_signal.mjs
       - run: node tests/gpd33_merchant_coverage_tick.mjs
       - run: node tests/gpd33_seller_discovery.mjs
+      - run: node tests/gpd33_seller_opt_in.mjs
       - run: node tests/gpd33_merchant_offer_feed.mjs
       - run: node tests/gpd33_merchant_feed_fetch.mjs
       - run: node tests/gpd33_partner_review.mjs

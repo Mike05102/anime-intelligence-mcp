@@ -28,6 +28,8 @@ https://anime-intelligence.goodmy0312.workers.dev/mcp
 
 For clients that accept a remote MCP server URL, configure that URL directly. Inspect available tools and descriptions in your client before calling them.
 
+Start with `product_resolve` for an exact identifier or `merchant_directory` to explore verified merchants. The release candidate exposes these entry points and the buyer configuration through `/.well-known/gpd`. For verified-buyer setup and handoff eligibility, see the [onboarding guide](GPD_AGENT_ONBOARDING.md).
+
 ## 3. Test x402 without spending money
 
 The paid purchase-decision endpoint is `POST /v1/purchase-decision`, configured for **0.10 USDC** on Solana mainnet. A request without payment should return a payment challenge when it reaches the x402 gate.

@@ -11,3 +11,19 @@ node scripts/gpd33_seller_discovery.mjs manifest.json
 同じ情報源の同じ販売業者IDは、最新の観測にまとめる。観測と同意参照の有効期間は30日。クエリとフラグメントを除去したHTTPSの参照を出力する。入力には公開可能な情報のみを使い、URLのパスにも秘密情報を含めない。異なる情報源の販売業者の同一性は審査する。
 
 `review_discovery_evidence` は候補の根拠を調べる状態。`review_opt_in_evidence` は記載された同意の根拠と、販売業者本人・組織の権限を確認する状態。市場の出品情報は候補の根拠としてのみ扱う。審査前の候補は公開せず、接触や登録にも使わない。このコマンドはローカルに結果を出力し、本番や外部サイトには接続しない。
+
+## 署名付き参加意思の確認
+
+`scripts/gpd33_seller_opt_in.mjs` は、探索結果と販売業者が署名した参加意思を、独立して管理された本人確認済みの公開鍵台帳に照合する。対象は `merchant_feed` または `partner_directory` で、候補に同意参照・確認日時・所在地がそろっている場合に限る。処理はオフラインで実行され、販売業者への連絡やアカウントの作成、商品公開、費用の発生を伴わない。
+
+```sh
+node scripts/gpd33_seller_opt_in.mjs <探索結果.json> <非公開の公開鍵台帳.json> <署名エンベロープ配列.json> <新規の非公開出力ファイル.json>
+```
+
+各入力ファイルは実行者が所有する最大256 KiBの通常ファイルとし、権限を所有者に限定する。署名は1回200件まで。出力先も実行者が所有する非公開ディレクトリを使う。出力ファイルは既存ファイルを上書きせず、内容を書き終えた時点で所有者だけが読み書きできる形で保存する。探索結果と本人確認の台帳は別経路で用意し、鍵と販売業者の対応を管理者が確認する。テスト用と実環境用の台帳、鍵、成果物は分離する。
+
+台帳は `schema: "gpd-seller-opt-in-trust-v1"`、`environment`（`test` または `live`）、販売業者本人確認ID（UUID）をキーにした `sellers` を持つ。各登録には `public_key`（Ed25519生公開鍵、小文字16進64文字）、確認済み `name`、`country_code`、`website_url`、`source_ids`（例 `merchant_feed:seller-a`）、`opt_in_origins`（同意参照を置けるHTTPSオリジン）を指定する。既存のGPD販売業者と商品フィードを接続する場合は、確認済みの `merchant_id` と `feed: {url, product_origins}` を追加する。URLはHTTPSであり、認証情報・クエリ・フラグメントを含めない。鍵、情報源のID、既存販売業者IDの重複登録は拒否される。
+
+エンベロープは `{seller_id, payload, signature}`。後ろ2つはパディングなしbase64urlで、署名対象は `payload` を復号したUTF-8 JSONの原文。署名するJSONは `context: "gpd-seller-opt-in-v1"`、`environment`、`seller_id`、`request_id`（UUID）、`scope`、`source`、`source_seller_id`、`country_code`、`evidence_url`、`signed_at`、`expires_at` を持つ。未登録の場合の `scope` は `preview_onboarding`、既存フィード接続は `review_feed_connection` で台帳と同じ `feed_url` を加える。現在時刻、探索側が同意参照を観測した時刻、有効期限を照合する。有効期間は最大30日。同一の要求IDが異なる有効な内容を署名していた場合は、該当販売業者の下書きを出力しない。
+
+`private_preview` の結果には、未登録販売業者の `registration_draft` または既存販売業者の `feed_connection_draft` が含まれる。登録には販売業者本人による利用規約の同意が必要で、フィード接続には運用者の期限付き承認が必要。確認後に [承認済み商品フィードの手順](GPD_MERCHANT_OFFER_FEED.md) へ進む。署名、連絡先、同意URLは下書きに転記しない。署名付き参加意思の確認だけで契約や本番登録が完了したとは扱わない。

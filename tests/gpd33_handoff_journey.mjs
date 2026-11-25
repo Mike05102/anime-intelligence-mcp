@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
+import {collectSellerCandidates} from '../scripts/gpd33_seller_discovery.mjs';
+import {prepareSellerOptInReview} from '../scripts/gpd33_seller_opt_in.mjs';
+import {prepareMerchantOfferFeed} from '../scripts/gpd33_merchant_offer_feed.mjs';
 import {fingerprintPartnerReview,publishApprovedMerchantFeed} from '../scripts/gpd33_merchant_feed_publish.mjs';
 import {assertReconciliationFromHandoff} from './gpd33_reconcile_journey.mjs';
 import {createHash, createHmac, generateKeyPairSync, randomUUID, sign} from 'node:crypto';
@@ -48,7 +51,12 @@ export async function testHandoffJourney(query, seller, offer) {
       return Response.json([{id:randomUUID(),source_product_key:'universal:gtin:00012345678905',
         product_type:'food_grocery',manufacturer:'Example',canonical_name_ja:'Example Pasta',metadata:{gpd33_verified:true}}]);
     }
+    if (url.pathname === '/rest/v1/merchant_agent_profiles') return Response.json([]);
     if (url.pathname === '/rest/v1/merchant_offers') {
+      if(url.searchParams.get('select')==='id'){
+        assert.equal(url.searchParams.get('merchant_id'),'eq.'+seller);
+        return Response.json([{id:offer}]);
+      }
       const gtin = url.searchParams.get('gtin');
       if(gtin)assert.match(gtin,/^in\.\(/);
       else assert.equal(url.searchParams.get('normalized_part_number'), 'eq.EX-123');
@@ -93,20 +101,41 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal((await importFeed(feedOffer,randomUUID())).status,403);
     assert.equal((await request(feedPath,merchantHeaders,{merchant_id:seller,offers:[feedOffer,feedOffer]})).status,400);
     const approvalExpiry=new Date(Date.now()+86400000).toISOString();
-    const approval={merchant_id:seller,feed_url:'https://merchant.example/feed.json',
-      approved_until:approvalExpiry,product_origins:['https://merchant.example']};
+    const feedUrl='https://merchant.example/feed.json';
+    const evidenceUrl='https://merchant.example/consent';
+    const consentIssuer=randomUUID(), consentKeys=generateKeyPairSync('ed25519');
+    const observed=feedOffer.source_updated_at;
+    const discoveryEvidence=collectSellerCandidates([{source:'merchant_feed',source_seller_id:'fixture',
+      public_name:'Example',merchant_country:'JP',evidence_url:feedUrl,observed_at:observed,
+      opt_in_evidence_url:evidenceUrl,opt_in_observed_at:observed}]);
+    const trust={schema:'gpd-seller-opt-in-trust-v1',environment:'test',sellers:{[consentIssuer]:{
+      public_key:Buffer.from(consentKeys.publicKey.export({format:'jwk'}).x,'base64url').toString('hex'),
+      merchant_id:seller,name:'Example',country_code:'JP',website_url:'https://merchant.example',
+      source_ids:['merchant_feed:fixture'],opt_in_origins:['https://merchant.example'],
+      feed:{url:feedUrl,product_origins:['https://merchant.example']}
+    }}};
+    const consent=Buffer.from(JSON.stringify({context:'gpd-seller-opt-in-v1',environment:'test',seller_id:consentIssuer,
+      request_id:randomUUID(),scope:'review_feed_connection',country_code:'JP',source:'merchant_feed',source_seller_id:'fixture',
+      evidence_url:evidenceUrl,signed_at:observed,expires_at:approvalExpiry,feed_url:feedUrl}));
+    const optIn=prepareSellerOptInReview(discoveryEvidence,trust,[{seller_id:consentIssuer,
+      payload:consent.toString('base64url'),signature:sign(null,consent,consentKeys.privateKey).toString('base64url')}]);
+    assert.equal(optIn.candidates.length,1);
+    const merchantDraft=optIn.candidates[0];
+    assert.equal(merchantDraft.status,'operator_review_required');
+    assert.equal(merchantDraft.feed_connection_draft.approved_until,undefined);
+    const approval={...merchantDraft.feed_connection_draft,approved_until:merchantDraft.consent_expires_at};
     const review={schema:'gpd-partner-review-v1',status:'review_required',snapshot_id:randomUUID(),
-      merchant_feed:{schema:'gpd-merchant-offer-feed-preview-v1',status:'operator_review_required',
-        merchant_id:seller,feed_url:approval.feed_url,offer_count:1,upsert_payload:{offers:[feedOffer]}}};
+      merchant_feed:prepareMerchantOfferFeed(approval,{
+        schema:'gpd-merchant-offer-feed-input-v1',merchant_id:seller,feed_url:approval.feed_url,
+        observed_at:feedOffer.source_updated_at,offers:[feedOffer]
+      })};
     const writeApproval={schema:'gpd-merchant-feed-write-approval-v1',allow_publish:true,
       snapshot_id:review.snapshot_id,merchant_id:seller,approved_until:approvalExpiry,worker_origin:'https://gpd.example',
       report_sha256:fingerprintPartnerReview(review)};
     const written=await publishApprovedMerchantFeed(review,approval,writeApproval,{
       apiKey:merchantKey,resolve:async()=> '93.184.215.14',
       request:async (url,options)=>{
-        const response=url.pathname==='/v1/merchant/me'
-          ?Response.json({ok:true,merchant:{id:seller,verified:true}})
-          :await request(url.pathname,options.headers,JSON.parse(options.body));
+        const response=await request(url.pathname,options.headers,options.body?JSON.parse(options.body):undefined);
         return Object.assign(Readable.from([Buffer.from(await response.text())]),
           {statusCode:response.status,headers:Object.fromEntries(response.headers)});
       }
@@ -133,7 +162,18 @@ export async function testHandoffJourney(query, seller, offer) {
     const scoped = await (await request(search + '&buyer_country=JP', {})).json();
     assert.equal(scoped.handoff_candidate_offer_id, offer);
     assert.equal(scoped.offers.filter(item => item.handoff_candidate).length, 1);
-    const generic = await (await request('/v1/merchant/search?gtin=012345678905&buyer_country=JP',{})).json();
+    const discovery=await (await request('/.well-known/gpd',{})).json();
+    const mcpPath=new URL(discovery.mcp_url).pathname;
+    const mcp=(method,params)=>request(mcpPath,{accept:'application/json'},{jsonrpc:'2.0',id:1,method,params});
+    const initialized=await (await mcp('initialize',{protocolVersion:'2025-11-25',capabilities:{},
+      clientInfo:{name:'fixture-buyer',version:'1'}})).json();
+    assert.equal(initialized.result.protocolVersion,'2025-11-25');
+    const listed=await (await mcp('tools/list',{})).json();
+    assert.ok(listed.result.tools.some(tool=>tool.name==='merchant_gtin_search'));
+    const result=await (await mcp('tools/call',{name:'merchant_gtin_search',arguments:{
+      gtin:'012345678905',buyer_country:'JP',quantity:1,condition:'new'
+    }})).json();
+    const generic=result.result.structuredContent;
     assert.equal(generic.handoff_candidate_offer_id,offer);
     const buyerHeaders = {authorization:'Bearer '+buyerToken};
     const beforeDiscovery = dbCalls;

@@ -1,4 +1,6 @@
-import {createPublicKey, verify} from 'node:crypto';
+import {createPublicKey, randomUUID, verify} from 'node:crypto';
+import {link, lstat, open, unlink} from 'node:fs/promises';
+import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {readBoundedJson} from './gpd33_reconcile_acquire.mjs';
 
@@ -14,6 +16,10 @@ const contexts = {
 const maxAtomic = 18446744073709551615n;
 const maxPayload = 4 * 1024 * 1024;
 const maxRows = 10000;
+const maxWindowRows = 20000;
+const maxWindowSeconds = 31 * 24 * 60 * 60;
+const maxWindowSnapshots = 32;
+const maxWindowEncodedChars = 32 * 1024 * 1024;
 const utf8 = new TextDecoder('utf-8',{fatal:true});
 
 function solanaBytes(value,length) {
@@ -107,18 +113,22 @@ function transferFacts(row,environment) {
 }
 
 function indexExpected(rows,environment) {
-  const expected = new Map(), conflicts = new Set();
+  const expected = new Map(), conflicts = new Set(), testTransactions = new Set();
   let excludedTestRecords = 0, unboundRecords = 0;
   for (const row of rows) {
     if (row.event_type !== 'paid_call') throw new Error('Expected x402 paid-call rows only');
     const agreement = row.metadata?.x402_reconciliation_v1;
-    if (!agreement) {
-      unboundRecords++;
+    if (environment === 'live' && (row.metadata?.test_mode || row.metadata?.source_class === 'admin_or_test' ||
+      agreement?.traffic_class === 'test')) {
+      excludedTestRecords++;
+      // If later observations omit the marker, the known test transaction remains excluded.
+      if (row.payment_network === solanaMainnet && solanaBytes(row.transaction_hash,64)) {
+        testTransactions.add(txKey(row,environment));
+      }
       continue;
     }
-    if (environment === 'live' && (row.metadata.test_mode || row.metadata.source_class === 'admin_or_test' ||
-      agreement.traffic_class === 'test')) {
-      excludedTestRecords++;
+    if (!agreement) {
+      unboundRecords++;
       continue;
     }
     const key = txKey(row,environment);
@@ -127,14 +137,20 @@ function indexExpected(rows,environment) {
     if (prior && JSON.stringify(prior) !== JSON.stringify(facts)) conflicts.add(key);
     expected.set(key,facts);
   }
+  for (const key of testTransactions) expected.delete(key);
   return {expected,conflicts,excludedTestRecords,unboundRecords};
 }
 
 function indexFinalized(rows,environment) {
-  const transactions = new Map(), conflicts = new Set();
+  const transactions = new Map(), conflicts = new Set(), failedFinalized = new Set();
   for (const row of rows) {
     const key = txKey(row,environment);
-    if (row.finality !== 'finalized' || row.execution !== 'success') continue;
+    if (row.finality !== 'finalized') continue;
+    if (row.execution === 'failed') {
+      failedFinalized.add(key);
+      continue;
+    }
+    if (row.execution !== 'success') continue;
     const index = Number.isSafeInteger(row.instruction_index) ? String(row.instruction_index) : row.instruction_index;
     if (typeof index !== 'string' || !/^(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4}))?$/.test(index)) {
       throw new Error('Invalid finalized x402 instruction locator');
@@ -146,15 +162,11 @@ function indexFinalized(rows,environment) {
     if (prior && JSON.stringify(prior) !== JSON.stringify(facts)) conflicts.add(key);
     instructions.set(index,facts);
   }
+  for (const key of failedFinalized) if (transactions.has(key)) conflicts.add(key);
   return {transactions,conflicts};
 }
 
-/** Reconcile x402 information receipts only from independently pinned expected and finalized ledgers. */
-export function reconcileSignedGpd33X402Evidence(bundle,trust,expectedSnapshotId) {
-  const {environment,metadata,expected:expectedRows,finalized:finalizedRows}=decodeEnvelopes(bundle,trust);
-  if (typeof expectedSnapshotId !== 'string' || metadata.snapshot_id !== expectedSnapshotId) {
-    throw new Error('Requested x402 evidence snapshot does not match');
-  }
+function reconcileRows(expectedRows,finalizedRows,environment) {
   const {expected,conflicts,excludedTestRecords,unboundRecords}=indexExpected(expectedRows,environment);
   const {transactions,conflicts:chainConflicts}=indexFinalized(finalizedRows,environment);
   const totals = new Map();
@@ -183,23 +195,132 @@ export function reconcileSignedGpd33X402Evidence(bundle,trust,expectedSnapshotId
     totals.set(asset,(totals.get(asset) || 0n)+BigInt(facts.amount));
   }
   return {
-    schema:'gpd33-x402-information-reconciliation-v1',
     scope:environment === 'test' ? 'test_only' : 'supplied_live_evidence_only',
-    ...metadata,
     evidence:'independent_signed_finalized_solana',
     matched_information_fee_atomic:Object.fromEntries([...totals].sort().map(([asset,total]) => [asset,total.toString()])),
     transactions:counts,excluded_test_records:excludedTestRecords,unbound_expected_records:unboundRecords
   };
 }
 
+/** Reconcile one independently pinned expected and finalized ledger snapshot. */
+export function reconcileSignedGpd33X402Evidence(bundle,trust,expectedSnapshotId) {
+  const {environment,metadata,expected,finalized}=decodeEnvelopes(bundle,trust);
+  if (typeof expectedSnapshotId !== 'string' || metadata.snapshot_id !== expectedSnapshotId) {
+    throw new Error('Requested x402 evidence snapshot does not match');
+  }
+  return {schema:'gpd33-x402-information-reconciliation-v1',...metadata,
+    ...reconcileRows(expected,finalized,environment)};
+}
+
+/** Merge authenticated facts across an explicit observation window. Never sum per-snapshot totals. */
+export async function reconcileSignedGpd33X402Window(bundles,trust,{startInclusive,endExclusive}={}) {
+  if (!Number.isSafeInteger(startInclusive) || !Number.isSafeInteger(endExclusive) || startInclusive < 1 ||
+    endExclusive <= startInclusive || endExclusive-startInclusive > maxWindowSeconds) {
+    throw new Error('A bounded x402 observation window is required');
+  }
+  const snapshots = new Map(), expectedRows = [], finalizedRows = [];
+  let received = 0, encodedChars = 0, earliest = Infinity, latest = 0;
+  for await (const bundle of bundles) {
+    if (++received > maxWindowSnapshots) throw new Error('Too many signed x402 snapshots');
+    if (!Array.isArray(bundle?.envelopes) || bundle.envelopes.length !== 2 ||
+      bundle.envelopes.some(envelope => typeof envelope?.payload !== 'string')) {
+      throw new Error('Invalid x402 window evidence bundle');
+    }
+    encodedChars += bundle.envelopes.reduce((size,envelope) => size+envelope.payload.length,0);
+    if (encodedChars > maxWindowEncodedChars) throw new Error('x402 window evidence exceeds the byte budget');
+    const {metadata,expected,finalized}=decodeEnvelopes(bundle,trust);
+    const {snapshot_id,observed_at}=metadata;
+    if (observed_at < startInclusive || observed_at >= endExclusive) {
+      throw new Error('Signed x402 observation is outside the requested window');
+    }
+    const fingerprint = bundle.envelopes.map(envelope => envelope.issuer+':'+envelope.signature).sort().join('|');
+    if (snapshots.has(snapshot_id)) {
+      if (snapshots.get(snapshot_id) !== fingerprint) throw new Error('Conflicting signed x402 snapshot UUID');
+      continue;
+    }
+    if (expectedRows.length+finalizedRows.length+expected.length+finalized.length > maxWindowRows) {
+      throw new Error('x402 window evidence exceeds the record budget');
+    }
+    snapshots.set(snapshot_id,fingerprint);
+    earliest = Math.min(earliest,observed_at);
+    latest = Math.max(latest,observed_at);
+    expectedRows.push(...expected);
+    finalizedRows.push(...finalized);
+  }
+  if (!snapshots.size) throw new Error('At least one signed x402 snapshot is required');
+  const {excluded_test_records,unbound_expected_records,...report}=reconcileRows(expectedRows,finalizedRows,trust.environment);
+  return {
+    schema:'gpd33-x402-information-reconciliation-window-v1',
+    observation_window:{start_inclusive:startInclusive,end_exclusive:endExclusive,first_observed_at:earliest,last_observed_at:latest},
+    snapshots:snapshots.size,
+    replayed_snapshots:received-snapshots.size,
+    ...report,
+    excluded_test_observations:excluded_test_records,
+    unbound_expected_observations:unbound_expected_records
+  };
+}
+
+export async function saveGpd33X402WindowReport(report,directory) {
+  const window=report?.observation_window;
+  if (report?.schema !== 'gpd33-x402-information-reconciliation-window-v1' ||
+    !Number.isSafeInteger(window?.start_inclusive) || !Number.isSafeInteger(window?.end_exclusive)) {
+    throw new Error('A valid x402 observation-window report is required');
+  }
+  const owner=await lstat(directory);
+  if (!owner.isDirectory() || owner.uid !== process.getuid() || (owner.mode & 0o077)) {
+    throw new Error('A private output directory owned by the running user is required');
+  }
+  const name=join(directory,'x402-'+window.start_inclusive+'-'+window.end_exclusive+'.json');
+  const temporary=join(directory,'.x402-'+randomUUID()+'.tmp');
+  const contents=JSON.stringify(report)+'\n';
+  const file=await open(temporary,'wx',0o600);
+  try {
+    try {
+      await file.writeFile(contents);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    try { await link(temporary,name); }
+    catch(error) {
+      if (error.code !== 'EEXIST') throw error;
+      const {data:prior}=await readBoundedJson(name,32*1024,{privateFile:true});
+      if (JSON.stringify(prior)+'\n' !== contents) throw new Error('A different private x402 window report already exists');
+      return 'already_reported';
+    }
+    return 'reported';
+  } finally {
+    await unlink(temporary);
+  }
+}
+
+async function * evidenceFiles(paths) {
+  for (const file of paths) yield (await readBoundedJson(file,12*1024*1024,{privateFile:true})).data;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const [bundleFile,trustFile,snapshot]=process.argv.slice(2);
-    if (process.argv.length !== 5) throw new Error('Expected bundle, pinned policy and snapshot');
-    const [{data:bundle},{data:trust}]=await Promise.all([
-      readBoundedJson(bundleFile,12*1024*1024),readBoundedJson(trustFile,256*1024)
-    ]);
-    process.stdout.write(JSON.stringify(reconcileSignedGpd33X402Evidence(bundle,trust,snapshot))+'\n');
+    const args=process.argv.slice(2);
+    let report;
+    if (args[0] === '--window') {
+      const [,start,end,trustFile,outputDirectory,...bundleFiles]=args;
+      if (!start || !end || !trustFile || !outputDirectory || !bundleFiles.length || bundleFiles.length > maxWindowSnapshots ||
+        !/^[1-9][0-9]{0,15}$/.test(start) || !/^[1-9][0-9]{0,15}$/.test(end)) {
+        throw new Error('Expected window start, end, pinned policy, private output and signed bundles');
+      }
+      const {data:trust}=await readBoundedJson(trustFile,256*1024,{privateFile:true});
+      const windowReport=await reconcileSignedGpd33X402Window(evidenceFiles(bundleFiles),trust,
+        {startInclusive:Number(start),endExclusive:Number(end)});
+      report={status:await saveGpd33X402WindowReport(windowReport,outputDirectory)};
+    } else {
+      const [bundleFile,trustFile,snapshot]=args;
+      if (args.length !== 3) throw new Error('Expected bundle, pinned policy and snapshot');
+      const [{data:bundle},{data:trust}]=await Promise.all([
+        readBoundedJson(bundleFile,12*1024*1024),readBoundedJson(trustFile,256*1024)
+      ]);
+      report=reconcileSignedGpd33X402Evidence(bundle,trust,snapshot);
+    }
+    process.stdout.write(JSON.stringify(report)+'\n');
   } catch {
     process.stderr.write('x402 reconciliation failed. Check independently signed ledgers and the requested snapshot.\n');
     process.exitCode=1;

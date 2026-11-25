@@ -8,6 +8,15 @@ GET `/.well-known/gpd` からMCP、OpenAPI、x402、販売業者一覧、購買�
 
 公開登録案内は既定で無効。本番Auth、外部エージェントの採用、登録数、利用頻度は未検証。
 
+## 最初の接続を確認する
+
+1. エージェントのMCPクライアントに、探索文書の `mcp_url` をStreamable HTTPで設定する。`onboarding.free_mcp_tools` に掲載された `product_resolve`、`merchant_directory` などを試す。HTTPクライアントでは探索文書が案内する `/agents/examples` の無料例を使える。
+2. `buyer.mode` が `registration_advertised` の場合は、運用者が `buyer.registration` のSupabaseプロジェクトと公開可能な鍵を対応するクライアントに設定し、登録と本人確認を行う。`account_verification_configured` の場合は、既に確認済みのアカウントを使う。`unavailable` の場合は、無料の探索と購買判断の案内を利用できる。
+3. 取得したアクセストークンをクライアントの認証ストアに保持し、同じGPDの接続先にある `buyer.account_url` へ `Authorization: Bearer <access_token>` を送る。`200` と `verified: true` を確認する。`401` ならサインインと本人確認を確認し、`503` なら買い手経路の稼働確認を待つ。この確認で購入や決済は行われない。
+4. 実際に引き渡す前に売り手、商品の状態、在庫と配送先を確認し、買い手の同意を得る。対象の条件と再送に使うリクエストIDは [取引の手順](MERCHANT_HANDOFFS.md) を参照する。
+
+`/agents/readiness` の `buyer_configuration` は設定の状態を返す。本番の登録可否は、上記の確認済みアカウントによる応答と区別する。自動処理に渡すトークン、メールアドレス、決済情報を公開文書やログに含めない。
+
 ## MCP Registryと公開バージョン
 
 MCPの既存の登録名は `io.github.Mike05102/anime-intelligence-mcp`。登録用メタデータを変更するときは、公開済みバージョンと照合済みのリリース候補を区別する。次の検証は候補Workerをローカルで起動し、公開先への通信を使わずにMCP初期化、ツール一覧、OpenAPI、探索文書を照合する。
