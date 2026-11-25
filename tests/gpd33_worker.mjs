@@ -252,6 +252,15 @@ for(const [brand,matched] of [['Example',true],['Other',false],[null,false]]){
     {product:{manufacturer:'Example',identifiers:{gtin:'012345678905'}}}).purchase_evaluation;
   assert.equal(evaluation.identity.match,matched);
 }
+const decisionWithRequirements=(requirements)=>api.buildUniversalPurchaseDecision(
+  new Request(origin+'/v1/purchase-decision'),env,{gtin:'012345678905',buyer_country:'JP',requirements},origin);
+assert.equal((await decisionWithRequirements({condition:'used'})).purchase.handoff_offer_lookup_url,
+  origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP&condition=used');
+for(const attribute of ['size','color','capacity','pack_size']){
+  const constrained=await decisionWithRequirements({[attribute]:'explicit request'});
+  assert.equal(constrained.purchase.handoff_offer_lookup_url,null);
+  assert.equal(constrained.purchase.handoff_offer_lookup_blocker,'variant_verification_required');
+}
 const bulkDecision=await buildDecision(3);
 assert.equal(bulkDecision.purchase.handoff_offer_lookup_url,
   origin+'/v1/merchant/search?gtin=00012345678905&buyer_country=JP&quantity=3');

@@ -16,7 +16,7 @@ export async function testMerchantGtin(worker, domains) {
     const url=new URL(input), query=url.searchParams;
     calls.push(url);
     const row={id:offer,merchant_id:seller,manufacturer:'Example',gtin:'0012345678905',
-      stock_status:'in_stock',stock_quantity:stockQuantity,ships_to:['JP'],price:10,currency:'JPY',source_updated_at:observedAt};
+      stock_status:'in_stock',stock_quantity:stockQuantity,condition:'used',ships_to:['JP'],price:10,currency:'JPY',source_updated_at:observedAt};
     if(url.pathname==='/rest/v1/products'){
       assert.equal(query.get('source_product_key'),'eq.universal:gtin:'+keys);
       assert.equal(query.get('metadata->>gpd33_verified'),'eq.true');
@@ -82,6 +82,8 @@ export async function testMerchantGtin(worker, domains) {
     assert.ok(!JSON.stringify(destination).includes('system_managed'));
     assert.equal((await (await request('0012345678905')).json()).handoff_candidate_offer_id,null);
     assert.equal((await (await request('012345678905','&buyer_country=US')).json()).count,0);
+    assert.equal((await (await request('012345678905','&buyer_country=JP&condition=USED')).json()).handoff_candidate_offer_id,offer);
+    assert.equal((await (await request('012345678905','&buyer_country=JP&condition=new')).json()).count,0);
     assert.equal((await request('012345678905','&manufacturer=Different')).status,404);
     assert.equal((await request('012345678905','&part_number=conflict')).status,400);
     const invalidBefore=calls.length;

@@ -6138,12 +6138,13 @@ async function searchMerchantOffers(env,{part_number="",manufacturer="",buyer_co
   scored.sort((a,b)=>Number(b.agent_score.overall_agent_score)-Number(a.agent_score.overall_agent_score)||((b.offer.stock_status==="in_stock")-(a.offer.stock_status==="in_stock"))||((a.offer.currency===b.offer.currency&&a.offer.price!=null&&b.offer.price!=null)?a.offer.price-b.offer.price:0));
   return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,query:{part_number:part_number,normalized_part_number:pn,manufacturer:manufacturer||null,buyer_country:buyer_country||null},count:Math.min(lim,scored.length),ranking_policy:{paid_placement:false,primary:"evidence_and_purchase_readiness",factors:["exact_mpn","merchant_verification","stock","price_completeness","lead_time","shipping_coverage","official_documents","return_policy","compatibility_evidence"]},recommended_offer:scored[0]||null,handoff_candidate_offer_id:scored.slice(0,lim).find(x=>x.handoff_candidate)?.offer.id||null,offers:scored.slice(0,lim),generated_at:new Date().toISOString()};
 }
-async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,manufacturer,partNumber,requestedQuantity}){
+async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,manufacturer,partNumber,requestedQuantity,condition}){
   const barcode=gpd33Barcode(gtin);
   const destination=String(buyerCountry||"").trim().toUpperCase();
   const pageSize=limit===null?20:Number(limit);
   const quantity=requestedQuantity===null?1:Number(requestedQuantity);
-  if(!barcode||partNumber||!Number.isInteger(pageSize)||pageSize<1||pageSize>20||
+  const requestedCondition=gpd33Part(condition);
+  if(requestedCondition.length>40||!barcode||partNumber||!Number.isInteger(pageSize)||pageSize<1||pageSize>20||
     (destination&&!/^[A-Z]{2}$/.test(destination))||!Number.isInteger(quantity)||quantity<1||quantity>100){
     return {ok:false,status:400,error:"invalid_canonical_merchant_search"};
   }
@@ -6164,7 +6165,8 @@ async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,m
       "&active=eq.true&gtin=in.("+equivalents.join(",")+")&order=updated_at.desc,id.asc&limit=40");
     if(!Array.isArray(rows))throw new Error("invalid_merchant_offer_response");
     const matching=rows.filter(row=>gpd33HandoffId(row.id)&&gpd33HandoffId(row.merchant_id)&&
-      gpd33Barcode(row.gtin)===barcode&&gpd33Part(row.manufacturer)===canonicalBrand);
+      gpd33Barcode(row.gtin)===barcode&&gpd33Part(row.manufacturer)===canonicalBrand&&
+      (!requestedCondition||gpd33Part(row.condition)===requestedCondition));
     const ids=[...new Set(matching.map(row=>row.merchant_id))];
     const lookup=ids.length?await sb(env,"/merchants?select=id,slug,name,website_url,country_code,status,verified,"+
       "system_managed:metadata->>system_managed&id=in.("+encodeURIComponent(ids.map(id=>'"'+id+'"').join(","))+")"+
@@ -6191,7 +6193,7 @@ async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,m
     return {ok:true,identity_match:"verified_catalog_gtin_and_reported_manufacturer",
       product:{id:product.id,gtin:barcode,domain:product.product_type,
         name:product.canonical_name_en||product.canonical_name_ja,manufacturer:product.manufacturer},
-      buyer_country:destination||null,requested_quantity:quantity,offer_sample_limit:40,count:offers.length,offers,
+      buyer_country:destination||null,requested_quantity:quantity,requested_condition:requestedCondition||null,offer_sample_limit:40,count:offers.length,offers,
       handoff_candidate_offer_id:offers.find(item=>item.handoff_candidate)?.offer.id||null};
   }catch{
     return {ok:false,status:503,error:"canonical_merchant_search_unavailable"};
@@ -6393,6 +6395,10 @@ function genericOfferIdentityMatch(domain,o,intent,body={}){
   if(listingConcrete)return {known:true,match:true,method:"listing_selected_from_broad_intent",confidence:.62};
   return {known:false,match:null,method:"unresolved",confidence:.35};
 }
+const GPD33_VARIANT_ATTRIBUTES=["size","color","capacity","pack_size"];
+function gpd33RequestedVariant(body,requirements,attribute){
+  return gpd33Variant(requirements?.[attribute]??body?.[attribute]??body?.product?.variant?.[attribute]);
+}
 function genericDomainHardGates(domain,o,intent,body={}){
   const d=String(domain||"general_commerce"),profile=genericDomainProfile(d),identity=genericOfferIdentityMatch(d,o,intent,body),m=[],req=intent?.requirements||body?.requirements||{};
   if(identity.known&&!identity.match)m.push("identity_mismatch");
@@ -6402,9 +6408,9 @@ function genericDomainHardGates(domain,o,intent,body={}){
   const requiredVoltage=String(req.required_voltage||body?.required_voltage||"").trim();if(["home_appliances","restaurant_hospitality"].includes(d)&&requiredVoltage&&!String(o?.voltage||"").includes(requiredVoltage))m.push("voltage_region_unverified");
   if(["medical_supplies","baby_kids","safety_security"].includes(d)&&req.regulatory_required===true&&!o?.regulatory_evidence_url)m.push("regulatory_or_safety_evidence_unknown");
   if(["jewelry_watches","beauty_personal_care","toys_hobbies","baby_kids","medical_supplies","safety_security"].includes(d)&&req.authenticity_required&&!o?.authenticity_evidence_url&&!o?.merchant_verified)m.push("authenticity_evidence_unknown");
-  for(const attribute of ["size","color","capacity","pack_size"]){
-    const expected=req[attribute]??body[attribute]??body.product?.variant?.[attribute];
-    if(expected!=null&&gpd33Variant(expected)!==gpd33Variant(o?.[attribute]??o?.variant?.[attribute]))m.push(attribute+"_variant_unverified");
+  for(const attribute of GPD33_VARIANT_ATTRIBUTES){
+    const expected=gpd33RequestedVariant(body,req,attribute);
+    if(expected&&expected!==gpd33Variant(o?.[attribute]??o?.variant?.[attribute]))m.push(attribute+"_variant_unverified");
   }
   const condition=String(req.condition||body?.condition||"").trim();if(condition&&!o?.condition)m.push("condition_unknown");
   else if(condition&&gpd33Part(o.condition)!==gpd33Part(condition))m.push("condition_requirement_not_met");
@@ -7827,15 +7833,20 @@ async function buildUniversalPurchaseDecision(request,env,body,origin){
   const evaluated=(generic?.offers||[]).map(o=>o?.purchase_evaluation?o:evaluateGenericOffer(intent.domain,o,intent,body));const gd=decideGenericPurchase(intent.domain,evaluated,intent),best=gd.best;
   const verifiedGtin=generic?.persistence?.verified_catalog_gtin;
   const requestedMaker=String(body?.product?.manufacturer||body?.manufacturer||"").trim();
-  const handoffMaker=requestedMaker?"&manufacturer="+encodeURIComponent(requestedMaker):"";
-  const handoffOfferLookup=verifiedGtin&&intent.quantity<=100?
-    `${origin}/v1/merchant/search?gtin=${verifiedGtin}&buyer_country=${encodeURIComponent(intent.destination.country)}${intent.quantity>1?"&quantity="+intent.quantity:""}${handoffMaker}`:null;
-  return {ok:!!generic?.ok,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,schema_version:"purchase-decision.v3",domain:intent.domain,normalized_intent:intent,resolved_identity:{identity_key:generic?.identity_key||null,identifiers:generic?.identifiers||{},confidence:best?.purchase_evaluation?.identity?.confidence??null,method:best?.purchase_evaluation?.identity?.method||null},decision:{action:gd.action,can_purchase:gd.can_purchase,requires_user_confirmation:true,reason_codes:gd.reason_codes,decision_quality:"domain_profile_evidence_gated",domain_profile:genericDomainProfile(intent.domain)},best_offer:best,candidate_offers:evaluated.slice(0,30),provider_errors:generic?.provider_errors||[],response_path:generic?.response_path||"request_time_live_enrichment_plus_cache",live_enrichment_performed:!!generic?.live_enrichment_performed,answerability:{answered_in_same_request:true,live_offers_found:Number(generic?.live_count||0),fallback_memory_offers:Number(generic?.memory_count||0),insufficient_evidence:gd.action==="NO_EVIDENCE"},persistence:generic?.persistence||null,landed_cost:{mode:"known-components-only",best_known_total:best?.purchase_evaluation?.known_total??null,currency:best?.purchase_evaluation?.currency??null,unknown_components:best?.purchase_evaluation?.unknowns||["shipping","tax_or_vat_or_duty_if_cross_border"],policy:"unknown_components_are_never_assumed_zero"},evaluation:{identity:best?.purchase_evaluation?.identity||null,hard_blockers:best?.purchase_evaluation?.hard_blockers||[],unknowns:best?.purchase_evaluation?.unknowns||[],budget_ok:best?.purchase_evaluation?.budget_ok??null,delivery_ok:best?.purchase_evaluation?.delivery_ok??null,stock_ok:best?.purchase_evaluation?.stock_ok??null,stock_quantity_evidence:best?.purchase_evaluation?.stock_quantity_evidence??"unknown",returns_known:best?.returns_accepted!=null,warranty_known:best?.warranty!=null,authenticity_evidence:!!(best?.authenticity_evidence_url||best?.merchant_verified)},evidence_policy:{paid_placement:false,domain_specific_hard_gates:true,compatibility_claims_require_evidence:true,authenticity_claims_require_evidence:true,unknown_shipping_tax_duty_returns_warranty_explicit:true,marketplace_observation_is_not_manufacturer_truth:true},purchase:{purchase_intent_endpoint:`${origin}/v1/purchase-intent`,purchase_url:best?.url||null,handoff_offer_lookup_url:handoffOfferLookup,requires_user_confirmation:true},internationalization:{request_language:intent.language,response_language:intent.language,canonical_fact_fields_not_translated:true,destination_country:intent.destination.country,currency:intent.requirements.currency},generated_at:new Date().toISOString()};
+  const handoffParams=new URLSearchParams({gtin:verifiedGtin||"",buyer_country:intent.destination.country});
+  if(intent.quantity>1)handoffParams.set("quantity",String(intent.quantity));
+  if(requestedMaker)handoffParams.set("manufacturer",requestedMaker);
+  if(intent.requirements.condition)handoffParams.set("condition",intent.requirements.condition);
+  const variantNeedsVerification=GPD33_VARIANT_ATTRIBUTES.some(attribute=>
+    gpd33RequestedVariant(body,body?.requirements,attribute));
+  const handoffOfferLookup=verifiedGtin&&intent.quantity<=100&&!variantNeedsVerification&&(intent.requirements.condition?.length||0)<=40
+    ?`${origin}/v1/merchant/search?${handoffParams}`:null;
+  return {ok:!!generic?.ok,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,version:VERSION,schema_version:"purchase-decision.v3",domain:intent.domain,normalized_intent:intent,resolved_identity:{identity_key:generic?.identity_key||null,identifiers:generic?.identifiers||{},confidence:best?.purchase_evaluation?.identity?.confidence??null,method:best?.purchase_evaluation?.identity?.method||null},decision:{action:gd.action,can_purchase:gd.can_purchase,requires_user_confirmation:true,reason_codes:gd.reason_codes,decision_quality:"domain_profile_evidence_gated",domain_profile:genericDomainProfile(intent.domain)},best_offer:best,candidate_offers:evaluated.slice(0,30),provider_errors:generic?.provider_errors||[],response_path:generic?.response_path||"request_time_live_enrichment_plus_cache",live_enrichment_performed:!!generic?.live_enrichment_performed,answerability:{answered_in_same_request:true,live_offers_found:Number(generic?.live_count||0),fallback_memory_offers:Number(generic?.memory_count||0),insufficient_evidence:gd.action==="NO_EVIDENCE"},persistence:generic?.persistence||null,landed_cost:{mode:"known-components-only",best_known_total:best?.purchase_evaluation?.known_total??null,currency:best?.purchase_evaluation?.currency??null,unknown_components:best?.purchase_evaluation?.unknowns||["shipping","tax_or_vat_or_duty_if_cross_border"],policy:"unknown_components_are_never_assumed_zero"},evaluation:{identity:best?.purchase_evaluation?.identity||null,hard_blockers:best?.purchase_evaluation?.hard_blockers||[],unknowns:best?.purchase_evaluation?.unknowns||[],budget_ok:best?.purchase_evaluation?.budget_ok??null,delivery_ok:best?.purchase_evaluation?.delivery_ok??null,stock_ok:best?.purchase_evaluation?.stock_ok??null,stock_quantity_evidence:best?.purchase_evaluation?.stock_quantity_evidence??"unknown",returns_known:best?.returns_accepted!=null,warranty_known:best?.warranty!=null,authenticity_evidence:!!(best?.authenticity_evidence_url||best?.merchant_verified)},evidence_policy:{paid_placement:false,domain_specific_hard_gates:true,compatibility_claims_require_evidence:true,authenticity_claims_require_evidence:true,unknown_shipping_tax_duty_returns_warranty_explicit:true,marketplace_observation_is_not_manufacturer_truth:true},purchase:{purchase_intent_endpoint:`${origin}/v1/purchase-intent`,purchase_url:best?.url||null,handoff_offer_lookup_url:handoffOfferLookup,...(verifiedGtin&&variantNeedsVerification?{handoff_offer_lookup_blocker:"variant_verification_required"}:{}),requires_user_confirmation:true},internationalization:{request_language:intent.language,response_language:intent.language,canonical_fact_fields_not_translated:true,destination_country:intent.destination.country,currency:intent.requirements.currency},generated_at:new Date().toISOString()};
 }
 
 function purchaseDecisionBodyFromUrl(url){
   const b={};
-  for(const k of ["query","need","intent","language","lang","domain","vertical","category","manufacturer","mpn","part_number","gtin","buyer_country","country","postal_code","currency","delivery_deadline","deadline","canonical_product_id","fitment_evidence","required_voltage","size","condition"]){
+  for(const k of ["query","need","intent","language","lang","domain","vertical","category","manufacturer","mpn","part_number","gtin","buyer_country","country","postal_code","currency","delivery_deadline","deadline","canonical_product_id","fitment_evidence","required_voltage","size","color","capacity","pack_size","condition"]){
     const v=url.searchParams.get(k);if(v!==null&&v!=="")b[k]=v;
   }
   for(const k of ["quantity","max_total_cost","budget"]){const v=url.searchParams.get(k);if(v!==null&&v!=="")b[k]=Number(v);}
@@ -10224,6 +10235,7 @@ function openapi(origin){
     parameters:[{in:"query",name:"part_number",schema:{type:"string"}},{in:"query",name:"gtin",schema:{type:"string"},description:"Exact catalog GTIN, including UPC, JAN and EAN."},
       {in:"query",name:"manufacturer",schema:{type:"string"}},{in:"query",name:"buyer_country",schema:{type:"string"}},
       {in:"query",name:"quantity",schema:{type:"integer",minimum:1,maximum:100,default:1},description:"GTIN mode. More than one unit requires reported quantity."},
+      {in:"query",name:"condition",schema:{type:"string",maxLength:40},description:"GTIN mode. Require an explicitly reported offer condition."},
       {in:"query",name:"limit",schema:{type:"integer",default:20},description:"GTIN mode permits 1 to 20 results."}],
     responses:{200:{description:"Ranked merchant offers"},400:{description:"Invalid product identifier or search parameters"},
       404:{description:"Verified general product unavailable"},503:{description:"Search temporarily unavailable"}}}};
@@ -13557,7 +13569,7 @@ export default{
           const out=await searchGpd33CanonicalMerchantOffers(env,{gtin:url.searchParams.get("gtin"),
             buyerCountry:url.searchParams.get("buyer_country"),manufacturer:url.searchParams.get("manufacturer"),
             partNumber:url.searchParams.get("part_number")||url.searchParams.get("mpn"),limit:url.searchParams.get("limit"),
-            requestedQuantity:url.searchParams.get("quantity")});
+            requestedQuantity:url.searchParams.get("quantity"),condition:url.searchParams.get("condition")});
           return json(out,out.status||200,{"cache-control":"no-store"});
         }
         const out=await searchMerchantOffers(env,{part_number:url.searchParams.get("part_number")||url.searchParams.get("mpn")||"",manufacturer:url.searchParams.get("manufacturer")||"",buyer_country:url.searchParams.get("buyer_country")||"",limit:url.searchParams.get("limit")||20});return json(out,out?.status||200);}
