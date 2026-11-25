@@ -13202,7 +13202,11 @@ export default{
         if(url.pathname==="/admin/agent-selection-readiness-audit"&&request.method==="GET")return json(agentSelectionReadinessAudit(origin));
         if(url.pathname==="/admin/country-routing-audit"&&request.method==="GET")return json(await countryAwareRoutingAudit(env,url.searchParams.get("query")||"Hatsune Miku figure"));
         if(url.pathname==="/admin/metrics"&&request.method==="GET")return json({service:"ANIME INTELLIGENCE",version:VERSION,metrics:await growthMetricsScalable(env)});
-        if(url.pathname==="/admin/kpi"&&request.method==="GET")return json({service:PLATFORM_NAME,version:VERSION,kpi:await revenueMetrics(env)});
+        if(url.pathname==="/admin/kpi"&&request.method==="GET"){
+          const [kpi,ingress_daily]=await Promise.all([revenueMetrics(env),
+            sbOptional(env,"/rpc/gpd33_ingress_rollup",{method:"POST",body:JSON.stringify({take:400})})]);
+          return json({service:PLATFORM_NAME,version:VERSION,kpi,compact_ingress_daily:ingress_daily});
+        }
         if(url.pathname==="/admin/revenue-status"&&request.method==="GET")return json(await monetizationStatus(env,origin,{checkBazaar:url.searchParams.get("bazaar")==="1"}));
         if(url.pathname==="/admin/final-check"&&request.method==="GET")return json(await finalCheck(env,origin));
         if(url.pathname==="/admin/bazaar-check-one"&&request.method==="GET"){const path=url.searchParams.get("path")||"";return json(await bazaarCheckOne(env,origin,path));}

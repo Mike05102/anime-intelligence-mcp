@@ -126,5 +126,21 @@ const after=await audit();
 assert.equal(after.events.reduce((sum,event)=>sum+event.eligible_rows,0),0);
 assert.ok(after.events_total_bytes<before.events_total_bytes/2);
 console.log(`PASS retention protection and physical compaction (${before.events_total_bytes} -> ${after.events_total_bytes} bytes)`);
+await db.query(await readSql('supabase/migrations/20261125063000_gpd33_compact_telemetry.sql'));
+const ingress={method:'GET',payment_header_present:false,query_present:false,id_present:false,response_status:402};
+for(const [eventType,metadata] of [['payment_required',ingress],['payment_required',{...ingress,request_id:'paid'}],
+  ['paid_call',{request_id:'paid'}],['payment_required',{...ingress,method:'POST'}],
+  ['payment_required',{...ingress,query_present:true}],['payment_required',{...ingress,payment_header_present:true}]]) {
+  await db.query("insert into api_events(event_type,occurred_at,metadata,amount_atomic,payment_network) values ($1,now()-interval '20 days',$2,100,'solana')",[eventType,metadata]);
+}
+await db.query("insert into api_events(event_type,occurred_at) select 'dynamic_catalog_pool',now()-n*interval '20 days' from generate_series(1,3) n");
+const ingressAudit=await db.query(await readSql('supabase/maintenance/gpd33_ingress_audit.sql'));
+assert.equal(Number(ingressAudit.rows[0].candidate_rows),1);
+await db.query('set role service_role');
+assert.equal(await one('select public.gpd33_prune_events() result'),2);
+assert.equal(await one('select public.gpd33_prune_events() result'),0);
+assert.equal((await one('select public.gpd33_ingress_rollup() result'))[0].events,1);
+assert.equal(await one("select count(*)::int result from api_events where event_type='payment_required'"),4);
+assert.equal(await one("select count(*)::int result from api_events where event_type='dynamic_catalog_pool'"),2);
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');
