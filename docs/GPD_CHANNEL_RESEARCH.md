@@ -16,6 +16,18 @@
 
 第三者の過去のスキャンでも既存GPDのMCP接続とx402の露出が見つかる。これらは観測日と記載バージョンを伴う履歴として扱う。公式掲載の最新状態、実利用者、取引成立と照合済み入金には、それぞれ対応する証拠を使う。 [VerifyMCPのMCP接続記録](https://verifymcp.io/servers/mike05102-anime-intelligence-mcp/anime-intelligence) · [x402 Trustの提供者記録](https://x402-trust.com/provider/anime-intelligence.goodmy0312.workers.dev)
 
+## 公開カタログでのGPD照合
+
+2026-11-25 22:09 UTCまでに、公開検索を認証・決済情報なしで照会した。対象は `anime-intelligence.goodmy0312.workers.dev`、`Global Purchase Decision`、および `mike05102/anime-intelligence-mcp`。照会は8〜12秒の通信タイムアウト、最大128 KiB、リダイレクトなしに制限した。
+
+| 公開検索先 | 対象と実測結果 | 掲載の判定 |
+|---|---|---|
+| Circle Discovery API | `GET /v2/x402/discovery/resources` で完全なホスト名、次に名称とSolana CAIP-2識別子を検索。いずれもHTTP 403。公開カタログの代替照会もHTTP 403。 [Discovery API](https://developers.circle.com/agent-stack/agent-marketplace/discovery-api) | 今回の接続経路では未確認 |
+| 402.ad | 無料の検索 `POST /v1/search` で完全なホスト名とリポジトリを検索。初回はタイムアウト、代替照会では接続時にHTTP 403。 [無料の検索手順](https://402.ad/agents) | 今回の接続経路では未確認 |
+| Coinbase Agentic Market | `GET /v1/services/search` で完全なホスト名と名称を検索。いずれもHTTP 403。公開サービスページへの代替照会もHTTP 403。 [公式検索経路](https://agentic.market/SKILL.md) | 今回の接続経路では未確認 |
+
+公開検索の応答を読み取れなかったため、三つのチャネルは掲載の有無を判断できない。実行時の照会は検索だけで、掲載申請や支払いは発生していない。上段の公式MCP Registryの掲載結果と、第三者の履歴をそれぞれ独立した証拠として保持する。
+
 ## 確認の順序
 
 1. 外部公開・課金を伴わない範囲で、リリース候補のMCPとOpenAPI、402応答、Bazaarメタデータを検証する。

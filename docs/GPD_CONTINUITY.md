@@ -90,7 +90,15 @@ GTIN購買判断の新品・中古などの状態指定を販売業者検索へ�
 
 [掲載経路台帳](GPD_CHANNEL_RESEARCH.md) の8経路を公式資料で確認した。費用なしで使えることを明示した経路は2件（402.adの手動提出、Google公開サイトマップ）。登録準備済みは1件（公式MCP Registryの既存ワークフロー、稼働版と承認が前提）。現行の公式実掲載を観測したのは1件（MCP Registry 32.0.0）。掲載申請や販売業者への連絡は実行していない。
 
-米国NHTSA vPICの公開ページを取得し、モーター車両のメーカー候補100件を隔離環境のアダプターで抽出した。今回の公開サンプルで無償の取得を確認した情報源は2件。vPICのほか、EPA ENERGY STARの洗濯機5レコードでブランド・型番・UPC・対象市場の構造化フィールドを確認した。EPAのアダプターとカタログへの適用は未実施。 [ENERGY STAR データセット](https://data.energystar.gov/Active-Specifications/ENERGY-STAR-Certified-Residential-Clothes-Washers/bghd-e2wd/data)本番で新規に接続した情報源と、同意済み実販売業者は0件。車両登録情報は商品在庫や同意として利用しない。再開は `node tests/gpd33_seller_discovery_tick.mjs` と `node tests/gpd33_seller_opt_in.mjs`。外部への掲載更新には稼働版の確認と提出承認、商品供給には販売業者の同意や情報源の利用条件が必要。
+米国NHTSA vPICの公開ページを取得し、モーター車両のメーカー候補100件を隔離環境のアダプターで抽出した。今回の公開サンプルで無償の取得を確認した情報源は2件。vPICのほか、EPA ENERGY STARの洗濯機5レコードでブランド・型番・UPC・対象市場の構造化フィールドを確認した。EPAのアダプターとカタログへの適用は未実施。 [ENERGY STAR データセット](https://data.energystar.gov/Active-Specifications/ENERGY-STAR-Certified-Residential-Clothes-Washers/bghd-e2wd/data)
+
+本番で新規に接続した情報源と、同意済み実販売業者は0件。車両登録情報は商品在庫や同意として利用しない。再開は `node tests/gpd33_seller_discovery_tick.mjs` と `node tests/gpd33_seller_opt_in.mjs`。外部への掲載更新には稼働版の確認と提出承認、商品供給には販売業者の同意や情報源の利用条件が必要。
+
+## 公開情報源を使った識別検証
+
+調査済み外部経路8件、無料経路を確認した数2件、登録手順実装済み1件、公式実掲載確認1件。Circle、402.ad、Coinbase Agentic Marketの公開検索を試み、アクセス制限のため現在の掲載は未確認。 [公開検索の観測](GPD_CHANNEL_RESEARCH.md)
+
+公開サンプル取得済みの情報源は累計3件。今回BnFの公開ISBN検索とENERGY STARの既取得サンプルを隔離アダプターで検証した。BnFの書誌1件と洗濯機5件中1件を識別証拠にできた。累計のメーカー候補は100件。新規本番接続、同意済み販売業者、成立注文、照合済み入金は0件または未観測。再開は `PYTHONDONTWRITEBYTECODE=1 python3 tests/gpd33_bnf_edition.py` と `node tests/gpd33_energy_star_washers.mjs`。取込運用に進む前にライセンスに応じた出典・訂正追随を確認し、同意済み販売業者のオファーを別に照合する。 [情報源調査](GPD_SOURCE_RESEARCH.md)
 
 ## 次の実装単位
 

@@ -18,6 +18,8 @@ on:
       - scripts/gpd33_acquisition_funnel.mjs
       - scripts/gpd33_acquisition_audit.mjs
       - scripts/gpd33_seller_discovery_tick.mjs
+      - scripts/gpd33_energy_star_washers.mjs
+      - scripts/gpd33_bnf_edition.py
       - server.json
       - scripts/gpd33_seller_discovery.mjs
       - scripts/gpd33_seller_opt_in.mjs
@@ -60,6 +62,8 @@ jobs:
       - run: node tests/gpd33_acquisition_funnel.mjs
       - run: node tests/gpd33_acquisition_audit.mjs
       - run: node tests/gpd33_seller_discovery_tick.mjs
+      - run: node tests/gpd33_energy_star_washers.mjs
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 tests/gpd33_bnf_edition.py
       - run: node tests/gpd33_agent_onboarding.mjs
       - run: node tests/gpd33_export_handoff_evidence.mjs
       - run: node tests/gpd33_reconcile.mjs
