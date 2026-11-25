@@ -16,6 +16,7 @@
 - HTTP 統合テストで MCP 初期化とツール一覧、購買判断・既存アニメ・部品有料ルートの x402 v2 Solana チャレンジ、Merchant ルート、欠損した送料・在庫とバリエーションの判定を確認。決済ファシリテーターと商品データはフィクスチャを使用。
 - PostgreSQL 17.12 の独立した2接続で、同一 Cron スロットの排他と同一商品への並行登録を確認。意図的な INSERT 制約エラー後のロールバック、期限切れ後の候補再開、識別表記違いによる既存専門商品の保護、サービスロール権限と匿名アクセス拒否を確認。
 - Worker 統合テストで USDA の429から既存マーケットプレイスへの切替と、ステージ済み候補の DB 障害後再開を確認。テスト対象の切替経路では、DB RPC と外部 HTTP を合わせて24サブリクエスト以下。Cloudflare の統合 Cron 全体の本番 CPU 時間は未測定。
+- eBay Browse の公開スキーマで `ItemSummary` に商品バーコードが含まれず、`getItem?fieldgroups=PRODUCT` の `product.gtins` を使えることを確認。そのレスポンス形状で候補照合をテストした。[eBay Browse getItem](https://developer.ebay.com/api-docs/buy/browse/resources/item/methods/getItem)
 - USDA API から Branded 食品、GTIN、ブランド、包装情報を含む実レスポンスを取得。CC0 データを帰属付きで登録し、公開 DEMO_KEY の使用を UTC 日次最大20回に制限。429後は24時間休止する。[USDA FoodData Central API Guide](https://fdc.nal.usda.gov/api-guide/)
 
 ## 容量と登録速度

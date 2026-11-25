@@ -49,6 +49,9 @@ assert.equal(new Set(Array.from({length:24},(_,i)=>api.gpd33SelectDomain(i,{})))
 assert.equal(api.gpd33SelectDomain(24,{food_grocery:{remaining:10000},general_commerce:{remaining:100}}),'food_grocery');
 
 const requests=[];
+assert.equal(api.gpd33MarketRows('food_grocery',[{...offer,_catalogDetail:{
+  gtin:offer.gtin,product:{title:offer.title,brand:offer.brand,gtins:['0012345678905']}
+}}],'2026-11-25').length,1);
 let mode='http';
 let staged;
 let simulateFailure=false;
@@ -83,8 +86,11 @@ globalThis.fetch=async (target,options={})=>{
   if(url.hostname==='api.ebay.com'&&url.pathname.includes('oauth2')){
     return Response.json({access_token:'fixture',expires_in:3600});
   }
+  if(url.hostname==='api.ebay.com'&&url.searchParams.get('fieldgroups')==='PRODUCT'){
+    return Response.json({itemId:'e1',title:offer.title,brand:offer.brand,product:{title:offer.title,brand:offer.brand,gtins:[offer.gtin]}});
+  }
   if(url.hostname==='api.ebay.com'){
-    return Response.json({itemSummaries:[{itemId:'e1',title:'Example Pasta 500 g',brand:'Example',gtin:'012345678905'}]});
+    return Response.json({itemSummaries:[{itemId:'e1',title:'Example Pasta 500 g'}]});
   }
   if(url.pathname==='/rest/v1/parts_catalog')return Response.json([{id:'fixture-part',manufacturer:'OMRON',part_number:'E2E-X5ME1',normalized_part_number:'E2EX5ME1',name:'Proximity sensor'}]);
   if(url.hostname==='db.example')return Response.json([]);
@@ -126,7 +132,8 @@ const fallback=await api.checkpointedUniversalDemandRefresh({...env,YAHOO_CLIENT
 assert.equal(staged.catalog_limited,true);
 assert.equal(staged.metrics.catalog_errors,1);
 assert.ok(staged.metrics.yahoo_calls>=1);
-assert.equal(staged.metrics.ebay_calls,1);
+assert.equal(staged.metrics.ebay_calls,2);
+assert.ok(requests.some(url=>url.searchParams.get('fieldgroups')==='PRODUCT'));
 assert.ok(requests.length<=24,'Discovery used '+requests.length+' subrequests');
 assert.equal(fallback.new,1);
 console.log('PASS Worker routes, MCP, x402, identification, variants, source fallback, DB recovery and subrequest budget');
