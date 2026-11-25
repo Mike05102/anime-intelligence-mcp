@@ -44,6 +44,7 @@ jobs:
           DEPLOY_WORKER: ${{ inputs.deploy_worker }}
           DISK_FREE_BYTES: ${{ inputs.disk_free_bytes }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          EGRESS_AVAILABLE_BYTES: ${{ secrets.GPD33_EGRESS_AVAILABLE_BYTES }}
         run: |
           if [[ -z "$GPD33_DATABASE_URL" ]]; then
             echo "::notice::An existing Supabase connection is not available to this workflow."
@@ -55,6 +56,8 @@ jobs:
           bash supabase/maintenance/github_db_run.sh check
           if [[ "$MODE" == maintain ]]; then
             python3 supabase/maintenance/github_rewrite_headroom.py >/dev/null
+            [[ "$EGRESS_AVAILABLE_BYTES" =~ ^[1-9][0-9]{0,9}$ ]] || { echo "Set GPD33_EGRESS_AVAILABLE_BYTES to the current uncached Supabase egress remaining."; exit 1; }
+            bash supabase/maintenance/github_db_run.sh egress-check "$EGRESS_AVAILABLE_BYTES"
             [[ ${#BACKUP_PASSPHRASE} -ge 24 ]] || { echo "An independent backup passphrase of at least 24 characters is required."; exit 1; }
             if [[ "$DEPLOY_WORKER" == true && ( -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ) ]]; then
               echo "Existing Cloudflare deployment credentials are required for activation."

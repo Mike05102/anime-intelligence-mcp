@@ -2,14 +2,14 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
+from github_db_connection import connection_fields
 
 supplied = os.environ.get("DISK_FREE_BYTES", "0")
 token = os.environ.get("SUPABASE_ACCESS_TOKEN")
 if token:
-    db_url = urlsplit(os.environ["GPD33_DATABASE_URL"])
-    project = (db_url.username or "").split(".")[-1] if ".pooler." in (db_url.hostname or "") else (db_url.hostname or "").split(".")[1]
+    db = connection_fields(os.environ["GPD33_DATABASE_URL"])
+    project = db["PGUSER"].split(".")[-1] if ".pooler." in db["PGHOST"] else db["PGHOST"].split(".")[1]
     if not re.fullmatch(r"[a-z0-9]{20}", project):
         raise SystemExit("Cannot identify Supabase disk metrics for the configured connection.")
     try:

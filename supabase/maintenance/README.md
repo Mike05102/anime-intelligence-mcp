@@ -38,9 +38,11 @@ Storage is sampled hourly. At 400 MB, the catalog batch pauses writes. At 450 MB
 
 Safari で GitHub のリポジトリを開き、Actions の **GPD 33 production maintenance** から **Run workflow** を選択する。作業ブランチは `main`。画面が狭い場合は Safari の「デスクトップ用Webサイトを表示」を使う。
 
-- 既存の PostgreSQL 接続は `GPD33_DATABASE_URL`、`SUPABASE_DB_URL`、`DATABASE_URL` の順に使用する。未設定の場合はリポジトリの **Settings → Secrets and variables → Actions → New repository secret** に、既存の Supabase Session pooler 接続文字列を `GPD33_DATABASE_URL` として保存する。接続はTLSのホスト検証付きで行う。`GPD33_DB_CA_PEM` は独自のCA証明書が必要な場合のみ設定する。
+- 既存の PostgreSQL 接続は `GPD33_DATABASE_URL`、`SUPABASE_DB_URL`、`DATABASE_URL` の順に使用する。未設定の場合はリポジトリの **Settings → Secrets and variables → Actions → New repository secret** に、Supabase Session pooler 接続文字列の `[YOUR-PASSWORD]` を既存のデータベースパスワードに置き換え、完成した文字列を `GPD33_DATABASE_URL` として保存する。接続はTLSのホスト検証付きで行う。`GPD33_DB_CA_PEM` は独自のCA証明書が必要な場合のみ設定する。
 - `GPD33_BACKUP_PASSPHRASE` はバックアップ専用の24文字以上の強いパスフレーズを使う。既存のDBパスワードとは分け、パスワードマネージャーに保管する。公開リポジトリに保存される成果物は暗号化済みファイルのみで、保持期間は30日。Actionsの成果物に利用可能な無料容量を確認する。機密情報をチャット、コミット、Actionsの入力欄に貼り付ける必要はない。
 - 既存の `SUPABASE_ACCESS_TOKEN` が利用できるときは、物理ディスクの空き容量をSupabaseから取得する。トークンがなければ、SupabaseのDisk Usageで直近の空き容量を確認し、バイト単位で `disk_free_bytes` に入力する。
 - Workerの自動切替には既存の `CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` をActions secretsへ設定する。DBの保守だけを行うときは `deploy_worker` を解除する。
 
 `check` は接続の確認用でデータを変更しない。`maintain` は暗号化済みバックアップをアップロードし、ダウンロードしたコピーのチェックサムと隔離環境でのイベントテーブル復元を検証してから、対象ログをバッチ処理する。十分な物理空き容量が確認できた場合にのみ `VACUUM FULL` を実行する。回収後のDBが400 MB未満の場合だけ商品スキーマの移行に進む。Workerは既存バインディングを確認した上で切り替わり、ヘルス確認に失敗した場合は直前のバージョンへ戻る。
+
+Supabase の Usage で当月の **Uncached Egress** の残りを確認し、現在の残りバイト数を `GPD33_EGRESS_AVAILABLE_BYTES` に設定する。Free の未キャッシュ枠は組織あたり月5 GB。バックアップ前にDB内の論理データ量から転送を見積もり、余裕を含む見積もりが残り枠を超えると停止する。DBからのダンプを1回に絞り、復元テストはGitHub上の暗号化バックアップを使う。数値は当月の実績に合わせて更新する。[Supabase Egress](https://supabase.com/docs/guides/platform/manage-your-usage/egress)

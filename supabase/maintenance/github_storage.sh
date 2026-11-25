@@ -11,6 +11,24 @@ case "$1" in
   check)
     echo "TLS-verified database connection and GPD maintenance routines confirmed."
     ;;
+  egress-check)
+    [[ "$2" =~ ^[1-9][0-9]{0,9}$ ]] && (( $2<=5000000000 ))
+    logical_bytes="$(sql <<'SQL' | awk '{bytes+=$1} END {printf "%.0f",bytes}'
+select format('select coalesce(sum(octet_length(row_to_json(t)::text)),0) from only %I.%I t;',
+              n.nspname,c.relname)
+from pg_class c join pg_namespace n on n.oid=c.relnamespace
+where n.nspname in ('public','gpd33_maintenance') and c.relkind='r'
+\gexec
+SQL
+)"
+    [[ "$logical_bytes" =~ ^[0-9]+$ ]]
+    # Reserve twice the logical JSON size for COPY encoding, schema and
+    # concurrent writes. Local archive compression does not reduce DB egress.
+    if (( 2 * logical_bytes + 100000000 > $2 )); then
+      echo 'Uncached egress remaining is below the backup estimate.' >&2
+      exit 1
+    fi
+    ;;
   backup)
     sql -c 'select coalesce(max(id),0) from public.api_events' >/private/archive.fence
     pg_dump --format=custom --compress=9 --no-owner --no-privileges \

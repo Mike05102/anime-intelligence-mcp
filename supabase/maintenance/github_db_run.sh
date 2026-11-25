@@ -13,6 +13,7 @@ if ! docker run --rm --network host --user "$(id -u):$(id -g)" \
 fi
 case "$1" in
   check) echo 'TLS-verified database connection confirmed.' ;;
+  egress-check) echo 'Estimated backup transfer fits within the supplied uncached egress remaining.' ;;
   backup) echo 'Application backup decoded and its table entries verified.' ;;
   apply) echo 'Cleanup, physical rewrite and remeasurement completed.' ;;
   catalog) echo 'Catalog schema verified below the deployment target.' ;;
