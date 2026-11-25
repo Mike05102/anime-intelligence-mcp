@@ -109,12 +109,15 @@ function normalizeRows(rows, authority) {
  * Authenticate a complete snapshot against a registry supplied independently by the operator.
  * Returned rows contain private evidence and are for local reconciliation only.
  */
-export function authenticateGpd33EvidenceSnapshot(bundle, trust) {
+function authenticateEvidenceSnapshot(bundle, trust, onlyRole) {
   if (!bundle || bundle.schema_version !== 1 || !['test','live'].includes(bundle.environment) ||
     !Array.isArray(bundle.envelopes) || !bundle.envelopes.length || bundle.envelopes.length > 64) {
     throw new Error('Invalid signed evidence bundle');
   }
-  const authorities = validateGpd33EvidenceRegistry(trust, bundle.environment);
+  const configured = validateGpd33EvidenceRegistry(trust,bundle.environment);
+  const authorities = onlyRole === undefined ? configured : new Map(
+    [...configured].filter(([,authority]) => authority.role === onlyRole)
+  );
   const input = {schema_version:1,environment:bundle.environment,handoffs:[],orders:[],fees:[],receipts:[]};
   const includedIssuers = new Set();
   let metadata;
@@ -139,6 +142,15 @@ export function authenticateGpd33EvidenceSnapshot(bundle, trust) {
     throw new Error('Required evidence issuer is missing');
   }
   return {input,metadata};
+}
+
+export function authenticateGpd33EvidenceSnapshot(bundle,trust) {
+  return authenticateEvidenceSnapshot(bundle,trust);
+}
+
+export function authenticateGpd33OrderEvidenceSnapshot(bundle,trust) {
+  const {input,metadata} = authenticateEvidenceSnapshot(bundle,trust,'orders');
+  return {environment:input.environment,rows:input.orders,metadata};
 }
 
 export function reconcileSignedGpd33Evidence(bundle, trust) {

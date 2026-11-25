@@ -141,6 +141,12 @@ SQL
     if [[ "$(sql -c "select to_regprocedure('public.gpd33_ingest_reconciled_growth(uuid,bigint,text,jsonb)') is not null")" != t ]]; then
       sql -f supabase/migrations/20261125123000_gpd33_reconciled_growth.sql
     fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_list_buyer_handoffs(uuid,uuid,integer)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125124500_gpd33_buyer_handoff_list.sql
+    fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_export_handoff_evidence(bigint,jsonb)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125125000_gpd33_handoff_evidence.sql
+    fi
     [[ "$(sql -c "select public.gpd33_coverage(array['food_grocery']) ? 'food_grocery'")" == t ]]
     [[ "$(sql -c 'select pg_database_size(current_database()) < 400000000')" == t ]]
     ;;

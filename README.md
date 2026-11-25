@@ -8,7 +8,7 @@ GPD is building a Universal Purchase Decision Engine for AI agents to find produ
 
 **Permanent development charter:** [Business purpose, priorities and operating rules](docs/GPD_DEVELOPMENT_CHARTER.md) · [Implementation assessment and roadmap](docs/GPD_ROADMAP.md)
 
-**Developer quickstart:** [Integrate GPD with your AI agent, inspect the API, and test the x402 payment flow](docs/AGENT_INTEGRATION.md)
+**Developer quickstart:** [Integrate GPD with your AI agent, inspect the API, and test the x402 payment flow](docs/AGENT_INTEGRATION.md) · [Buyer registration and MCP Registry verification for the release candidate](docs/GPD_AGENT_ONBOARDING.md)
 
 ## Start here — AI agents and developers
 

@@ -1,3 +1,4 @@
+import {testHandoffEvidence} from './gpd33_handoff_evidence.mjs';
 import {testReconciledGrowth} from './gpd33_reconciled_growth.mjs';
 import {testOfferCondition} from './gpd33_offer_condition.mjs';
 import {testOfferQuantity} from './gpd33_offer_quantity.mjs';
@@ -284,7 +285,10 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await db.query(await readSql('supabase/migrations/20261125120000_gpd33_handoff_condition.sql'));
   await db.query(await readSql('supabase/migrations/20261125121500_gpd33_feed_observed_condition.sql'));
   await db.query(await readSql('supabase/migrations/20261125123000_gpd33_reconciled_growth.sql'));
+  await db.query(await readSql('supabase/migrations/20261125124500_gpd33_buyer_handoff_list.sql'));
+  await db.query(await readSql('supabase/migrations/20261125125000_gpd33_handoff_evidence.sql'));
   await db.query('set role anon');
+  await assert.rejects(db.query('select public.gpd33_list_buyer_handoffs(null,null,null)'),{code:'42501'});
   await assert.rejects(sql('select public.gpd33_create_buyer_handoff(null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_catalog_planning_growth()'),/permission denied/);
@@ -294,6 +298,7 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await assert.rejects(sql('select public.gpd33_request_condition_bound_handoff(null,null,null,null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_ingest_reconciled_growth(null,null,null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_catalog_planning_reconciled()'),/permission denied/);
+  await assert.rejects(sql('select public.gpd33_export_handoff_evidence(null,null)'),/permission denied/);
   await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
   await db.query('reset role; set role service_role');
   const nonParticipating = await one('select public.gpd33_request_buyer_handoff($1,$2,$3,1,$4,null) result',
@@ -304,6 +309,7 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   await testOfferQuantity(one,offer);
   await testOfferCondition(one,seller,offer);
   await testReconciledGrowth(one,concurrent);
+  await testHandoffEvidence(one,seller,offer);
 }
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');

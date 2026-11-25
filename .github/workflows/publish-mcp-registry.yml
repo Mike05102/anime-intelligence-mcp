@@ -1,36 +1,50 @@
-name: Publish MCP Registry metadata
+name: Publish verified GPD metadata to the MCP Registry
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "server.json"
-    tags:
-      - "v*"
+    inputs:
+      deployed_version:
+        description: "Confirmed public Worker version (for example, 33.0.0)"
+        required: true
+        type: string
+      deployed_build_id:
+        description: "Confirmed public Worker build_id from the authorized deployment"
+        required: true
+        type: string
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify public deployment and write registry draft
+        env:
+          DEPLOYED_VERSION: ${{ inputs.deployed_version }}
+          DEPLOYED_BUILD_ID: ${{ inputs.deployed_build_id }}
+        run: node scripts/gpd33_registry_draft.mjs --live "$DEPLOYED_VERSION" "$DEPLOYED_BUILD_ID" > "$RUNNER_TEMP/gpd-registry-server.json"
 
       - name: Install mcp-publisher
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          set -euo pipefail
+          curl -fSL --max-time 60 "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
 
       - name: Validate registry metadata
-        run: ./mcp-publisher validate server.json
+        run: ./mcp-publisher validate "$RUNNER_TEMP/gpd-registry-server.json"
 
       - name: Authenticate to MCP Registry
         run: ./mcp-publisher login github-oidc
 
       - name: Publish to MCP Registry
-        run: ./mcp-publisher publish server.json
+        run: ./mcp-publisher publish "$RUNNER_TEMP/gpd-registry-server.json"

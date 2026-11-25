@@ -12,6 +12,7 @@ export async function testHandoffJourney(query, seller, offer) {
   const buyer = randomUUID();
   const merchantKey='mai_000000000000000000000000fixture';
   const buyerToken = 'fixture.buyer.token';
+  const otherBuyer = randomUUID();
   const keys = generateKeyPairSync('ed25519');
   const rawKey = Buffer.from(keys.publicKey.export({format:'jwk'}).x,'base64url').toString('hex');
   env.GPD_MERCHANT_SIGNING_KEYS = JSON.stringify({[seller]:rawKey});
@@ -21,6 +22,7 @@ export async function testHandoffJourney(query, seller, offer) {
     gpd33_request_condition_bound_handoff: ['buyer', 'request_key', 'offer', 'units', 'country','expected_gtin','expected_condition'],
     gpd33_record_handoff_event: ['seller', 'handoff', 'event', 'new_state', 'reference_hash'],
     gpd33_buyer_handoff_status: ['handoff'],
+    gpd33_list_buyer_handoffs: ['buyer','lookup','page_size'],
     gpd33_merchant_handoffs: ['seller','lookup'],
     gpd33_handoff_outcomes: [],
     gpd33_business_outcomes: []
@@ -34,6 +36,9 @@ export async function testHandoffJourney(query, seller, offer) {
     dbCalls++;
     if (url.pathname === '/auth/v1/user') {
       assert.equal(init.headers.apikey, 'fixture-publishable');
+      if(init.headers.authorization === 'Bearer fixture.other.token') {
+        return Response.json({id:otherBuyer,email_confirmed_at:'2026-11-25T00:00:00Z'});
+      }
       return init.headers.authorization === 'Bearer ' + buyerToken
         ? Response.json({id:buyer,email_confirmed_at:'2026-11-25T00:00:00Z'})
         : Response.json({error:'unauthenticated'}, {status:401});
@@ -171,6 +176,21 @@ export async function testHandoffJourney(query, seller, offer) {
     const created = await create.json(), repeated = await retry.json();
     const {tracking_token:token,handoff_id:handoff} = created;
     assert.equal(repeated.handoff_id,handoff);
+    const historyPath = '/v1/handoffs?request_id=' + input.request_id;
+    const historyResponse = await request(historyPath,buyerHeaders);
+    assert.equal(historyResponse.status,200);
+    assert.equal(historyResponse.headers.get('cache-control'),'no-store');
+    const {handoffs:history} = await historyResponse.json();
+    assert.equal(history.length,1);
+    assert.equal(history[0].handoff_id,handoff);
+    assert.equal(history[0].handoff_state,'requested');
+    assert.equal(history[0].expected_condition,'NEW');
+    assert.equal('buyer_id' in history[0],false);
+    assert.equal('tracking_token' in history[0],false);
+    assert.equal('order_reference_hash' in history[0],false);
+    const foreignHistory = await request(historyPath + '&buyer_id=' + buyer,{authorization:'Bearer fixture.other.token'});
+    assert.deepEqual(await foreignHistory.json(),{ok:true,handoffs:[]});
+    assert.equal((await request('/v1/handoffs?limit=31',buyerHeaders)).status,400);
     assert.equal(await query('select buyer_id result from gpd33_buyer_handoffs where handoff_id=$1',[handoff]),buyer);
     assert.equal((await createBuyer({...input,quantity:2})).status,409);
     assert.equal((await createBuyer({...input,condition:undefined})).status,409);

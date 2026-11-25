@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {prepareGpd33GrowthEvidence} from '../scripts/gpd33_apply_growth_evidence.mjs';
 import {generateKeyPairSync, randomUUID, sign} from 'node:crypto';
 import {reconcileSignedGpd33Evidence} from '../scripts/gpd33_reconcile_signed.mjs';
+import {exportGpd33SignedHandoffEvidence} from '../scripts/gpd33_export_handoff_evidence.mjs';
 import {reconcileGpd33Evidence} from '../scripts/gpd33_reconcile.mjs';
 
 const contexts = {
@@ -9,18 +10,32 @@ const contexts = {
   fees:'gpd33-agreed-fees-v1', receipts:'gpd33-finalized-settlement-v1'
 };
 
-function sealedFixture(input, merchant, network) {
+async function sealedFixture(input, merchant, network, query) {
   const environment='test', snapshot_id=randomUUID(), observed_at=Math.floor(Date.now()/1000);
   const issuers={}, envelopes=[];
+  let handoffKey;
   for(const [role,context] of Object.entries(contexts)){
     const {publicKey,privateKey}=generateKeyPairSync('ed25519');
     issuers[role]={role,merchant_ids:[merchant],networks:[network],
       public_key:Buffer.from(publicKey.export({format:'jwk'}).x,'base64url').toString('hex')};
+    if(role==='handoffs'){
+      handoffKey=privateKey.export({format:'jwk'});
+      continue;
+    }
     const payload=Buffer.from(JSON.stringify({context,issuer:role,environment,snapshot_id,observed_at,rows:input[role]}));
     envelopes.push({issuer:role,payload:payload.toString('base64url'),
       signature:sign(null,payload,privateKey).toString('base64url')});
   }
-  return {bundle:{schema_version:1,environment,envelopes},trust:{schema_version:1,environment,issuers},snapshot:snapshot_id};
+  const bundle={schema_version:1,environment,envelopes};
+  const trust={schema_version:1,environment,issuers};
+  const handoffEnvelope=await exportGpd33SignedHandoffEvidence(
+    {...bundle,envelopes:envelopes.filter(envelope=>envelope.issuer==='orders')},
+    trust,'handoffs',snapshot_id,handoffKey,{
+      loadRows:({observed_at,bindings})=>query(
+        'select public.gpd33_export_handoff_evidence($1,$2::jsonb) result',[observed_at,JSON.stringify(bindings)])
+    });
+  envelopes.push(handoffEnvelope);
+  return {bundle,trust,snapshot:snapshot_id};
 }
 
 export async function assertReconciliationFromHandoff(query, handoffId) {
@@ -41,7 +56,7 @@ export async function assertReconciliationFromHandoff(query, handoffId) {
     orders:[{...handoff, state, confirmed_at:Math.floor(Date.now()/1000)-60,
       source:'fixture_order_ledger', record_id:'fixture_record', verification:'authoritative_ledger'}],
     fees:[fee], receipts:state === 'confirmed' ? [receipt,receipt] : [receipt,refund]};
-  const {bundle,trust,snapshot}=sealedFixture(input,persisted.merchant_id,fee.network);
+  const {bundle,trust,snapshot}=await sealedFixture(input,persisted.merchant_id,fee.network,query);
   const report=reconcileSignedGpd33Evidence(bundle,trust);
   const growth=await prepareGpd33GrowthEvidence(bundle,trust,snapshot);
   assert.equal(growth.status,'preview');

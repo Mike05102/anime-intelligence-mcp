@@ -11,11 +11,14 @@ const maxEnvelopeBytes = 12 * 1024 * 1024;
 const maxSnapshotBytes = 32 * 1024 * 1024;
 const utf8 = new TextDecoder('utf-8', {fatal:true});
 
-export async function readBoundedJson(file, limit) {
+export async function readBoundedJson(file, limit, {privateFile=false}={}) {
   // O_NONBLOCK prevents opening a FIFO from waiting on a writer. Only regular files qualify.
   const descriptor = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await descriptor.stat({bigint:true});
+    if (privateFile && (before.uid !== BigInt(process.getuid()) || (before.mode & 0o077n) !== 0n)) {
+      throw new Error('Private file must be owned by the running user and inaccessible to others');
+    }
     if (!before.isFile() || before.size < 1n || before.size > BigInt(limit)) {
       throw new Error('Evidence input must be a bounded regular file');
     }
