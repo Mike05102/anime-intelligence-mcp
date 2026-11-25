@@ -169,5 +169,19 @@ await db.query(`insert into api_events(event_type,metadata) values
 assert.equal(await one("select count(*)::int result from api_events where event_type='gpd_cron_heartbeat'"),0);
 assert.equal(await one("select count(*)::int result from api_events where event_type='scheduled_growth_run'"),2);
 assert.equal(await one("select count(*)::int result from api_events where event_type='paid_call'"),4);
+await db.query('reset role');
+await db.query(await readSql('supabase/migrations/20261125073000_gpd33_egress.sql'));
+await sql('select public.gpd33_storage_status()');
+await db.query(`insert into api_events(event_type,metadata) values
+  ('universal_discovery_attempt','{"phase":"completed"}'),
+  ('universal_expansion_run','{"refreshed":[{"domain":"food_grocery","canonical_new":3}]}'),
+  ('universal_discovery_batch','{"private_marker":"must not leave the DB"}')`);
+await db.query('set role service_role');
+const health=await one('select public.gpd33_health_events() result');
+assert.equal(health.events.universal_discovery_attempt.recent_phases.completed,1);
+assert.equal(health.growth_24h.by_domain.food_grocery,3);
+assert.ok(!JSON.stringify(health).includes('private_marker'));
+await db.query('reset role; set role anon');
+await assert.rejects(sql('select public.gpd33_health_events()'),/permission denied/);
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');

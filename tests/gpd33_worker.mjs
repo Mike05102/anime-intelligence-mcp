@@ -62,6 +62,12 @@ globalThis.fetch=async (target,options={})=>{
     return Response.json({kinds:[{x402Version:2,scheme:'exact',
       network:'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',extra:{feePayer:env.X402_WALLET_ADDRESS}}]});
   }
+  if(url.pathname==='/rest/v1/rpc/gpd33_health_events'){
+    return Response.json({events:{},growth_24h:{read_ok:true},latest_expansion:null});
+  }
+  if(url.pathname==='/rest/v1/rpc/gpd33_coverage'||url.pathname==='/rest/v1/rpc/gpd33_run_metrics'){
+    return Response.json({});
+  }
   if(url.pathname==='/rest/v1/rpc/gpd33_discovery'){
     const body=JSON.parse(options.body);
     switch(body.action){
@@ -136,4 +142,19 @@ assert.equal(staged.metrics.ebay_calls,2);
 assert.ok(requests.some(url=>url.searchParams.get('fieldgroups')==='PRODUCT'));
 assert.ok(requests.length<=24,'Discovery used '+requests.length+' subrequests');
 assert.equal(fallback.new,1);
+const cachedHealth=new Map();
+globalThis.caches={default:{
+  match:async request=>cachedHealth.get(request.url)?.clone(),
+  put:async (request,response)=>cachedHealth.set(request.url,response)
+}};
+requests.length=0;
+const firstHealth=await call('/v1/system/discovery-health?probe=1');
+assert.match(firstHealth.headers.get('cache-control'),/max-age=300/);
+assert.equal((await firstHealth.json()).growth_24h.read_ok,true);
+await Promise.allSettled(pending);
+const repeatHealth=await call('/v1/system/discovery-health?probe=2');
+assert.equal((await repeatHealth.json()).growth_24h.read_ok,true);
+assert.equal(requests.filter(url=>url.hostname==='db.example').length,3);
+assert.ok(requests.every(url=>!url.pathname.endsWith('/api_events')));
+delete globalThis.caches;
 console.log('PASS Worker routes, MCP, x402, identification, variants, source fallback, DB recovery and subrequest budget');

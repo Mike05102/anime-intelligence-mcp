@@ -6020,8 +6020,9 @@ function dedupeUniversalOffers(rows=[]){
 async function loadUniversalMarketMemory(env,domain,identityKey,query,limit=12){
   try{
     const since=new Date(Date.now()-7*86400000).toISOString();
-    const rows=await sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_product_snapshot&occurred_at=gte.${encodeURIComponent(since)}&limit=80`)||[];
     const qk=universalQueryKey(domain,query),out=[];
+    const match=encodeURIComponent(`(metadata->>query_key.eq.${JSON.stringify(qk)},metadata->>identity_key.eq.${JSON.stringify(String(identityKey||""))})`);
+    const rows=await sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_product_snapshot&occurred_at=gte.${encodeURIComponent(since)}&or=${match}&order=occurred_at.desc&limit=12`)||[];
     for(const r of rows){const m=r?.metadata||{};if(m.query_key!==qk&&m.identity_key!==identityKey)continue;const f=universalFreshness(domain,m.observed_at||r.occurred_at);
       for(const o of (Array.isArray(m.offers)?m.offers:[])){out.push({...o,provider:o.provider||"memory",memory_observation:true,observed_at:m.observed_at||r.occurred_at,freshness:f});}
     }
@@ -6704,40 +6705,36 @@ async function universalDiscoveryDiagnostics(env){
 
 // Public aggregate diagnostics: no secrets, queries, source IPs, or raw metadata.
 async function publicDiscoveryHealth(env){
-  // Aggregated read-only telemetry. No admin key, credentials, raw search queries or personal information.
-  const types=["gpd_cron_heartbeat","discovery_cron_entered","universal_discovery_attempt","universal_expansion_run","universal_discovery_batch","universal_provisional_catalog_batch","universal_discovery_persist_error","scheduled_growth_run"];
-  const events={};let latestCompleted=null,latestExpansion=null;
-  for(const type of types){
-    try{
-      const rows=await sb(env,`/api_events?select=occurred_at,metadata&event_type=eq.${type}&order=occurred_at.desc&limit=30`);
-      const arr=Array.isArray(rows)?rows:[];
-      events[type]={read_ok:true,recent_rows:arr.length,latest_at:arr[0]?.occurred_at||null};
-      if(type==="universal_discovery_attempt"){
-        const counts={started:0,completed:0,failed:0};
-        for(const r of arr){const phase=String(r?.metadata?.phase||"");if(Object.hasOwn(counts,phase))counts[phase]++;if(!latestCompleted&&phase==="completed")latestCompleted={at:r.occurred_at,metadata:r.metadata||{}};}
-        events[type].recent_phases=counts;
-      }
-      if(type==="universal_expansion_run"&&arr.length)latestExpansion={at:arr[0].occurred_at,metadata:arr[0].metadata||{}};
-    }catch(e){events[type]={read_ok:false,error:"telemetry_unavailable"};}
-  }
-  let growth24h={read_ok:false};
-  try{
-    const since=new Date(Date.now()-86400000).toISOString();
-    const rows=await sb(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_expansion_run&occurred_at=gte.${encodeURIComponent(since)}&order=occurred_at.desc&limit=150`);
-    if(!Array.isArray(rows))throw new Error("telemetry_unavailable");
-    const byDomain={};let reported=0;
-    for(const row of rows){for(const x of (Array.isArray(row?.metadata?.refreshed)?row.metadata.refreshed:[])){const d=String(x.domain||"unknown");const n=Number(x.canonical_new||0);reported+=n;byDomain[d]=(byDomain[d]||0)+n;}}
-    growth24h={read_ok:true,completed_expansion_events:rows.length,expected_cron_slots:144,reported_canonical_new:reported,by_domain:byDomain,possibly_truncated:rows.length>=150,source:"expansion_events_not_database_count"};
-  }catch{}
-  const [verifiedCoverage,operations]=await Promise.all([
+  const [telemetry,verifiedCoverage,operations]=await Promise.all([
+    gpd33Rpc(env,"health_events",{}).catch(()=>null),
     gpd33Coverage(env).catch(()=>null),gpd33Rpc(env,"run_metrics",{}).catch(()=>null)
   ]);
+  const {events={},latest_completed:latestCompleted=null,latest_expansion:latestExpansion=null,
+    growth_24h:growth24h={read_ok:false}}=telemetry||{};
   const m=latestCompleted?.metadata||{},e=latestExpansion?.metadata||{};
   const refreshes=Array.isArray(e.refreshed)?e.refreshed:[];
   const details=refreshes.slice(0,6).map(x=>({domain:x.domain||null,source:x.source||null,provider_role:x.provider_role||null,offers_found:Number(x.count||0),live_offers:Number(x.live_count||0),provider_calls:Number(x.provider_calls_estimate||0),yahoo_blocked:x.yahoo_blocked===true,ebay_fallback_enabled:x.ebay_fallback_enabled===true,filter_diagnostics:x.filter_diagnostics||null,promotion_diagnostics:x.promotion_diagnostics||null,enrichment_diagnostics:x.enrichment_diagnostics||null,discovery_candidates:Number(x.discovery_candidates||0),canonical_new:Number(x.canonical_new||0),canonical_upserted:Number(x.canonical_upserted||0),error:x.error?String(x.error).slice(0,180):null,provider_errors_count:Array.isArray(x.errors)?x.errors.length:0,provider_errors:(Array.isArray(x.errors)?x.errors:[]).slice(0,2).map(z=>String(z?.error||z?.message||z?.provider||"provider_error").slice(0,140))}));
   const selected=Number(e.selected??m.selected??0),found=details.reduce((n,x)=>n+x.offers_found,0),candidates=Number(e.run_efficiency?.discovery_candidates??m.discovery_candidates??0),canonicalNew=Number(e.run_efficiency?.canonical_new??m.canonical_new??0);
   const diagnosis=!latestExpansion?"no_expansion_event":selected===0?"no_queries_selected":details.some(x=>x.error)?"refresh_exception":details.some(x=>x.provider_errors_count>0)&&found===0?"provider_errors_no_offers":found===0?"no_offers_from_providers":candidates===0?"offers_filtered_or_persistence_zero":canonicalNew===0?"candidates_found_but_no_new_canonical_products":"canonical_products_created";
   return {ok:true,service:PLATFORM_NAME,version:VERSION,build_id:BUILD_ID,cron_expected:"*/10 * * * *; discovery on every scheduled invocation",events,growth_24h:growth24h,verified_catalog:verifiedCoverage,catalog_totals:gpd33CoverageTotals(verifiedCoverage),operations,latest_discovery:{completed_at:latestCompleted?.at||null,expansion_at:latestExpansion?.at||null,selected_queries:selected,offers_found:found,discovery_candidates:candidates,canonical_new:canonicalNew,refreshes:details,diagnosis},generated_at:new Date().toISOString()};
+}
+
+async function publicDiscoveryHealthResponse(request,env,ctx){
+  const cache=globalThis.caches?.default;
+  const url=new URL("/v1/system/discovery-health",request.url);
+  url.searchParams.set("build",BUILD_ID);
+  const cacheKey=new Request(url);
+  if(cache){
+    try{const hit=await cache.match(cacheKey);if(hit)return hit;}catch{}
+  }
+  const result=await publicDiscoveryHealth(env);
+  const cacheable=!!cache&&result.growth_24h.read_ok&&result.verified_catalog!==null;
+  const response=json(result,200,{"cache-control":cacheable?"public, max-age=300":"no-store"});
+  if(cacheable){
+    const copy=response.clone();
+    deferTelemetry(ctx,Promise.resolve().then(()=>cache.put(cacheKey,copy)));
+  }
+  return response;
 }
 
 async function universalCoverageSnapshot(env){
@@ -13039,7 +13036,7 @@ export default{
         const html=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GLOBAL PURCHASE DECISION — AI Agent Product Search and Purchase Intelligence</title><meta name="description" content="Free product discovery and evidence-based paid purchase decisions for AI agents. Anime collectibles, industrial parts and global commerce."><link rel="canonical" href="${esc(origin)}/agents"><style>body{font-family:system-ui,sans-serif;max-width:820px;margin:48px auto;padding:0 20px;line-height:1.6;color:#172033}h1{font-size:2.3rem;line-height:1.2}a{color:#1559aa}code,pre{background:#f2f5f9;padding:3px 6px;border-radius:5px}pre{overflow:auto;padding:16px}section{margin:28px 0}small{color:#536276}</style></head><body><h1>Product intelligence for AI agents</h1><p>Find products across global commerce. Compare available merchant evidence and request an evidence-based purchase decision. Specialized coverage includes anime collectibles and industrial parts.</p><section><h2>1. Start with free search</h2><p>Try <a href="${esc(origin)}/v1/search?query=Hatsune%20Miku">Hatsune Miku product search</a> or <a href="${esc(origin)}/v1/search?query=industrial%20sensor">industrial sensor search</a>. Search availability and coverage vary by source and product.</p><pre>GET /v1/search?query=Hatsune%20Miku</pre></section><section><h2>2. Request a purchase decision</h2><p>Use <code>POST /v1/purchase-decision</code> for a structured decision. The listed price is 0.10 USDC via x402 when payment is enabled. Inspect the HTTP 402 response and payment requirements; never assume a purchase is executed.</p><p><a href="${esc(origin)}/x402/status">Check payment readiness</a> · <a href="${esc(origin)}/agent/services">Service catalog</a> · <a href="${esc(origin)}/agents/examples">Copyable request examples</a> · <a href="${esc(origin)}/agents/readiness">Readiness</a></p><pre>curl -i -X POST "${esc(origin)}/v1/purchase-decision" -H "content-type: application/json" -d '{"query":"Sony WH-1000XM5 headphones","destination":{"country":"US"},"requirements":{"currency":"USD"}}'</pre><p>First request should return HTTP 402 if payment is configured. An x402-compatible client must sign and retry the same request. Payment for intelligence does not purchase the product.</p></section><section><h2>3. Connect your agent</h2><p><a href="${esc(origin)}/mcp">MCP endpoint</a> · <a href="${esc(origin)}/openapi.json">OpenAPI schema</a> · <a href="${esc(origin)}/.well-known/agent.json">Agent metadata</a> · <a href="${esc(origin)}/.well-known/x402-bazaar">x402 Bazaar metadata</a> · <a href="${esc(origin)}/llms.txt">LLM instructions</a></p></section><section><h2>Coverage and evidence</h2><p>Product identity, merchant availability, shipping and taxes may be incomplete. The service reports unknowns rather than inventing facts. Product listings and payment status should be checked before use.</p></section><small>GLOBAL PURCHASE DECISION · ${esc(VERSION)}</small></body></html>`;
         return new Response(html,{status:200,headers:{"content-type":"text/html; charset=utf-8","cache-control":"public, max-age=300","x-content-type-options":"nosniff"}});
       }
-      if(url.pathname==="/v1/system/discovery-health"&&request.method==="GET")return json(await publicDiscoveryHealth(env),200,{"cache-control":"no-store"});
+      if(url.pathname==="/v1/system/discovery-health"&&request.method==="GET")return publicDiscoveryHealthResponse(request,env,ctx);
       if(url.pathname==="/health/deep"){const probe=await universalSupabaseProbe(env,5000);const out={ok:probe.ok,service:PLATFORM_NAME,product:PLATFORM_PRODUCT,legacy_adapter:"ANIME INTELLIGENCE",version:VERSION,build_id:BUILD_ID,status:probe.ok?"online":"degraded",health_mode:"deep",supabase:probe.ok?"ok":"error",has_product:probe.has_product??null,latency_ms:probe.latency_ms,x402:{enabled:!!env.X402_WALLET_ADDRESS,endpoints:INDEX402_SERVICES.length},travel_exposed:false,error:probe.error||null,generated_at:new Date().toISOString()};return json(out,probe.ok?200:503,{"cache-control":"no-store"});}
       if(url.pathname.startsWith("/atelier/result/")&&request.method==="GET"){const orderId=decodeURIComponent(url.pathname.slice("/atelier/result/".length));const result=await loadAtelierResult(env,orderId);return result?json(result,200,{"cache-control":"private, no-store"}):json({error:"atelier_result_not_found"},404);}
       if(url.pathname.startsWith("/collector/"))return embeddedCollectorFetch(request,env,ctx);
