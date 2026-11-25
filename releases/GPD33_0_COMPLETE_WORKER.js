@@ -6586,10 +6586,9 @@ function gpd33RankQuery(row){
   return row.score+universalIdentityRoleScore(row)+Math.min(3,Number(row.history_canonical_per_provider_call||0));
 }
 async function gpd33Plan(env,job){
-  const [coverage,events,frontier,paid]=await Promise.all([
+  const [coverage,events,paid]=await Promise.all([
     job.coverage||gpd33Coverage(env),
     sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.universal_discovery_batch&order=occurred_at.desc&limit=36"),
-    sbOptional(env,"/api_events?select=occurred_at,metadata&event_type=eq.universal_catalog_frontier&order=occurred_at.desc&limit=12"),
     sbOptional(env,"/api_events?select=occurred_at,payer_hash,metadata&event_type=eq.paid_call&order=occurred_at.desc&limit=12")
   ]);
   const efficiency={};
@@ -6610,6 +6609,8 @@ async function gpd33Plan(env,job){
     const family=row?.metadata?.query_family||row?.metadata?.purchase_attribution?.query_family;
     if(family)history.paidFamilies.set(family,(history.paidFamilies.get(family)||0)+1);
   }
+  const frontier=visit%4===2?await sbOptional(env,
+    `/api_events?select=metadata&event_type=eq.universal_catalog_frontier&metadata->>domain=eq.${encodeURIComponent(domain)}&order=occurred_at.desc&limit=4`):[];
   const longTail=(frontier||[]).filter(row=>row.metadata?.domain===domain)
     .flatMap(row=>Array.isArray(row.metadata?.candidates)?row.metadata.candidates.slice(0,2):[])
     .map(item=>item.query).filter(q=>typeof q==="string"&&q.length>=2&&q.length<=180);
@@ -6738,16 +6739,14 @@ async function publicDiscoveryHealthResponse(request,env,ctx){
 }
 
 async function universalCoverageSnapshot(env){
-  const since24=new Date(Date.now()-24*3600000).toISOString(),since7=new Date(Date.now()-7*86400000).toISOString();
-  const [demandsRaw,snapsRaw]=await Promise.all([
-    sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_product_demand&occurred_at=gte.${encodeURIComponent(since7)}&limit=200`),
-    sbOptional(env,`/api_events?select=occurred_at,metadata&event_type=eq.universal_product_snapshot&occurred_at=gte.${encodeURIComponent(since24)}&limit=200`)
+  const [telemetry,verifiedCatalog]=await Promise.all([
+    gpd33Rpc(env,"coverage_events",{}).catch(()=>null),
+    gpd33Coverage(env).catch(()=>null)
   ]);
-  const demands=Array.isArray(demandsRaw)?demandsRaw:[],snaps=Array.isArray(snapsRaw)?snapsRaw:[];
-  const byDomain={},providers=new Set(),identities=new Set();let offers=0;
-  for(const r of demands){const d=String(r?.metadata?.domain||"general_commerce");byDomain[d]=byDomain[d]||{demands_7d:0,snapshots_24h:0,offers_24h:0};byDomain[d].demands_7d++;}
-  for(const r of snaps){const m=r?.metadata||{},d=String(m.domain||"general_commerce");byDomain[d]=byDomain[d]||{demands_7d:0,snapshots_24h:0,offers_24h:0};byDomain[d].snapshots_24h++;if(m.identity_key)identities.add(m.identity_key);for(const o of (m.offers||[])){offers++;byDomain[d].offers_24h++;if(o.provider)providers.add(o.provider);}}
-  return {ok:true,service:PLATFORM_NAME,version:VERSION,domains_supported:2+UNIVERSAL_GENERIC_DOMAINS.length,domain_metrics:byDomain,verified_catalog:await gpd33Coverage(env).catch(()=>null),market_providers_observed:[...providers],identity_keys_observed_24h:identities.size,offers_observed_24h:offers,database_growth_mode:"autonomous_exploration_plus_demand_acceleration",generated_at:new Date().toISOString()};
+  return {ok:true,service:PLATFORM_NAME,version:VERSION,domains_supported:2+UNIVERSAL_GENERIC_DOMAINS.length,
+    domain_metrics:{},market_providers_observed:[],identity_keys_observed_24h:0,offers_observed_24h:0,
+    ...telemetry,verified_catalog:verifiedCatalog,event_metrics_ready:telemetry!==null,
+    database_growth_mode:"autonomous_exploration_plus_demand_acceleration",generated_at:new Date().toISOString()};
 }
 function universalSelftest(){
   const checks=[];const add=(name,ok)=>checks.push({name,ok:!!ok});

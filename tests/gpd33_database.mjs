@@ -181,6 +181,16 @@ const health=await one('select public.gpd33_health_events() result');
 assert.equal(health.events.universal_discovery_attempt.recent_phases.completed,1);
 assert.equal(health.growth_24h.by_domain.food_grocery,3);
 assert.ok(!JSON.stringify(health).includes('private_marker'));
+await db.query('reset role');
+await db.query(`insert into api_events(event_type,metadata) values
+  ('universal_product_demand','{"domain":"food_grocery"}'),
+  ('universal_product_snapshot','{"domain":"food_grocery","identity_key":"example","offers":[{"provider":"fixture","price":123}]}')`);
+await db.query('set role service_role');
+const coverageEvents=await one('select public.gpd33_coverage_events() result');
+assert.equal(coverageEvents.domain_metrics.food_grocery.demands_7d,1);
+assert.equal(coverageEvents.offers_observed_24h,1);
+assert.deepEqual(coverageEvents.market_providers_observed,['fixture']);
+assert.ok(!JSON.stringify(coverageEvents).includes('price'));
 await db.query('reset role; set role anon');
 await assert.rejects(sql('select public.gpd33_health_events()'),/permission denied/);
 await Promise.all([db.end(),concurrent.end()]);
