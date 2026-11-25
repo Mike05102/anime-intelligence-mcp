@@ -126,6 +126,12 @@ SQL
     if [[ "$(sql -c "select to_regprocedure('public.gpd33_offer_source_fresh(timestamptz)') is not null")" != t ]]; then
       sql -f supabase/migrations/20261125111500_gpd33_offer_source_freshness.sql
     fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_bulk_quantity_unreported(integer,numeric)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125113000_gpd33_offer_quantity.sql
+    fi
+    if [[ "$(sql -c "select to_regprocedure('public.gpd33_import_merchant_stock_feed(uuid,jsonb)') is not null")" != t ]]; then
+      sql -f supabase/migrations/20261125114500_gpd33_merchant_stock_feed.sql
+    fi
     [[ "$(sql -c "select public.gpd33_coverage(array['food_grocery']) ? 'food_grocery'")" == t ]]
     [[ "$(sql -c 'select pg_database_size(current_database()) < 400000000')" == t ]]
     ;;

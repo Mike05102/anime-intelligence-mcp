@@ -13,6 +13,16 @@ const preview=prepareMerchantOfferFeed(approval,manifest,now);
 assert.equal(preview.status,'operator_review_required');
 assert.equal(preview.offer_count,1);
 assert.deepEqual(preview.upsert_payload.offers[0].ships_to,['JP']);
+assert.ok(!Object.hasOwn(preview.upsert_payload.offers[0],'stock_quantity'));
+for(const quantity of [0,5,2147483647]){
+  const result=prepareMerchantOfferFeed(approval,{...manifest,offers:[{...offer,stock_quantity:quantity}]},now);
+  assert.equal(result.upsert_payload.offers[0].stock_quantity,quantity);
+}
+const unknownStock=prepareMerchantOfferFeed(approval,{...manifest,offers:[{...offer,stock_quantity:null}]},now);
+assert.ok(!Object.hasOwn(unknownStock.upsert_payload.offers[0],'stock_quantity'));
+for(const quantity of [-1,1.5,'4',false,2147483648]){
+  assert.throws(()=>prepareMerchantOfferFeed(approval,{...manifest,offers:[{...offer,stock_quantity:quantity}]},now),/invalid_stock_quantity/);
+}
 assert.equal(preview.upsert_payload.offers[0].price,'1200.00');
 assert.ok(!JSON.stringify(preview).includes('forged'));
 assert.ok(!JSON.stringify(preview).includes('unapproved'));

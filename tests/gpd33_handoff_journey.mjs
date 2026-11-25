@@ -17,7 +17,7 @@ export async function testHandoffJourney(query, seller, offer) {
   env.GPD_MERCHANT_SIGNING_KEYS = JSON.stringify({[seller]:rawKey});
   const rpc = {
     gpd33_create_handoff: ['handoff', 'offer', 'units'],
-    gpd33_import_merchant_feed: ['seller','offers'],
+    gpd33_import_merchant_stock_feed: ['seller','offers'],
     gpd33_request_buyer_handoff: ['buyer', 'request_key', 'offer', 'units', 'country','expected_gtin'],
     gpd33_record_handoff_event: ['seller', 'handoff', 'event', 'new_state', 'reference_hash'],
     gpd33_buyer_handoff_status: ['handoff'],
@@ -82,7 +82,7 @@ export async function testHandoffJourney(query, seller, offer) {
     const merchantHeaders={'x-merchant-key':merchantKey};
     const feedPath='/v1/merchant/offers/feed-import';
     const feedOffer={merchant_sku:'fixture-sku',manufacturer:'Example',part_number:'EX-123',
-      title:'Updated fixture',gtin:'012345678905',stock_status:'in_stock',price:'12.50',currency:'JPY',
+      title:'Updated fixture',gtin:'012345678905',stock_status:'in_stock',stock_quantity:2,price:'12.50',currency:'JPY',
       ships_to:['JP'],product_url:'https://merchant.example/fixture',source_updated_at:new Date().toISOString()};
     const importFeed=(item,merchantId=seller)=>request(feedPath,merchantHeaders,{merchant_id:merchantId,offers:[item]});
     assert.equal((await importFeed(feedOffer,randomUUID())).status,403);
@@ -109,13 +109,17 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal(written.new_or_updated,1);
     assert.equal((await (await importFeed(feedOffer)).json()).ignored,1);
     assert.equal((await (await importFeed({...feedOffer,price:'1',source_updated_at:new Date(Date.now()-86400000).toISOString()})).json()).ignored,1);
-    const savedOffer=await query("select jsonb_build_object('id',id,'price',price) result from merchant_offers where merchant_sku='fixture-sku'");
-    assert.deepEqual(savedOffer,{id:offer,price:12.5});
+    const savedOffer=await query("select jsonb_build_object('id',id,'price',price,'stock_quantity',stock_quantity) result from merchant_offers where merchant_sku='fixture-sku'");
+    assert.deepEqual(savedOffer,{id:offer,price:12.5,stock_quantity:2});
     const conflict={...feedOffer,part_number:'EX-456',source_updated_at:new Date(Date.now()+60_000).toISOString()};
     assert.equal((await (await importFeed(conflict)).json()).ignored,1);
     const freshOffer={...feedOffer,merchant_sku:'new-fixture-sku'};
     assert.equal((await (await importFeed(freshOffer)).json()).new_or_updated,1);
     assert.equal((await (await importFeed(freshOffer)).json()).ignored,1);
+    const unknown={...freshOffer,stock_quantity:null,source_updated_at:new Date(Date.now()+60000).toISOString()};
+    assert.equal((await (await importFeed(unknown)).json()).new_or_updated,1);
+    assert.equal(await query("select stock_quantity result from merchant_offers where merchant_sku='new-fixture-sku'"),null);
+
 
     const search = '/v1/merchant/search?part_number=EX-123&manufacturer=Example';
     const unscoped = await (await request(search, {})).json();

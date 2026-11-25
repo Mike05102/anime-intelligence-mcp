@@ -9,14 +9,14 @@ export async function testMerchantGtin(worker, domains) {
   const offer='10000000-0000-4000-8000-000000000004';
   const product='10000000-0000-4000-8000-000000000005';
   const keys='00012345678905';
-  let domain='food_grocery', mode='normal', observedAt=new Date().toISOString();
+  let domain='food_grocery', mode='normal', stockQuantity=1, observedAt=new Date().toISOString();
   const calls=[];
   const originalFetch=globalThis.fetch;
   globalThis.fetch=async input=>{
     const url=new URL(input), query=url.searchParams;
     calls.push(url);
     const row={id:offer,merchant_id:seller,manufacturer:'Example',gtin:'0012345678905',
-      stock_status:'in_stock',stock_quantity:1,ships_to:['JP'],price:10,currency:'JPY',source_updated_at:observedAt};
+      stock_status:'in_stock',stock_quantity:stockQuantity,ships_to:['JP'],price:10,currency:'JPY',source_updated_at:observedAt};
     if(url.pathname==='/rest/v1/products'){
       assert.equal(query.get('source_product_key'),'eq.universal:gtin:'+keys);
       assert.equal(query.get('metadata->>gpd33_verified'),'eq.true');
@@ -70,6 +70,15 @@ export async function testMerchantGtin(worker, domains) {
       assert.ok(unconfirmed.offers.every(item=>item.offer_evidence_fresh===false));
     }
     observedAt=new Date().toISOString();
+    const bulk=async(quantity)=>await (await request('012345678905','&buyer_country=JP&quantity='+quantity)).json();
+    assert.equal((await bulk(2)).handoff_candidate_offer_id,null);
+    stockQuantity=2;
+    assert.equal((await bulk(2)).handoff_candidate_offer_id,offer);
+    stockQuantity=null;
+    assert.equal((await bulk(2)).offers.find(item=>item.offer.id===offer).stock_quantity_evidence,'unknown');
+    assert.equal((await bulk(2)).handoff_candidate_offer_id,null);
+    assert.equal((await bulk(1)).handoff_candidate_offer_id,offer);
+    stockQuantity=1;
     assert.ok(!JSON.stringify(destination).includes('system_managed'));
     assert.equal((await (await request('0012345678905')).json()).handoff_candidate_offer_id,null);
     assert.equal((await (await request('012345678905','&buyer_country=US')).json()).count,0);
@@ -78,6 +87,7 @@ export async function testMerchantGtin(worker, domains) {
     const invalidBefore=calls.length;
     assert.equal((await request('012345678906')).status,400);
     assert.equal((await request('012345678905','&limit=0')).status,400);
+    assert.equal((await request('012345678905','&quantity=101')).status,400);
     assert.equal(calls.length,invalidBefore);
     domain='anime_collectibles';
     assert.equal((await request('012345678905')).status,404);

@@ -6024,13 +6024,16 @@ async function gpd33ImportMerchantFeed(request,env){
     if(!Array.isArray(body.offers)||!body.offers.length||body.offers.length>200)throw new Error("invalid_feed");
     const skus=new Set(),now=Date.now();
     rows=body.offers.map(item=>{
-      const {merchant_sku,manufacturer,part_number,title,gtin,price,currency,stock_status,ships_to,
+      const {merchant_sku,manufacturer,part_number,title,gtin,price,currency,stock_status,stock_quantity,ships_to,
         product_url,source_updated_at}=item;
       const observed=Date.parse(source_updated_at);
       if(!gpd33MerchantObservationFresh(source_updated_at,now)||
-        (gtin!=null&&!gpd33Barcode(gtin)))throw new Error("invalid_feed_evidence");
+        (gtin!=null&&!gpd33Barcode(gtin))||
+        (stock_quantity!=null&&(!Number.isInteger(stock_quantity)||stock_quantity<0||stock_quantity>2147483647))){
+        throw new Error("invalid_feed_evidence");
+      }
       const row=normalizeMerchantOfferInput({merchant_sku,manufacturer,part_number,title,gtin,price,currency,
-        stock_status,ships_to,product_url,source_updated_at:new Date(observed).toISOString()},merchant.id);
+        stock_status,stock_quantity,ships_to,product_url,source_updated_at:new Date(observed).toISOString()},merchant.id);
       if(skus.has(row.merchant_sku))throw new Error("duplicate_feed_sku");
       skus.add(row.merchant_sku);
       return row;
@@ -6039,7 +6042,7 @@ async function gpd33ImportMerchantFeed(request,env){
     return json({ok:false,error:"invalid_merchant_feed"},400,headers);
   }
   try{
-    const result=await gpd33Rpc(env,"import_merchant_feed",{seller:merchant.id,offers:rows});
+    const result=await gpd33Rpc(env,"import_merchant_stock_feed",{seller:merchant.id,offers:rows});
     return json(result,result.ok?200:(result.status||400),headers);
   }catch{
     return json({ok:false,error:"merchant_feed_import_unavailable"},503,headers);
@@ -6127,6 +6130,7 @@ async function searchMerchantOffers(env,{part_number="",manufacturer="",buyer_co
     const destinationCovered=/^[A-Z]{2}$/.test(destination)&&ships.some(x=>x===destination||x==="WORLDWIDE"||x==="ALL");
     const handoffCandidate=Boolean(mnorm&&gpd33HandoffId(row.id)&&merchant.verified===true&&merchant.metadata?.system_managed!==true&&merchant.metadata?.system_managed!=="true"&&destinationCovered
       &&(!row.gtin||gpd33MerchantObservationFresh(row.source_updated_at))
+      &&(row.stock_quantity==null||Number(row.stock_quantity)>0)
       &&["in_stock","low_stock"].includes(row.stock_status));
     scored.push({merchant:merchantPublicShape(merchant),offer:merchantOfferShape(row),agent_score:score,
       handoff_candidate:handoffCandidate});
@@ -6134,12 +6138,13 @@ async function searchMerchantOffers(env,{part_number="",manufacturer="",buyer_co
   scored.sort((a,b)=>Number(b.agent_score.overall_agent_score)-Number(a.agent_score.overall_agent_score)||((b.offer.stock_status==="in_stock")-(a.offer.stock_status==="in_stock"))||((a.offer.currency===b.offer.currency&&a.offer.price!=null&&b.offer.price!=null)?a.offer.price-b.offer.price:0));
   return {ok:true,service:"MERCHANT INTELLIGENCE",version:VERSION,query:{part_number:part_number,normalized_part_number:pn,manufacturer:manufacturer||null,buyer_country:buyer_country||null},count:Math.min(lim,scored.length),ranking_policy:{paid_placement:false,primary:"evidence_and_purchase_readiness",factors:["exact_mpn","merchant_verification","stock","price_completeness","lead_time","shipping_coverage","official_documents","return_policy","compatibility_evidence"]},recommended_offer:scored[0]||null,handoff_candidate_offer_id:scored.slice(0,lim).find(x=>x.handoff_candidate)?.offer.id||null,offers:scored.slice(0,lim),generated_at:new Date().toISOString()};
 }
-async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,manufacturer,partNumber}){
+async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,manufacturer,partNumber,requestedQuantity}){
   const barcode=gpd33Barcode(gtin);
   const destination=String(buyerCountry||"").trim().toUpperCase();
   const pageSize=limit===null?20:Number(limit);
+  const quantity=requestedQuantity===null?1:Number(requestedQuantity);
   if(!barcode||partNumber||!Number.isInteger(pageSize)||pageSize<1||pageSize>20||
-    (destination&&!/^[A-Z]{2}$/.test(destination))){
+    (destination&&!/^[A-Z]{2}$/.test(destination))||!Number.isInteger(quantity)||quantity<1||quantity>100){
     return {ok:false,status:400,error:"invalid_canonical_merchant_search"};
   }
   const key="universal:gtin:"+barcode;
@@ -6173,18 +6178,20 @@ async function searchGpd33CanonicalMerchantOffers(env,{gtin,buyerCountry,limit,m
       const ships=Array.isArray(row.ships_to)?row.ships_to:[];
       const shipsToBuyer=!!destination&&ships.some(country=>[destination,"WORLDWIDE","ALL"].includes(country));
       if(destination&&ships.length&&!shipsToBuyer)continue;
-      const available=["in_stock","low_stock"].includes(row.stock_status)&&(row.stock_quantity==null||Number(row.stock_quantity)>0);
+      const quantityEvidence=row.stock_quantity==null?"unknown":Number(row.stock_quantity)>=quantity?"sufficient":"insufficient";
+      const available=["in_stock","low_stock"].includes(row.stock_status)&&
+        (quantityEvidence==="sufficient"||(quantityEvidence==="unknown"&&quantity===1));
       const fresh=gpd33MerchantObservationFresh(row.source_updated_at);
       const handoffCandidate=shipsToBuyer&&available&&fresh&&merchant.system_managed!=="true"&&merchant.system_managed!==true;
       scored.push({merchant:merchantPublicShape(merchant),offer:merchantOfferShape(row),
-        agent_score:merchantOfferScore(row,merchant,destination),handoff_candidate:handoffCandidate,offer_evidence_fresh:fresh});
+        agent_score:merchantOfferScore(row,merchant,destination),handoff_candidate:handoffCandidate,offer_evidence_fresh:fresh,stock_quantity_evidence:quantityEvidence});
     }
     const offers=scored.sort((a,b)=>Number(b.handoff_candidate)-Number(a.handoff_candidate)||
       b.agent_score.overall_agent_score-a.agent_score.overall_agent_score).slice(0,pageSize);
     return {ok:true,identity_match:"verified_catalog_gtin_and_reported_manufacturer",
       product:{id:product.id,gtin:barcode,domain:product.product_type,
         name:product.canonical_name_en||product.canonical_name_ja,manufacturer:product.manufacturer},
-      buyer_country:destination||null,offer_sample_limit:40,count:offers.length,offers,
+      buyer_country:destination||null,requested_quantity:quantity,offer_sample_limit:40,count:offers.length,offers,
       handoff_candidate_offer_id:offers.find(item=>item.handoff_candidate)?.offer.id||null};
   }catch{
     return {ok:false,status:503,error:"canonical_merchant_search_unavailable"};
@@ -10169,6 +10176,7 @@ function openapi(origin){
     tags:["merchant-intelligence","agent-commerce","parts"],security:[],
     parameters:[{in:"query",name:"part_number",schema:{type:"string"}},{in:"query",name:"gtin",schema:{type:"string"},description:"Exact catalog GTIN, including UPC, JAN and EAN."},
       {in:"query",name:"manufacturer",schema:{type:"string"}},{in:"query",name:"buyer_country",schema:{type:"string"}},
+      {in:"query",name:"quantity",schema:{type:"integer",minimum:1,maximum:100,default:1},description:"GTIN mode. More than one unit requires reported quantity."},
       {in:"query",name:"limit",schema:{type:"integer",default:20},description:"GTIN mode permits 1 to 20 results."}],
     responses:{200:{description:"Ranked merchant offers"},400:{description:"Invalid product identifier or search parameters"},
       404:{description:"Verified general product unavailable"},503:{description:"Search temporarily unavailable"}}}};
@@ -13501,7 +13509,8 @@ export default{
         if(url.searchParams.has("gtin")){
           const out=await searchGpd33CanonicalMerchantOffers(env,{gtin:url.searchParams.get("gtin"),
             buyerCountry:url.searchParams.get("buyer_country"),manufacturer:url.searchParams.get("manufacturer"),
-            partNumber:url.searchParams.get("part_number")||url.searchParams.get("mpn"),limit:url.searchParams.get("limit")});
+            partNumber:url.searchParams.get("part_number")||url.searchParams.get("mpn"),limit:url.searchParams.get("limit"),
+            requestedQuantity:url.searchParams.get("quantity")});
           return json(out,out.status||200,{"cache-control":"no-store"});
         }
         const out=await searchMerchantOffers(env,{part_number:url.searchParams.get("part_number")||url.searchParams.get("mpn")||"",manufacturer:url.searchParams.get("manufacturer")||"",buyer_country:url.searchParams.get("buyer_country")||"",limit:url.searchParams.get("limit")||20});return json(out,out?.status||200);}

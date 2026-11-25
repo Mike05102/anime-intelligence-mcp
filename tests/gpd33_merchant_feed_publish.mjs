@@ -14,7 +14,7 @@ const apiKey='mai_'+'a'.repeat(48);
 const feedApproval={merchant_id:'10000000-0000-4000-8000-000000000001',feed_url:'https://feed.merchant.example/catalog.json',
   approved_until:'2026-12-25T00:00:00Z',product_origins:['https://merchant.example/']};
 const offer={merchant_sku:'sku',manufacturer:'Example',part_number:'X-1',gtin:'4901234567894',title:'Product',
-  currency:'JPY',price:'1200.00',stock_status:'in_stock',ships_to:['JP'],product_url:'https://merchant.example/x-1'};
+  currency:'JPY',price:'1200.00',stock_status:'in_stock',stock_quantity:3,ships_to:['JP'],product_url:'https://merchant.example/x-1'};
 const feed={schema:'gpd-merchant-offer-feed-input-v1',merchant_id:feedApproval.merchant_id,feed_url:feedApproval.feed_url,
   observed_at:'2026-11-25T09:00:00Z',offers:[offer]};
 const report={schema:'gpd-partner-review-v1',status:'review_required',snapshot_id:'00000000-0000-4000-8000-000000000010',
@@ -40,6 +40,7 @@ const defaultDependencies={
     assert.equal(options.body.includes(apiKey),false);
     const body=JSON.parse(options.body);
     assert.deepEqual(body,{merchant_id:feedApproval.merchant_id,offers:report.merchant_feed.upsert_payload.offers});
+    assert.equal(body.offers[0].stock_quantity,3);
     return response({ok:true,merchant_id:body.merchant_id,offers_received:1,new_or_updated:0,ignored:1});
   }
 };
@@ -58,6 +59,10 @@ const invalidFeed=structuredClone(report);
 invalidFeed.merchant_feed.upsert_payload.offers[0].product_url='https://forged.example';
 await assert.rejects(publishApprovedMerchantFeed(invalidFeed,feedApproval,
   {...writeApproval,report_sha256:fingerprintPartnerReview(invalidFeed)},noNetwork),/unapproved_product_origin/);
+const invalidStock=structuredClone(report);
+invalidStock.merchant_feed.upsert_payload.offers[0].stock_quantity='3';
+await assert.rejects(publishApprovedMerchantFeed(invalidStock,feedApproval,
+  {...writeApproval,report_sha256:fingerprintPartnerReview(invalidStock)},noNetwork),/invalid_stock_quantity/);
 const noPublish=(mea)=>({...defaultDependencies,request:async url=>{
   assert.equal(url.pathname,'/v1/merchant/me','invalid identity or redirect stops the publish');
   return mea;

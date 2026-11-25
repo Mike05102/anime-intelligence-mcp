@@ -41,3 +41,5 @@ UUIDは小文字。参照番号がある場合、`reference_hash` は `gpd33-ord
 一般商品の候補は `GET /v1/merchant/search?gtin=<GTIN>&buyer_country=<国>` から取得する。買い手が `POST /v1/handoffs` に同じ `gtin` を渡すと、保存時に商品とオファーの識別が一致することも確認する。観測専用の販売業者はセルフサービスの引き渡し対象外。
 
 GTIN検索では、販売業者が観測した時刻 `source_updated_at` が直近7日以内（時計差として未来5分まで）のオファーを引き渡し候補にする。時刻が欠落したオファーや期限超過のオファーは比較用に残し、`offer_evidence_fresh: false` を返す。新規の引き渡しにGTINを持つオファーを使う場合は、リクエストでGTINを省略した場合もDBで鮮度を確認する。既存案件の状態確認は引き続き可能。
+
+GTIN検索に `quantity`（1〜100、既定1）を渡すと、希望数量を引き渡し候補の判定に使う。数量の証拠は `stock_quantity_evidence` で `sufficient`、`insufficient`、`unknown` に分ける。GTINを持つオファーの新規引き渡しでは、複数個の依頼に報告済みの在庫数が必要。単品では数量が未報告でも在庫状態を参照する。新しいフィードで数量が未報告の場合、過去の報告数を在庫数として使わない。

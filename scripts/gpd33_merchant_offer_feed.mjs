@@ -7,6 +7,7 @@ const STOCK_STATES=new Set(['in_stock','low_stock','backorder','preorder','out_o
 const UUID=/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const COUNTRY=/^[A-Z]{2}$/;
 const FRESHNESS_MS=7*24*60*60*1000;
+const MAX_STOCK_QUANTITY=2147483647;
 
 function utcTime(value){
   return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)?Date.parse(value):NaN;
@@ -66,6 +67,8 @@ export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
       const structuredGtin=offer.gtin==null?null:gtin(offer.gtin);
       if(!/[\p{L}\p{N}]/u.test(partNumber))throw new Error('invalid_part_number');
       if(!STOCK_STATES.has(offer.stock_status))throw new Error('invalid_stock');
+      const quantity=offer.stock_quantity;
+      if(quantity!=null&&(!Number.isInteger(quantity)||quantity<0||quantity>MAX_STOCK_QUANTITY))throw new Error('invalid_stock_quantity');
       if(typeof offer.currency!=='string'||!/^[A-Z]{3}$/.test(offer.currency))throw new Error('invalid_currency');
       if(!Array.isArray(offer.ships_to)||offer.ships_to.length>100
         ||offer.ships_to.some(country=>typeof country!=='string'||!COUNTRY.test(country)))throw new Error('invalid_ship_to');
@@ -73,7 +76,8 @@ export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
       if(!origins.has(product.origin))throw new Error('unapproved_product_origin');
       return {merchant_sku:sku,manufacturer,part_number:partNumber,gtin:structuredGtin,
         title:textField(offer.title,500,'invalid_title'),currency:offer.currency,price:currencyPrice(offer.price),
-        stock_status:offer.stock_status,ships_to:[...new Set(offer.ships_to)],product_url:product.href,
+        stock_status:offer.stock_status,...(quantity==null?{}:{stock_quantity:quantity}),
+        ships_to:[...new Set(offer.ships_to)],product_url:product.href,
         source_updated_at:new Date(observed).toISOString()};
     }catch(error){
       throw new Error('offer_'+(index+1)+':'+(error instanceof TypeError?'invalid_offer':error.message));
