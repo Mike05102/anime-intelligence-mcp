@@ -1,6 +1,9 @@
 -- Read-only estimate for operating entirely in PostgreSQL.
--- Return only aggregate counts and approximate payload bytes.
-with payment_requests as materialized (
+-- Return only aggregate counts and approximate payload bytes for a seven-day
+-- window. Change window_start to audit another UTC week without a full scan.
+with parameters as (
+  select date_trunc('week',now()-interval '28 days','UTC') as window_start
+), payment_requests as materialized (
   select distinct metadata->>'request_id' as request_id
   from public.api_events
   where event_type in ('payment_retry_received','payment_attempt','payment_verified','paid_call',
@@ -57,7 +60,8 @@ with payment_requests as materialized (
         ) then 'expired_diagnostics'
       else 'retain'
     end as action
-  from public.api_events e
+  from public.api_events e cross join parameters p
+  where e.occurred_at>=p.window_start and e.occurred_at<p.window_start+interval '7 days'
 )
 select action,count(*) as rows,coalesce(sum(metadata_bytes),0) as metadata_bytes,
  count(*) filter(where event_type in ('paid_call','payment_verified','payment_attempt',
