@@ -8,7 +8,19 @@ if ! docker run --rm --network host --user "$(id -u):$(id -g)" \
     --mount "type=bind,source=$private,target=/private" \
     --entrypoint bash postgres:17 /work/supabase/maintenance/github_storage.sh "$@" \
     >"$private/operation.log" 2>&1; then
-  echo "Database step '$1' stopped. Check connection, rewrite headroom or the 400 MB deployment gate." >&2
+  if grep -Eiq 'password authentication failed|no password supplied|authentication failed' "$private/operation.log"; then
+    echo 'Database authentication failed. Check the database password in the GitHub secret.' >&2
+  elif grep -Eiq 'certificate|TLS|SSL error' "$private/operation.log"; then
+    echo 'Database TLS verification failed. Check the Supabase connection CA configuration.' >&2
+  elif grep -Eiq 'tenant or user not found|invalid user|role .* does not exist' "$private/operation.log"; then
+    echo 'Supabase pooler could not match the project or database username.' >&2
+  elif grep -Eiq 'network is unreachable|connection refused|timeout expired|could not translate host|no route to host' "$private/operation.log"; then
+    echo 'The runner could not reach the configured PostgreSQL endpoint. Use the Supabase Session pooler on port 5432.' >&2
+  elif grep -q 'Expected GPD maintenance routines are missing' "$private/operation.log"; then
+    echo 'Connection succeeded but the target does not expose the expected GPD maintenance routines.' >&2
+  else
+    echo "Database step '$1' stopped. Check connection, rewrite headroom or the 400 MB deployment gate." >&2
+  fi
   exit 1
 fi
 case "$1" in

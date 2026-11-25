@@ -6,7 +6,8 @@ export PGCONNECT_TIMEOUT=12
 sql() { psql -X -qAt -v ON_ERROR_STOP=1 "$@"; }
 
 # Ensure that a DSN accidentally pointed at another project cannot start cleanup.
-[[ "$(sql -c "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='gpd33_maintenance' and p.proname in ('compact_ingress','prune_operational_events')")" == 2 ]]
+routines="$(sql -c "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='gpd33_maintenance' and p.proname in ('compact_ingress','prune_operational_events')")"
+[[ "$routines" == 2 ]] || { echo "Expected GPD maintenance routines are missing." >&2; exit 1; }
 case "$1" in
   check)
     echo "TLS-verified database connection and GPD maintenance routines confirmed."
