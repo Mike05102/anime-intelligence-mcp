@@ -6407,6 +6407,12 @@ function genericDomainHardGates(domain,o,intent,body={}){
   if(req.warranty_required===true&&!o?.warranty)m.push("warranty_unknown");
   return {profile,identity,blockers:[...new Set(m)]};
 }
+function gpd33GenericStockState(status){
+  const value=String(status??"").trim().toLowerCase();
+  if(["available","in_stock","instock","limited_stock","low_stock"].includes(value))return true;
+  if(["out_of_stock","outofstock","unavailable","sold_out"].includes(value))return false;
+  return null;
+}
 function evaluateGenericOffer(domain,o,intent,body={}){
   const hard=genericDomainHardGates(domain,o,intent,body),price=offerKnownPrice(o),ship=offerKnownShipping(o),qty=Math.max(1,Number(intent?.quantity||1)||1);
   const knownTotal=price!=null&&ship!=null?price*qty+ship:null,currency=String(o?.currency||"").toUpperCase()||null;
@@ -6418,8 +6424,7 @@ function evaluateGenericOffer(domain,o,intent,body={}){
   const stockKnown=String(o?.stock_status||"").toLowerCase();if(!stockKnown)unknown.push("stock_status");
   const max=intent?.requirements?.max_total_cost,budgetOk=max==null||(currency===intent.requirements.currency&&knownTotal!=null&&knownTotal<=max);
   const deadlineDays=purchaseDeadlineDays(intent?.requirements?.delivery_deadline),deliveryOk=deadlineDays==null||(o?.estimated_delivery_days!=null&&Number(o.estimated_delivery_days)<=deadlineDays);
-  const stockOk=["available","in_stock","instock","limited_stock"].includes(stockKnown)?true:
-    ["out_of_stock","outofstock","unavailable","sold_out"].includes(stockKnown)?false:null;
+  const stockOk=gpd33GenericStockState(stockKnown);
   const rawQuantity=o?.stock_quantity;
   const reportedQuantity=typeof rawQuantity==="number"||typeof rawQuantity==="string"&&/^\d+$/.test(rawQuantity)
     ?Number(rawQuantity):NaN;
@@ -6469,7 +6474,16 @@ function normalizeEbayGeneric(item){
   const shipping=shippingCost?.currency===item?.price?.currency?purchaseFinite(shippingCost?.value):null;
   const total=Number.isFinite(price)?(shipping==null?price:price+(Number.isFinite(shipping)?shipping:0)):null;
   const gtin=ebayDetailGtins(item)[0]||null,feedback=Number(item?.seller?.feedbackPercentage||0);
-  return {...gpd33EbayOfferFacts(item),provider:"ebay",id:item?.itemId||null,title:item?.title||null,total_price:total,item_price:Number.isFinite(price)?price:null,shipping_cost:Number.isFinite(shipping)?shipping:null,currency:item?.price?.currency||null,url:item?.itemWebUrl||null,merchant:item?.seller?.username||null,merchant_country:item?.itemLocation?.country||null,merchant_verified:false,seller_reputation_evidence:Number.isFinite(feedback)&&feedback>=98,seller_feedback_percentage:Number.isFinite(feedback)?feedback:null,brand:item?.brand||null,gtin:validGtin(gtin)?gtin:null,condition:item?.condition||null,stock_status:item?.estimatedAvailabilities?.[0]?.estimatedAvailabilityStatus?.toLowerCase()||null,returns_accepted:item?.returnTerms?.returnsAccepted??null,estimated_delivery_days:null,warranty:null};
+  const availability=Array.isArray(item?.estimatedAvailabilities)?item.estimatedAvailabilities:[];
+  const shippingAvailability=availability.filter(row=>Array.isArray(row?.deliveryOptions)&&row.deliveryOptions.includes("SHIP_TO_HOME"));
+  const report=shippingAvailability.length===1?shippingAvailability[0]:shippingAvailability.length===0&&
+    availability.length===1&&!availability[0]?.deliveryOptions?.length?availability[0]:null;
+  const end=Date.parse(item?.itemEndDate),ended=Number.isFinite(end)&&end<=Date.now();
+  const status=ended?"out_of_stock":typeof report?.estimatedAvailabilityStatus==="string"
+    ?report.estimatedAvailabilityStatus.toLowerCase():null;
+  const estimates=shippingAvailability.length===1&&gpd33GenericStockState(status)===true
+    ?[report.estimatedAvailableQuantity,report.estimatedRemainingQuantity].filter(n=>Number.isSafeInteger(n)&&n>=0):[];
+  return {...gpd33EbayOfferFacts(item),provider:"ebay",id:item?.itemId||null,title:item?.title||null,total_price:total,item_price:Number.isFinite(price)?price:null,shipping_cost:Number.isFinite(shipping)?shipping:null,currency:item?.price?.currency||null,url:item?.itemWebUrl||null,merchant:item?.seller?.username||null,merchant_country:item?.itemLocation?.country||null,merchant_verified:false,seller_reputation_evidence:Number.isFinite(feedback)&&feedback>=98,seller_feedback_percentage:Number.isFinite(feedback)?feedback:null,brand:item?.brand||null,gtin:validGtin(gtin)?gtin:null,condition:item?.condition||null,stock_status:status,stock_quantity_estimate:estimates.length?Math.min(...estimates):null,returns_accepted:item?.returnTerms?.returnsAccepted??null,estimated_delivery_days:null,warranty:null};
 }
 
 function universalQueryKey(domain="general_commerce",query=""){
@@ -6550,7 +6564,7 @@ function universalMerchantEvidence(o={}){
 function universalCandidateCommerceEvidence(o={}){
   const stock=String(o?.stock_status||"").toLowerCase();
   const stockKnown=!!stock&&!['unknown','unspecified',''].includes(stock);
-  const stockUsable=['in_stock','available','limited','low_stock'].some(x=>stock.includes(x));
+  const stockUsable=gpd33GenericStockState(stock)===true;
   const priceKnown=Number.isFinite(Number(o?.total_price??o?.item_price??o?.price));
   const shippingKnown=Number.isFinite(Number(o?.shipping_cost));
   const merchant=universalMerchantEvidence(o);

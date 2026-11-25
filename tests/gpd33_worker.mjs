@@ -5,7 +5,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -38,6 +38,28 @@ const assessed=api.evaluateGenericOffer('fashion',{...ebay,size:'XL'},{
 assert.equal(assessed.purchase_evaluation.known_total,null);
 assert.ok(assessed.purchase_evaluation.hard_blockers.includes('size_variant_unverified'));
 assert.ok(assessed.purchase_evaluation.hard_blockers.includes('condition_unknown'));
+
+const shippingEstimate=api.normalizeEbayGeneric({estimatedAvailabilities:[
+  {deliveryOptions:['IN_STORE_PICKUP'],estimatedAvailabilityStatus:'IN_STOCK',estimatedAvailableQuantity:99},
+  {deliveryOptions:['SHIP_TO_HOME'],estimatedAvailabilityStatus:'LIMITED_STOCK',estimatedAvailableQuantity:3,estimatedRemainingQuantity:2}
+]});
+assert.equal(shippingEstimate.stock_status,'limited_stock');
+assert.equal(shippingEstimate.stock_quantity_estimate,2);
+assert.equal(shippingEstimate.stock_quantity,undefined);
+assert.equal(api.normalizeEbayGeneric({itemEndDate:'2000-01-01T00:00:00Z',
+  estimatedAvailabilities:[{estimatedAvailabilityStatus:'IN_STOCK'}]}).stock_status,'out_of_stock');
+const pickupOnly=api.normalizeEbayGeneric({estimatedAvailabilities:[{deliveryOptions:['IN_STORE_PICKUP'],
+  estimatedAvailabilityStatus:'IN_STOCK',estimatedAvailableQuantity:5}]});
+assert.equal(pickupOnly.stock_status,null);
+assert.equal(pickupOnly.stock_quantity_estimate,null);
+for(const [stockStatus,usable] of [['low_stock',true],['unavailable',false]]){
+  const checked=api.evaluateGenericOffer('food_grocery',{stock_status:stockStatus,stock_quantity:1},
+    {quantity:1,requirements:{}}).purchase_evaluation;
+  assert.equal(checked.stock_ok,usable);
+  assert.equal(api.universalCandidateCommerceEvidence({stock_status:stockStatus}).stock_usable,usable);
+}
+assert.ok(api.evaluateGenericOffer('food_grocery',shippingEstimate,{quantity:2,requirements:{}})
+  .purchase_evaluation.hard_blockers.includes('stock_quantity_unknown'));
 
 const branded={dataType:'Branded',fdcId:1,gtinUpc:'012345678905',brandName:'Example',
   description:'Pasta',packageWeight:'500 g',foodCategory:'Pasta'};
