@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {testHandoffJourney} from './gpd33_handoff_journey.mjs';
 import {pathToFileURL} from 'node:url';
 
 const pgPath=process.env.GPD33_PG_MODULE;
@@ -245,8 +246,13 @@ await assert.rejects(sql('select public.gpd33_business_outcomes()'),/permission 
   const handoffOutcomes=await one('select public.gpd33_handoff_outcomes() result');
   assert.deepEqual(handoffOutcomes,{scope:'merchant_authenticated_reports',window_days:30,
     handoffs_created:2,merchant_acceptances:2,orders_reported_by_merchants:1,cancellations_reported_by_merchants:1});
-  await db.query('reset role; set role anon');
+  await db.query('reset role');
+  await db.query(await readSql('supabase/migrations/20261125090000_gpd33_buyer_tracking.sql'));
+  await db.query('set role anon');
   await assert.rejects(sql('select public.gpd33_handoff_outcomes()'),/permission denied/);
+  await assert.rejects(sql('select public.gpd33_buyer_handoff_status(null)'),/permission denied/);
+  await db.query('reset role; set role service_role');
+  await testHandoffJourney(one,seller,offer);
 }
 await Promise.all([db.end(),concurrent.end()]);
 console.log('PASS PostgreSQL migration, RLS, batch rollback, lease recovery, aliases and diagnostics');
