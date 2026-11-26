@@ -164,3 +164,11 @@ Rooms by AurmadaのGPD公開ページを確認した。調査17経路、無償�
 隔離の24万商品・期限付き販売条件2,400件と合成監査イベント118件に、その他イベント1万件を加えた構成は395.538 MB、2万件では408.080 MB。2万件側のログ付きコピーで全行の一致を確認し、WAL増分は31.490 MB。次は実際の保持対象を低転送の集計で確認し、アーカイブ復元と切替時の作業領域を隔離で測る。本番の追加測定と物理回収は今回実施していない。 [試験コマンドと境界](GPD_CATALOG_CAPACITY.md)
 
 探索配分は署名付き引き渡しと独立した注文台帳の確認済み注文を使う。買い手x402の入金照合は独立した経路で行う。ステージングからの再開は `node scripts/gpd33_apply_growth_evidence.mjs --staged <private-dir> <trust.json> <snapshot-id>` でプレビューする。承認済みの実発行者と本番稼働条件がそろった後に適用を検証する。 [注文証拠と監査手順](GPD_RECONCILIATION.md)
+
+## 掲載証拠と収益表示の再確認
+
+PluginBenchで公式登録名とGPDの接続先が一致する旧版の掲載を確認した。MCP.soの公開提出画面は39 USD、PulseMCPは受付停止。掲載経路累計23件、無償条件確認4件、登録手順実装1件、既存掲載10件。 [掲載経路台帳](GPD_CHANNEL_RESEARCH.md)
+
+探索配分を更新した `a80577e` のGPD33統合CIは合格。管理画面をx402決済イベントの観測表示に改め、収益ステータスAPIに独立照合済み金額の未計測値を追加した。再開時は `node tests/gpd33_worker.mjs` と `node tests/gpd33_x402_reconcile.mjs` で確認する。 [統合CI](https://github.com/Mike05102/anime-intelligence-mcp/actions/runs/45780331734)
+
+既存の本番保守ワークフロー履歴では直近実行の失敗箇所が入力・接続確認だった。監視側の最後のDB容量・商品数・回収量を引き継ぎ、今回は新規実測と物理回収を行っていない。 [保守ジョブの履歴](https://github.com/Mike05102/anime-intelligence-mcp/actions/runs/45583899566)
