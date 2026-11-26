@@ -15,6 +15,8 @@ const repoFile=path=>readFile(new URL(path,root),'utf8');
 const parent=await mkdtemp(join(tmpdir(),'gpd33-capacity-'));
 const socket=join(parent,'socket'),databasePath=join(parent,'data');
 const postgresBin=resolve(process.argv[2]||'/usr/lib/postgresql/17/bin');
+const demandOnly=process.argv.includes('--demand-only');
+const logicalCopy=process.argv.includes('--logical-copy');
 const importPath=process.env.GPD33_PG_MODULE;
 let client,started=false;
 
@@ -110,8 +112,10 @@ try{
     `);
     await sql('vacuum (analyze) public.'+table);
   }
-  await loadProducts('products',true);
-  await loadProducts('products_trimmed',false);
+  if(!demandOnly){
+    await loadProducts('products',true);
+    await loadProducts('products_trimmed',false);
+  }
   await sql(`
     create unlogged table public.capacity_brand(id int primary key,name text not null unique);
     create unlogged table public.capacity_domain(id smallint primary key,name text not null unique);
@@ -140,59 +144,146 @@ try{
     return Object.fromEntries(Object.entries(result).map(([k,v])=>[k,Number(v)]));
   }
   await sql('vacuum (analyze) public.capacity_products');
-  const [current,trimmed,compact,brands,taxonomy,providers]=await Promise.all(
-    ['products','products_trimmed','capacity_products','capacity_brand','capacity_domain','capacity_source'].map(size)
+  const [compact,brands,taxonomy,providers]=await Promise.all(
+    ['capacity_products','capacity_brand','capacity_domain','capacity_source'].map(size)
   );
   const dictionaries=brands.total_bytes+taxonomy.total_bytes+providers.total_bytes;
-  await sql('create index on public.capacity_products using gin (title gin_trgm_ops)');
-  const compactTitleSearch=await size('capacity_products');
+  const measurements={compact,dictionaries};
+  const scenarios={compact_exact:compact.total_bytes+dictionaries};
+  if(!demandOnly){
+    const [current,trimmed]=await Promise.all(['products','products_trimmed'].map(size));
+    await sql('create index on public.capacity_products using gin (title gin_trgm_ops)');
+    const compactTitleSearch=await size('capacity_products');
+    await createOfferTable('capacity_offer',false);
+    await sql(`
+      insert into public.capacity_offer
+        select gtin14::bigint,seller_id,(variant%8)+1,(variant%8)+1,1,nullif(n%8,0),
+          n::bigint*10000,checked_at,offer_url from capacity_samples
+    `);
+    await sql('vacuum (analyze) public.capacity_offer');
+    const offer=await size('capacity_offer');
+    await sql(`update public.capacity_offer set stock_quantity=3,observed_at=observed_at+interval '1 day'
+      where product_gtin%10=0`);
+    await sql('vacuum (analyze) public.capacity_offer');
+    const offerAfterRefresh=await size('capacity_offer');
+    for(const table of ['products','products_trimmed','capacity_offer']){
+      assert.equal(await scalar('select count(*)::int value from public.'+table),TARGET);
+    }
+    Object.assign(measurements,{current,trimmed,compactTitleSearch,offer,offerAfterRefresh});
+    Object.assign(scenarios,{
+      current:current.total_bytes,
+      trimmed_metadata:trimmed.total_bytes,
+      compact_with_title_search:compactTitleSearch.total_bytes+dictionaries,
+      compact_exact_and_one_offer:compact.total_bytes+dictionaries+offer.total_bytes,
+      compact_with_title_and_one_offer:compactTitleSearch.total_bytes+dictionaries+offer.total_bytes,
+      compact_with_title_and_refreshed_offer:compactTitleSearch.total_bytes+dictionaries+offerAfterRefresh.total_bytes
+    });
+  }
 
-  await sql(`
-    create unlogged table public.capacity_offer(
-      product_gtin bigint not null references public.capacity_products(gtin),
-      merchant int not null,
-      country smallint not null,
-      currency smallint not null,
-      stock_status smallint not null,
-      stock_quantity int,
-      price_atomic bigint not null,
-      observed_at timestamptz not null,
-      url text not null,
-      primary key(product_gtin,merchant,country)
-    );
-    create index on public.capacity_offer(product_gtin,country) where stock_status=1;
-    insert into public.capacity_offer
+  async function createOfferTable(table,expiring){
+    await sql(`
+      create unlogged table public.${table}(
+        product_gtin bigint not null references public.capacity_products(gtin),
+        merchant int not null,
+        country smallint not null,
+        currency smallint not null,
+        stock_status smallint not null,
+        stock_quantity int,
+        price_atomic bigint not null,
+        observed_at timestamptz not null,
+        url text not null
+        ${expiring?', expires_at timestamptz not null check(expires_at>observed_at)':''},
+        primary key(product_gtin,merchant,country)
+      );
+      create index on public.${table}(product_gtin,country) where stock_status=1;
+      ${expiring?'create index on public.'+table+'(expires_at);':''}
+    `);
+  }
+
+  const identitySummary=()=>scalar(`select jsonb_build_object(
+    'count',count(*),'domains',count(distinct domain_id),
+    'gtin_uuid_digest',md5(string_agg(gtin::text||':'||display_id::text,',' order by gtin))
+  ) value from public.capacity_products`);
+  const originalIdentities=await identitySummary();
+  assert.equal(originalIdentities.count,TARGET);
+  assert.equal(originalIdentities.domains,domains.length);
+  const demandCache=[];
+  const sampleStart="timestamptz '2026-11-26 00:00:00+00'";
+  for(const [percentage,perDomain] of [[1,100],[5,500],[10,1000]]){
+    const table='capacity_demand_'+percentage,limit=perDomain*domains.length;
+    const perCohort=perDomain/4;
+    await createOfferTable(table,true);
+    await sql(`
+      insert into public.${table}
       select gtin14::bigint,seller_id,(variant%8)+1,(variant%8)+1,1,nullif(n%8,0),
-        n::bigint*10000,checked_at,offer_url from capacity_samples;
-  `);
-  await sql('vacuum (analyze) public.capacity_offer');
-  const offer=await size('capacity_offer');
-  await sql(`update public.capacity_offer set stock_quantity=3,observed_at=observed_at+interval '1 day'
-    where product_gtin%10=0`);
-  await sql('vacuum (analyze) public.capacity_offer');
-  const offerAfterRefresh=await size('capacity_offer');
-  for(const table of ['products','products_trimmed','capacity_products','capacity_offer']){
-    assert.equal(await scalar('select count(*)::int value from public.'+table),TARGET);
+        n::bigint*10000,${sampleStart}+(variant/$2)*interval '6 hours',offer_url,
+        ${sampleStart}+(variant/$2)*interval '6 hours'+interval '24 hours'
+      from capacity_samples where variant<$1
+    `,[perDomain,perCohort]);
+    await sql('vacuum (analyze) public.'+table);
+    const initial=await size(table),daily=[];
+    assert.equal(await scalar('select count(*)::int value from public.'+table),limit);
+    for(let round=0;round<12;round++){
+      const from=perDomain+round*perCohort,until=from+perCohort;
+      const clock=`${sampleStart}+interval '${24+round*6} hours'`;
+      await sql('begin');
+      const expired=await sql('delete from public.'+table+' where expires_at<='+clock);
+      assert.equal(expired.rowCount,perCohort*domains.length);
+      const inserted=await sql(`
+        insert into public.${table}
+          select gtin14::bigint,seller_id,(variant%8)+1,(variant%8)+1,1,nullif(n%8,0),
+            n::bigint*10000,${clock},offer_url,${clock}+interval '24 hours'
+          from capacity_samples where variant>=$1 and variant<$2
+      `,[from,until]);
+      assert.equal(inserted.rowCount,expired.rowCount);
+      await sql('commit');
+      if(round%4===3){
+        await sql('vacuum (analyze) public.'+table);
+        daily.push(await size(table));
+      }
+    }
+    assert.equal(await scalar('select count(*)::int value from public.'+table),limit);
+    assert.equal(await scalar('select count(*)::int value from public.'+table+
+      " where expires_at<="+sampleStart+"+interval '90 hours'"),0);
+    const growthBytes=compact.total_bytes+dictionaries+daily.at(-1).total_bytes;
+    scenarios['compact_demand_offer_'+percentage+'pct']=growthBytes;
+    demandCache.push({percent_of_products:percentage,max_offers:limit,expiry_hours:24,rotation_hours:6,
+      rotations:12,initial,daily_after_vacuum:daily});
+  }
+  assert.deepEqual(await identitySummary(),originalIdentities);
+  measurements.demand_cache=demandCache;
+  let logicalCopyResult=null;
+  if(logicalCopy){
+    await sql('create schema capacity_restore');
+    const tables=['capacity_brand','capacity_domain','capacity_source','capacity_products','capacity_demand_5'];
+    for(const table of tables){
+      await sql(`create unlogged table capacity_restore.${table} (like public.${table} including all);
+        insert into capacity_restore.${table} select * from public.${table}`);
+      assert.equal(await scalar(`select count(*)::int value from (select * from public.${table}
+        except select * from capacity_restore.${table}) difference`),0);
+      assert.equal(await scalar(`select count(*)::int value from (select * from capacity_restore.${table}
+        except select * from public.${table}) difference`),0);
+    }
+    await sql(`alter table capacity_restore.capacity_products
+      add foreign key (brand_id) references capacity_restore.capacity_brand(id),
+      add foreign key (domain_id) references capacity_restore.capacity_domain(id),
+      add foreign key (source_id) references capacity_restore.capacity_source(id);
+      alter table capacity_restore.capacity_demand_5
+      add foreign key (product_gtin) references capacity_restore.capacity_products(gtin)`);
+    logicalCopyResult={scope:'same_cluster_logical_table_copy',products:TARGET,demand_offers:12000,
+      all_rows_and_product_ids_match:true,foreign_keys_validated:true,
+      products_total_bytes:(await sql("select pg_total_relation_size('capacity_restore.capacity_products')::bigint bytes")).rows[0].bytes};
   }
   const exactLookup=await sql('explain (format json) select display_id,title from public.capacity_products where gtin=90000011');
   assert.equal(exactLookup.rows[0]['QUERY PLAN'][0].Plan['Node Type'],'Index Scan');
 
-  const scenarios={
-    current:current.total_bytes,
-    trimmed_metadata:trimmed.total_bytes,
-    compact_exact:compact.total_bytes+dictionaries,
-    compact_with_title_search:compactTitleSearch.total_bytes+dictionaries,
-    compact_exact_and_one_offer:compact.total_bytes+dictionaries+offer.total_bytes,
-    compact_with_title_and_one_offer:compactTitleSearch.total_bytes+dictionaries+offer.total_bytes,
-    compact_with_title_and_refreshed_offer:compactTitleSearch.total_bytes+dictionaries+offerAfterRefresh.total_bytes
-  };
   const budgets=Object.fromEntries(Object.entries(scenarios).map(([key,bytes])=>{
     const subtotal=NON_EVENT_DB_BASELINE+bytes;
     return [key,{additional_bytes:bytes,bytes_per_product:Math.round(bytes/TARGET),
       subtotal_non_event_baseline_plus_growth:subtotal,balance_to_400m:GPD_BYTES-subtotal,
       balance_to_500m:FREE_DB_BYTES-subtotal}];
   }));
-  const legacyPage=await sql(`select id,source_product_key,product_type,manufacturer,canonical_name_ja,
+  const legacyPage=demandOnly?null:await sql(`select id,source_product_key,product_type,manufacturer,canonical_name_ja,
     canonical_name_en,metadata from public.products order by source_product_key limit 40`);
   const compactPage=await sql(`select p.display_id as id,lpad(p.gtin::text,14,'0') as gtin,d.name as product_type,
     b.name as manufacturer,p.title,p.source_record,s.name as source,p.checked_at
@@ -200,7 +291,7 @@ try{
     join public.capacity_domain d on d.id=p.domain_id join public.capacity_source s on s.id=p.source_id
     order by p.gtin limit 40`);
   const projectionBytes={
-    page_size:40,current_product_lookup_utf8_bytes:Buffer.byteLength(JSON.stringify(legacyPage.rows)),
+    page_size:40,current_product_lookup_utf8_bytes:legacyPage?Buffer.byteLength(JSON.stringify(legacyPage.rows)):null,
     compact_identity_profile_utf8_bytes:Buffer.byteLength(JSON.stringify(compactPage.rows))
   };
   process.stdout.write(JSON.stringify({
@@ -208,7 +299,7 @@ try{
     categories:domains.length,products_per_category:10000,total_products:TARGET,
     production_protected_products_historical_bytes:PROTECTED_PRODUCTS_BASELINE,
     production_non_event_db_baseline_bytes:NON_EVENT_DB_BASELINE,projection_bytes:projectionBytes,
-    measurements:{current,trimmed,compact,dictionaries,compactTitleSearch,offer,offerAfterRefresh},
+    measurements,all_product_identities_preserved:true,logical_copy:logicalCopyResult,
     budgets
   },null,2)+'\n');
 }finally{

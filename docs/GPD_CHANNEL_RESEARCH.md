@@ -46,6 +46,11 @@
 
 同運営者の無料・認証不要の単一サーバーAPIも、対象レコードだけを8秒、最大128 KiB、リダイレクトなしで読み取り照会した。今回の接続経路ではHTTP 403。このため上記の掲載・履歴は運営者の公開ページによる確認で、JSON応答による照合は未確認。申請・登録の更新・決済は発生していない。 [無料APIの公式説明](https://protocolprobe.com/docs/api) · [対象レコードのAPI](https://protocolprobe.com/api/v1/servers/io.github.Mike05102/anime-intelligence-mcp)
 
+同日の追加確認で、公開記録を運営者自身が掲示する **MCPCheckup** と **MCP Queen** の2件も、リポジトリまたは公式登録名と同一の `/mcp` 接続先で照合した。これで確認した公開掲載先は8チャネル。
+
+- **MCPCheckup** はRegistry版 `32.0.0` 由来の接続先を掲載。認証なしで25ツールを読み取ったとし、公開データの直近30日では計測対象29日中29日に応答あり。カタログ上の所有権は未確認と表示されている。数値は同サイトの観測。 [公開チェック記録](https://mcpcheckup.com/check/mike05102/anime-intelligence-mcp)
+- **MCP Queen** は同じ公式登録名と接続先を掲載。公開レコードはRegistry版 `3.10.2`、接続観測は2026-10-31、リポジトリとの対応付けの同期は2026-11-07。過去の運用観測として扱う。 [公開エビデンスページ](https://mcpqueen.com/s/io.github.Mike05102/anime-intelligence-mcp)
+
 ## Bingと参加検索エンジンへの更新通知
 
 2026-11-26調査。IndexNowは、公開URLの追加・更新・削除をBingなどの参加検索エンジンに通知する公開プロトコル。直接通知には、同じホストで専用の所有権確認テキストを外部から取得可能にし、そのホストで変更したURLを送る。正常な応答は通知の受領を示し、検索結果への掲載はBing Webmaster Toolsなどの検査で別途確認する。 [IndexNow仕様](https://www.indexnow.org/documentation?hl=en) · [Bingの設定と確認方法](https://www.bing.com/indexnow/getstarted)

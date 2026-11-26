@@ -85,3 +85,7 @@ BnFが作成する書誌メタデータの Etalab 2.0 は、出典と最終更�
 豪州の気候変動・エネルギー・環境・水省は、家庭用洗濯機、乾燥機、食洗機、冷蔵庫、テレビ、モニターなどの登録機器データを案内する。公開目録では、ブランド、型式、原産国・販売対象国、出力や効率が機器別に記載され、当該データセットの権利欄は CC BY 3.0 Australia。政府サイトの一般条件は CC BY 4.0 で、データごとの表記を優先する。国のロゴやEnergy Rating Label・Iconは一般の再利用条件の対象外。登録範囲や入手可否の欄を、個別販売業者の現在在庫や両国への配送保証に置き換えない。 [GEMSの公式配布案内](https://www.energyrating.gov.au/about-us/gems-regulator/registered-appliance-and-equipment-data) · [登録DBの範囲](https://www.energyrating.gov.au/program-tools/energy-rating-registration-database) · [公開目録のデータセットとライセンス](https://researchdata.edu.au/energy-rating-data-labelled-products/3784840) · [政府サイトの著作権条件](https://www.energyrating.gov.au/copyright)
 
 2026-11-26 UTCに、公式配布元 data.gov.au の `package_show` で `energy-rating-for-household-appliances` の目録メタデータを上限64 KiB・12秒で1回照会した。現在の実行環境ではHTTP 403、HTML 919バイトで、機械可読な目録や商品行は得られなかった。自動取得経路は未確認。公式のCSVを利用可能な経路で取得できた段階で、個別リソースのライセンス、厳密なブランド＋型式、GTIN列の有無、登録の取消と有効期間を小さな隔離サンプルで確認する。 [公式データセット](https://data.gov.au/data/dataset/energy-rating-for-household-appliances)
+
+## 日本の全国書誌の実接続確認
+
+2026-11-26 UTC、NDLサーチの公式SRUに `dpid="iss-ndl-opac-national" AND isbn="9784101010014"` を最大2件、64 KiB、12秒の上限で照会した。HTTP 429のため書誌は取得できず、再試行は行っていない。全国書誌の提供元IDと他機関のメタデータを混同しないよう条件を固定した。定期利用と商品DBへの取込は、提供元ごとの利用条件・取得頻度と識別項目が確認できた場合に限る。 [全国書誌の公式API案内](https://www.ndl.go.jp/data/data_service/jnb) · [提供元ごとの利用条件](https://ndlsearch.ndl.go.jp/en/help/api/provider)
