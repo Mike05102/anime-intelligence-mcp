@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -14,6 +15,30 @@ if not token or not re.fullmatch(r"[a-fA-F0-9]{32}", account):
 
 endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/scripts/anime-intelligence"
 health = "https://anime-intelligence.goodmy0312.workers.dev/v1/system/discovery-health"
+
+
+smoke_jan = os.environ.get("GPD33_RELEASE_SMOKE_JAN", "")
+if smoke_jan and not re.fullmatch(r"(45|49)[0-9]{11}", smoke_jan):
+    raise SystemExit("Release smoke JAN must be a 13-digit Japanese catalogue identifier.")
+
+
+def verify_unsigned_purchase():
+    request = Request(health.split("/v1/", 1)[0] + "/v1/purchase-decision?gtin=" + smoke_jan,
+                      headers={"Accept": "application/json", "Cache-Control": "no-cache"})
+    try:
+        with urlopen(request, timeout=15):
+            return False
+    except HTTPError as response:
+        with response:
+            if response.code != 402 or not response.headers.get("Payment-Required"):
+                return False
+            data = response.read(16385)
+            if len(data) > 16384:
+                return False
+            challenge = json.loads(base64.b64decode(response.headers["Payment-Required"], validate=True))
+            preview = json.loads(data).get("product_preview") or {}
+            return (challenge.get("x402Version") == 2 and preview.get("jan_code") == smoke_jan
+                    and bool(preview.get("canonical_product_id")) and bool(preview.get("name")))
 
 
 def cf(path, data=None, content_type="application/json"):
@@ -73,7 +98,11 @@ for attempt in range(8):
         with urlopen(Request(health, headers={"Cache-Control": "no-cache"}), timeout=15) as response:
             status = json.load(response)
         if status.get("version") == "33.0.0" and status.get("verified_catalog") is not None:
+            if smoke_jan and not verify_unsigned_purchase():
+                raise ValueError("Unsigned purchase preview did not match")
             print("Worker 33.0.0 active with verified database coverage.")
+            if smoke_jan:
+                print("Unsigned catalogue product preview verified.")
             break
     except (HTTPError, URLError, TimeoutError, ValueError):
         pass
