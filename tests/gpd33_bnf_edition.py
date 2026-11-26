@@ -69,3 +69,23 @@ for bad in ({"status": 302}, {"body": b"x" * (MAX_BYTES + 1)}, {"moved": True}):
     else:
         raise AssertionError("Unexpected SRU response must not be accepted")
 print("PASS read-only BnF transport, parameter binding and response bounds")
+
+
+from gpd33_bnf_edition import read_editions
+
+seen = []
+def batch_reader(value):
+    seen.append(value)
+    return {"isbn13": value} if value == isbn else None
+
+batch = read_editions([isbn, "978-2-07-061275-8", "9782413088882"], batch_reader)
+assert seen == [isbn, "9782413088882"]
+assert batch["duplicate_inputs"] == 1
+assert batch["editions"] == [{"isbn13": isbn}]
+assert batch["unresolved_isbns"] == ["9782413088882"]
+try:
+    read_editions([isbn, "invalid"], batch_reader)
+except ValueError:
+    assert len(seen) == 2
+else:
+    raise AssertionError("Invalid ISBN admitted")

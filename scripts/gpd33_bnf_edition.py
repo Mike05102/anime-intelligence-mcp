@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
+MAX_BATCH = 8
 MAX_BYTES = 64 * 1024
 SRU = "{http://www.loc.gov/zing/srw/}"
 MARC = "{info:lc/xmlns/marcxchange-v2}"
@@ -105,7 +106,36 @@ def read_edition(expected_isbn, opener=None):
     return prepare_edition(payload, expected)
 
 
+def read_editions(values, reader=read_edition):
+    if not 1 <= len(values) <= MAX_BATCH:
+        raise ValueError("Expected one to eight ISBNs")
+    checked = [isbn13(value) for value in values]
+    if any(value is None for value in checked):
+        raise ValueError("Expected only checked ISBN-13 values")
+    identifiers = list(dict.fromkeys(checked))
+    editions = []
+    unresolved = []
+    for identifier in identifiers:
+        edition = reader(identifier)
+        if edition is None:
+            unresolved.append(identifier)
+        else:
+            editions.append(edition)
+    return {"scope": "bibliographic_identity_only", "identifiers_requested": len(identifiers),
+            "duplicate_inputs": len(values) - len(identifiers), "editions": editions,
+            "unresolved_isbns": unresolved}
+
+
 def main():
+    import sys
+
+    if sys.argv[1:2] == ["--read-batch"]:
+        try:
+            report = read_editions(sys.argv[2:])
+        except (OSError, ValueError, ElementTree.ParseError):
+            raise SystemExit("Unable to read the bounded BnF edition batch.")
+        print(json.dumps(report, ensure_ascii=False))
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("isbn")
     parser.add_argument("snapshot", nargs="?")

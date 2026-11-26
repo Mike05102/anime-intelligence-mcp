@@ -207,3 +207,5 @@ vPIC第3ページを取得し、公式IDで重複を除いたメーカー候補�
 ENERGY STARの北米住宅用洗濯機データについて、40件×最大4ページの取得とページ横断の識別競合検出を追加した。公式4ページを既存の外部接続経路で取得し、160行のうち厳密なUPC・型番条件を満たす7件を確認した。型番・ブランド不明確139、UPC不正・複数13、UPC欠落1。単独の固定接続CLIは今回の環境から取得できなかった。再開は `node scripts/gpd33_energy_star_washers.mjs --batch 0` または取得済みの連結JSONを `--local-batch <JSON>` で検証する。商品識別の証拠として保存し、本番商品・販売可能オファーには加えていない。 [公式データセット](https://data.energystar.gov/Active-Specifications/ENERGY-STAR-Certified-Residential-Clothes-Washers/bghd-e2wd/data)
 
 買い手向け公開監査に、署名を送らずに支払い条件を照合する経路を追加した。再開コマンドは `node scripts/gpd33_acquisition_audit.mjs <公開バージョン> <公開build_id> <承認済み受取アドレス> <USDC最小単位>`。発見と無料試用の後、公開先が提示するx402 v2の受取先・金額・ネットワーク・資産を確認する。試験では正常系、料金不一致、503を検証。署名・決済・入金照合は別工程。
+
+BnF書誌を最大8 ISBNずつ、チェックデジット検証・正規化・重複排除後に取得できるようにした。新規ISBN4件の公式照会は完了したが、単一版の照合条件を満たした件数は0件。カタログ件数や販売可能数には加算していない。再開は `python3 scripts/gpd33_bnf_edition.py --read-batch <ISBN> ...`。取得障害は照合不成立件数と混同せずバッチを失敗として扱う。
