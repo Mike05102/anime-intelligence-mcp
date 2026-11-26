@@ -30,17 +30,23 @@ def verify_unsigned_purchase():
             return False
     except HTTPError as response:
         with response:
-            if response.code != 402 or not response.headers.get("Payment-Required"):
+            header = response.headers.get("Payment-Required", "")
+            if response.code != 402 or response.url != request.full_url or not 0 < len(header) <= 12000:
                 return False
             data = response.read(16385)
             if len(data) > 16384:
                 return False
-            challenge = json.loads(base64.b64decode(response.headers["Payment-Required"], validate=True))
+            challenge = json.loads(base64.b64decode(header, validate=True))
             body = json.loads(data)
             preview = body.get("product_preview") if isinstance(body, dict) else None
             if not isinstance(challenge, dict) or not isinstance(preview, dict):
                 return False
-            return (challenge.get("x402Version") == 2 and preview.get("jan_code") == smoke_jan
+            resource = challenge.get("resource")
+            accepts = challenge.get("accepts")
+            return (challenge.get("x402Version") == 2
+                    and isinstance(resource, dict) and resource.get("url") == request.full_url
+                    and isinstance(accepts, list) and len(accepts) == 1 and body.get("accepts") == accepts
+                    and preview.get("jan_code") == smoke_jan
                     and bool(preview.get("canonical_product_id")) and bool(preview.get("name")))
 
 
