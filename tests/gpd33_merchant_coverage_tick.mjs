@@ -3,6 +3,7 @@ import {chmod,mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {prepareMerchantOfferFeed} from '../scripts/gpd33_merchant_offer_feed.mjs';
+import {publishApprovedMerchantFeed} from '../scripts/gpd33_merchant_feed_publish.mjs';
 import {runMerchantCoverageTick} from '../scripts/gpd33_merchant_coverage_tick.mjs';
 
 const now=Date.parse('2026-11-25T10:00:00Z');
@@ -77,6 +78,17 @@ try{
   assert.equal(requests.at(-1),'alpha.example');
   assert.equal(JSON.parse(await readFile(destination,'utf8')).results.find(row=>row.source==='echo').status,'approval_unavailable');
 
+  await writeJson(registryPath,{...registry,stage_previews:true});
+  await runMerchantCoverageTick(registryPath,directory,{now:now+3*hour,fetchFeed:simulatedFeed});
+  const staged=JSON.parse(await readFile(destination,'utf8')).results.find(row=>row.source==='bravo');
+  const previewPath=join(directory,staged.preview_file);
+  const report=JSON.parse(await readFile(previewPath,'utf8'));
+  assert.equal(report.schema,'gpd-merchant-feed-review-v1');
+  assert.equal(report.snapshot_id,staged.snapshot_id);
+  assert.equal(report.merchant_feed.offer_count,3);
+  assert.equal((await stat(previewPath)).mode&0o077,0);
+  await assert.rejects(publishApprovedMerchantFeed(report,buildApproval('bravo'),{},
+    {now:now+3*hour,resolve:forbiddenNetwork,request:forbiddenNetwork}),/write_approval_required/);
   await chmod(registryPath,0o644);
   await assert.rejects(runMerchantCoverageTick(registryPath,directory,{now:now+3*hour,fetchFeed:forbiddenNetwork}),/private_coverage_file_required/);
 }finally{

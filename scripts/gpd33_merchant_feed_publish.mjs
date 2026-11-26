@@ -32,7 +32,7 @@ function approvedWorker(approval,report,now){
 
 function revalidatePreview(report,feedApproval,now){
   const preview=report?.merchant_feed;
-  if(report?.schema!=='gpd-partner-review-v1'||report.status!=='review_required'
+  if(!['gpd-partner-review-v1','gpd-merchant-feed-review-v1'].includes(report?.schema)||report.status!=='review_required'
     ||preview?.schema!=='gpd-merchant-offer-feed-preview-v1'||preview.status!=='operator_review_required'
     ||!Array.isArray(preview.upsert_payload?.offers)||preview.offer_count!==preview.upsert_payload.offers.length){
     throw new Error('invalid_review_report');

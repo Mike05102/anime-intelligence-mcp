@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
 import {lstat,open,rename,unlink} from 'node:fs/promises';
@@ -72,6 +73,7 @@ async function persist(directory,path,state){
 function approvedSources(registry){
   const sources=registry?.sources;
   if(registry?.schema!=='gpd-merchant-coverage-registry-v1'||!Array.isArray(sources)||!sources.length||sources.length>MAX_SOURCES
+    ||(registry.stage_previews!==undefined&&typeof registry.stage_previews!=='boolean')
     ||!Number.isSafeInteger(registry.max_feeds_per_tick)||registry.max_feeds_per_tick<1||registry.max_feeds_per_tick>MAX_READS){
     throw new Error('invalid_coverage_registry');
   }
@@ -154,9 +156,20 @@ export async function runMerchantCoverageTick(registryFile,directory,{now=Date.n
         continue;
       }
       try{
-        const evidence=coverageCounts(await fetchFeed(approval,{now}));
+        const preview=await fetchFeed(approval,{now});
+        const evidence=coverageCounts(preview);
+        let staged={};
+        if(registry.stage_previews===true){
+          const snapshot_id=randomUUID();
+          const preview_file='merchant-preview-'+row.source+'.json';
+          const report={schema:'gpd-merchant-feed-review-v1',status:'review_required',
+            snapshot_id,merchant_feed:preview};
+          if(Buffer.byteLength(JSON.stringify(report))+1>1024*1024)throw new Error('coverage_preview_too_large');
+          await persist(directory,join(directory,preview_file),report);
+          staged={snapshot_id,preview_file};
+        }
         observed++;
-        results.set(row.source,{...base,status:'observed',evidence});
+        results.set(row.source,{...base,status:'observed',evidence,...staged});
       }catch{
         results.set(row.source,{...base,status:'feed_unavailable'});
       }

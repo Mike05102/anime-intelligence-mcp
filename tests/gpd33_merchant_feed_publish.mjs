@@ -52,6 +52,11 @@ assert.deepEqual(await publishApprovedMerchantFeed(report,feedApproval,writeAppr
 assert.deepEqual(calls,['/v1/merchant/me','/v1/merchant/offers/feed-import']);
 
 const noNetwork={...defaultDependencies,resolve:async()=>assert.fail('approval failure must precede network')};
+const stagedReport={...report,schema:'gpd-merchant-feed-review-v1'};
+const stagedResult=await publishApprovedMerchantFeed(stagedReport,feedApproval,
+  {...writeApproval,report_sha256:fingerprintPartnerReview(stagedReport)},defaultDependencies);
+assert.equal(stagedResult.status,'import_confirmed');
+
 await assert.rejects(publishApprovedMerchantFeed(report,feedApproval,{...writeApproval,allow_publish:false},noNetwork),/approval_required/);
 await assert.rejects(publishApprovedMerchantFeed(report,feedApproval,{...writeApproval,report_sha256:'0'.repeat(64)},noNetwork),/approval_required/);
 await assert.rejects(publishApprovedMerchantFeed(report,feedApproval,{...writeApproval,approved_until:'2026-11-20T00:00:00Z'},noNetwork),/approval_required/);
