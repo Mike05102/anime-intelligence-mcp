@@ -41,6 +41,15 @@ async function verifyMcpConnection(endpoint,version,onboarding,fetchImpl){
     ||byName.get(onboarding.paid_decision_mcp_tool)?.endpoint!=='/v1/purchase-decision'){
     throw new Error('Public MCP buying tool and free discovery tool metadata disagree');
   }
+
+  const barcode='4901234567894';
+  const trial=await rpc(3,'tools/call',{name:'product_resolve',arguments:{gtin:barcode}});
+  const resolved=trial.result?.structuredContent;
+  if(trial.jsonrpc!=='2.0'||trial.id!==3||trial.result?.isError===true
+    ||resolved?.ok!==true||resolved.version!==version||resolved.identifiers?.gtin!==barcode
+    ||resolved.identity_key!=='gtin:'+barcode.padStart(14,'0')){
+    throw new Error('Public MCP free trial did not resolve the test identifier');
+  }
 }
 
 export async function auditGpdMcpAcquisition(baseline,expectedVersion,expectedBuild,{fetchImpl=fetch,now=Date.now()}={}){
@@ -62,7 +71,7 @@ export async function auditGpdMcpAcquisition(baseline,expectedVersion,expectedBu
   await verifyMcpConnection(draft.remotes[0].url,draft.version,onboarding,fetchImpl);
   return {schema:'gpd-mcp-acquisition-audit-v1',scope:'public_mcp_listing_and_read_only_connection',
     version:draft.version,build_id:expectedBuild,observed_at:listing.observed_at,registry_status:listing.status,
-    mcp_connection:'verified',channel_ready:listing.status==='listing_verified'};
+    mcp_connection:'verified',free_trial:'product_identity_verified',channel_ready:listing.status==='listing_verified'};
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

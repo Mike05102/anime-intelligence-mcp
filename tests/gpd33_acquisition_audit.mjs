@@ -38,8 +38,12 @@ try{
       assert.equal(endpoint.pathname,'/mcp');
       const message=JSON.parse(input.body);
       requests.push(message.method);
-      assert.ok(['initialize','notifications/initialized','tools/list'].includes(message.method));
+      assert.ok(['initialize','notifications/initialized','tools/list','tools/call'].includes(message.method));
       if(options.rejectNotice&&message.method==='notifications/initialized')return new Response(null,{status:400});
+      if(message.method==='tools/call'){
+        assert.deepEqual(message.params,{name:'product_resolve',arguments:{gtin:'4901234567894'}});
+        if(options.badTrial)return Response.json({jsonrpc:'2.0',id:3,result:{isError:true}});
+      }
       if(options.hideTool&&message.method==='tools/list')return Response.json({
         jsonrpc:'2.0',id:2,result:{tools:[{name:'merchant_directory',annotations:{readOnlyHint:true}}]}
       });
@@ -53,16 +57,17 @@ try{
   assert.deepEqual(await run(),{
     schema:'gpd-mcp-acquisition-audit-v1',scope:'public_mcp_listing_and_read_only_connection',version:health.version,
     build_id:health.build_id,observed_at:'2026-11-25T10:00:00.000Z',registry_status:'listing_verified',
-    mcp_connection:'verified',channel_ready:true
+    mcp_connection:'verified',free_trial:'product_identity_verified',channel_ready:true
   });
   assert.deepEqual(requests,['/health','/.well-known/mcp.json','/.well-known/gpd','registry',
-    'initialize','notifications/initialized','tools/list']);
+    'initialize','notifications/initialized','tools/list','tools/call']);
   const absent=await run({registryMissing:true});
   assert.equal(absent.registry_status,'listing_missing');
   assert.equal(absent.mcp_connection,'verified');
   assert.equal(absent.channel_ready,false);
   await assert.rejects(run({rejectNotice:true}),/notice was rejected/);
   await assert.rejects(run({hideTool:true}),/tool metadata disagree/);
+  await assert.rejects(run({badTrial:true}),/free trial did not resolve/);
   await assert.rejects(auditGpdMcpAcquisition(baseline,health.version,'other-build',{
     now,fetchImpl:connection()
   }),/expected deployment/);
