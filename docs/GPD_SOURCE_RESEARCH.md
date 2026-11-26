@@ -89,3 +89,12 @@ BnFが作成する書誌メタデータの Etalab 2.0 は、出典と最終更�
 ## 日本の全国書誌の実接続確認
 
 2026-11-26 UTC、NDLサーチの公式SRUに `dpid="iss-ndl-opac-national" AND isbn="9784101010014"` を最大2件、64 KiB、12秒の上限で照会した。HTTP 429のため書誌は取得できず、再試行は行っていない。全国書誌の提供元IDと他機関のメタデータを混同しないよう条件を固定した。定期利用と商品DBへの取込は、提供元ごとの利用条件・取得頻度と識別項目が確認できた場合に限る。 [全国書誌の公式API案内](https://www.ndl.go.jp/data/data_service/jnb) · [提供元ごとの利用条件](https://ndlsearch.ndl.go.jp/en/help/api/provider)
+
+## 電子部品と書籍の追加候補
+
+| 地域・カテゴリー | 候補と取得方法 | 適格性・接続状態 |
+|---|---|---|
+| 米国事業者・電子部品 | DigiKey Product Information API。公式の標準枠は毎分120、日次1,000リクエスト。 [API製品](https://developer.digikey.com/product-details/product-information) · [枠の公式説明](https://developer.digikey.com/documentation) | 枠の記載だけでは料金、保存・再配布権、販売業者の同意を確認できない。未接続。 |
+| 国・地域別の可用性確認が必要・書籍 | Google Books API。Volumesの検索に `isbn:` を指定できる。公式手順にはプロジェクトと認証情報が必要な取得方法がある。 [取得手順](https://developers.google.com/books/docs/v1/using) · [利用規約](https://developers.google.com/books/terms) | 利用枠と商用カタログでの保持・再配布条件の確認が必要。商品識別候補であり、在庫と購入可能性は別途証拠が必要。未接続。 |
+
+追加2件はAPI候補で、無償適格情報源・本番接続には算入していない。新規キー発行、外部登録、取得実行は行っていない。
