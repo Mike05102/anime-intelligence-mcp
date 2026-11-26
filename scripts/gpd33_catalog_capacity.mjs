@@ -17,6 +17,7 @@ const socket=join(parent,'socket'),databasePath=join(parent,'data');
 const postgresBin=resolve(process.argv[2]||'/usr/lib/postgresql/17/bin');
 const demandOnly=process.argv.includes('--demand-only');
 const logicalCopy=process.argv.includes('--logical-copy');
+const retainedEvents=process.argv.includes('--retained-events');
 const importPath=process.env.GPD33_PG_MODULE;
 let client,started=false;
 
@@ -320,6 +321,64 @@ try{
   }
   const exactLookup=await sql('explain (format json) select display_id,title from public.capacity_products where gtin=90000011');
   assert.equal(exactLookup.rows[0]['QUERY PLAN'][0].Plan['Node Type'],'Index Scan');
+
+  if(retainedEvents){
+    // Match the existing audited index layout and column types.
+    await sql(`
+      create table public.capacity_retained (like public.api_events including all);
+      create index on public.capacity_retained(endpoint);
+      create index on public.capacity_retained(event_type);
+      create index on public.capacity_retained(payer_hash);
+      create index on public.capacity_retained(product_id);
+      create index on public.capacity_retained(occurred_at desc);
+    `);
+    measurements.retained_events=[];
+    for(const extraRows of [1000,5000,10000,20000]){
+      await sql('truncate public.capacity_retained restart identity');
+      await sql(`
+        insert into public.capacity_retained(event_type,endpoint,occurred_at,product_id,payer_hash,
+          amount_atomic,amount_usdc,payment_network,transaction_hash,metadata)
+        select case when n<=118 then (array['payment_retry_received','payment_attempt','payment_verified','paid_call',
+          'payment_verify_failed','payment_settlement_failed','x402_failed'])[n%7+1]
+          else (array['api_call','universal_product_snapshot','universal_discovery_persist_error'])[n%3+1] end,
+          '/v1/fixture/'||n%15,'2026-11-25 18:00:00+00'::timestamptz-n*interval '1 second',
+          case when n%3<>0 then md5(n::text)::uuid::text end,case when n<=118 then md5((n+1)::text) end,
+          case when n<=118 then 1000000 end,case when n<=118 then 1 end,
+          case when n<=118 then 'solana:fixture' end,case when n<=118 then md5((n+2)::text) end,
+          jsonb_build_object('request_id','fixture-'||n,'payload',
+            (select string_agg(md5(n::text||':'||i),'' order by i) from generate_series(1,case
+              when n<=118 then 21 when n%20=0 then 90 else 24 end) i))
+        from generate_series(1,118+$1::int) n
+      `,[extraRows]);
+      await sql('vacuum (analyze) public.capacity_retained');
+      const measured=await size('capacity_retained');
+      measurements.retained_events.push({fixture_payment_rows:118,fixture_other_rows:extraRows,...measured});
+      scenarios['lean_demand1pct_with_'+extraRows+'_retained_fixture_events']=
+        scenarios.lean_demand_offer_1pct+measured.total_bytes;
+    }
+    const before=await scalar('select pg_current_wal_insert_lsn()::text value');
+    await sql(`
+      create table public.capacity_retained_restore (like public.capacity_retained including all);
+      alter table public.capacity_retained_restore enable row level security;
+      revoke all on public.capacity_retained_restore from public,anon,authenticated;
+      grant select,insert on public.capacity_retained_restore to service_role;
+      insert into public.capacity_retained_restore select * from public.capacity_retained order by id;
+      select setval(pg_get_serial_sequence('public.capacity_retained_restore','id'),
+        (select max(id) from public.capacity_retained_restore));
+    `);
+    const restoreWalBytes=Number(await scalar(
+      'select pg_wal_lsn_diff(pg_current_wal_insert_lsn(),$1::pg_lsn)::bigint value',[before]));
+    const differences=await scalar(`select count(*)::int value from (
+      (select * from public.capacity_retained except all select * from public.capacity_retained_restore)
+      union all
+      (select * from public.capacity_retained_restore except all select * from public.capacity_retained)
+    ) differences`);
+    assert.equal(differences,0);
+    const nextId=await scalar(`select nextval(pg_get_serial_sequence('public.capacity_retained_restore','id'))::int value`);
+    assert.equal(nextId,20119);
+    measurements.retained_restore={scope:'same_cluster_logged_sql_copy',rows:20118,differences,next_id:nextId,
+      physical_bytes:(await size('capacity_retained_restore')).total_bytes,generated_wal_bytes:restoreWalBytes};
+  }
 
   const budgets=Object.fromEntries(Object.entries(scenarios).map(([key,bytes])=>{
     const subtotal=NON_EVENT_DB_BASELINE+bytes;
