@@ -20,7 +20,7 @@ accepts = [{"scheme": "exact"}]
 
 def check(body, status=402, challenge=None):
     if challenge is None:
-        challenge = {"x402Version": 2, "resource": {"url": "https://fixture.invalid/v1/purchase-decision?gtin=" + jan},
+        challenge = {"x402Version": 2, "resource": {"url": "https://fixture.invalid/v1/purchase-decision"},
                      "accepts": accepts}
     header = base64.b64encode(json.dumps(challenge).encode()).decode()
 

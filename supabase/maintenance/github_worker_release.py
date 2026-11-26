@@ -24,7 +24,8 @@ if smoke_jan and not re.fullmatch(r"(45|49)[0-9]{11}", smoke_jan):
 
 
 def verify_unsigned_purchase():
-    request = Request(health.split("/v1/", 1)[0] + "/v1/purchase-decision?gtin=" + smoke_jan,
+    resource_url = health.split("/v1/", 1)[0] + "/v1/purchase-decision"
+    request = Request(resource_url + "?gtin=" + smoke_jan,
                       headers={"Accept": "application/json", "Cache-Control": "no-cache"})
     try:
         with urlopen(request, timeout=15):
@@ -45,7 +46,7 @@ def verify_unsigned_purchase():
             resource = challenge.get("resource")
             accepts = challenge.get("accepts")
             return (challenge.get("x402Version") == 2
-                    and isinstance(resource, dict) and resource.get("url") == request.full_url
+                    and isinstance(resource, dict) and resource.get("url") == resource_url
                     and isinstance(accepts, list) and len(accepts) == 1 and body.get("accepts") == accepts
                     and preview.get("jan_code") == smoke_jan
                     and bool(preview.get("canonical_product_id")) and bool(preview.get("name")))

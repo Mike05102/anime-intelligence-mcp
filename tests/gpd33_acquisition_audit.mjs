@@ -41,7 +41,7 @@ try{
       assert.equal(input.body,undefined);
       if(options.offlineChallenge)return Response.json({}, {status:503});
       return new Response(endpoint.searchParams.has('gtin')?JSON.stringify({product_preview:{canonical_product_id:'fixture',name:'Anime figure',jan_code:options.wrongJan?'000':endpoint.searchParams.get('gtin')}}):null,{status:402,headers:{'payment-required':Buffer.from(JSON.stringify({
-        x402Version:2,resource:{url},accepts:[{scheme:'exact',
+        x402Version:2,resource:{url:origin+endpoint.pathname},accepts:[{scheme:'exact',
           network:'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
           asset:'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',payTo:recipient,
           amount:options.wrongAmount?'1':atomicAmount,extra:{feePayer:recipient}}]

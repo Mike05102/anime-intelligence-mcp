@@ -57,6 +57,7 @@ const USDC='EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOLANA_ADDRESS=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 async function verifyUnsignedChallenge(url,expected,fetchImpl){
+  const resourceUrl=url;
   if(expected.jan){
     const requestUrl=new URL(url);
     requestUrl.searchParams.set('gtin',expected.jan);
@@ -72,7 +73,7 @@ async function verifyUnsignedChallenge(url,expected,fetchImpl){
     }
     const challenge=JSON.parse(Buffer.from(header,'base64').toString('utf8'));
     const accepted=Array.isArray(challenge?.accepts)&&challenge.accepts.length===1?challenge.accepts[0]:null;
-    if(challenge?.x402Version!==2||challenge.resource?.url!==url||accepted?.scheme!=='exact'
+    if(challenge?.x402Version!==2||challenge.resource?.url!==resourceUrl||accepted?.scheme!=='exact'
       ||accepted.network!==SOLANA_MAINNET||accepted.asset!==USDC||accepted.payTo!==expected.recipient
       ||accepted.amount!==expected.atomicAmount||!SOLANA_ADDRESS.test(accepted.extra?.feePayer||'')){
       throw new Error('Unsigned x402 challenge differs from approved payment terms');
