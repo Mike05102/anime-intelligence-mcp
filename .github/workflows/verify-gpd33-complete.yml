@@ -87,6 +87,7 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: local-ci-password
           PGDATABASE: postgres
+      - run: python3 tests/gpd33_release_quote.py
       - name: Exercise the production archive and isolated restore path on fixtures
         run: |
           bash -n supabase/maintenance/run_gpd33_storage.sh
