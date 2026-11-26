@@ -158,6 +158,9 @@ globalThis.fetch=async (target,options={})=>{
     return Response.json({itemSummaries:[{itemId:'e1',title:'Example Pasta 500 g'}]});
   }
   if(url.pathname==='/rest/v1/products'&&mode.startsWith('decision')){
+    if(mode==='decision_anime')return Response.json([{
+      id:'10000000-0000-4000-8000-000000000005',product_type:'nendoroid',canonical_name_ja:'Hatsune Miku Nendoroid'
+    }]);
     return Response.json([{id:'10000000-0000-4000-8000-000000000005',manufacturer:'Example',
       product_type:'food_grocery',source_product_key:'universal:gtin:00012345678905',
       canonical_name_ja:'Example Pasta',gpd33_verified:mode==='decision_verified',
@@ -271,6 +274,18 @@ for(const gtinRequest of [await call(directGtin,invalidSignature),await call('/v
 const invalidGtin=await call('/v1/purchase-decision?gtin=012345678906',invalidSignature);
 assert.equal(invalidGtin.status,400);
 assert.equal((await invalidGtin.json()).error,'purchase_query_or_product_required');
+mode='decision_verified';
+const scopedProduct=(productId)=>post('/v1/purchase-decision',{
+  domain:'anime_collectibles', product:{canonical_product_id:productId}, buyer_country:'JP'
+});
+const outOfScope=await scopedProduct('10000000-0000-4000-8000-000000000005');
+assert.equal(outOfScope.status,422);
+assert.equal((await outOfScope.json()).error,'anime_product_evidence_required');
+assert.equal(outOfScope.headers.has('payment-required'),false);
+mode='decision_anime';
+assert.equal((await scopedProduct('10000000-0000-4000-8000-000000000005')).status,402);
+const malformed=await call('/v1/purchase-decision',{method:'POST',body:'{'});
+assert.equal(malformed.status,402);
 const participation=await (await call('/v1/merchant/participation')).json();
 assert.equal(participation.registration.method,'POST');
 assert.equal(participation.registration.initially_verified,false);

@@ -7942,13 +7942,7 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   }else{
     try{body=await request.json();}catch{
       if(hasPaymentHeader)return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"invalid_json",charged:false},400);
-      const product=preflight.product;
-  if(product.metadata?.universal_commerce||(!discoverySafeFranchise(product)
-    &&!["figure","scale_figure","nendoroid","figma"].includes(product.product_type))){
-    return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_product_evidence_required",
-      charged:false},422,{"cache-control":"no-store"});
-  }
-  return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision: exact identity, market evidence and purchase options",async()=>{throw new Error("purchase_body_required");},ctx);
+      return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision: exact identity, market evidence and purchase options",async()=>{throw new Error("purchase_body_required");},ctx);
     }
   }
   const intent=normalizePurchaseDecisionIntent(body,request);
@@ -7966,6 +7960,12 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   u.searchParams.set("buyer_country",intent.destination.country);u.searchParams.set("lang",intent.language);
   const preflight=await preflightPaidProduct(env,u);
   if(!preflight.ok)return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"collectible_not_resolved",charged:false,normalized_intent:intent,resolution:preflight.body},preflight.status||404,{"cache-control":"no-store"});
+  const product=preflight.product;
+  if(product.metadata?.universal_commerce||(!discoverySafeFranchise(product)
+    &&!["figure","scale_figure","nendoroid","figma"].includes(product.product_type))){
+    return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_product_evidence_required",
+      charged:false},422,{"cache-control":"no-store"});
+  }
   return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision: exact identity, market evidence and purchase options",async()=>{
     const lockedBody={...body,domain:"anime_collectibles",product:{...body.product,canonical_product_id:product.id}};
     const out=await buildUniversalPurchaseDecision(request,env,lockedBody,origin);
