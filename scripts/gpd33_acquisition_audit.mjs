@@ -57,6 +57,11 @@ const USDC='EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOLANA_ADDRESS=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 async function verifyUnsignedChallenge(url,expected,fetchImpl){
+  if(expected.jan){
+    const requestUrl=new URL(url);
+    requestUrl.searchParams.set('gtin',expected.jan);
+    url=requestUrl.href;
+  }
   const response=await fetchImpl(url,{method:'GET',redirect:'error',signal:AbortSignal.timeout(8000),
     headers:{accept:'application/json'}});
   try{
@@ -71,6 +76,23 @@ async function verifyUnsignedChallenge(url,expected,fetchImpl){
       ||accepted.network!==SOLANA_MAINNET||accepted.asset!==USDC||accepted.payTo!==expected.recipient
       ||accepted.amount!==expected.atomicAmount||!SOLANA_ADDRESS.test(accepted.extra?.feePayer||'')){
       throw new Error('Unsigned x402 challenge differs from approved payment terms');
+    }
+    if(expected.jan){
+      const reader=response.body.getReader();
+      const chunks=[];
+      let size=0;
+      try{
+        for(;;){
+          const {done,value}=await reader.read();
+          if(done)break;
+          size+=value.byteLength;
+          if(size>16384)throw new Error('Unsigned product preview exceeds the byte limit');
+          chunks.push(value);
+        }
+      }finally{reader.releaseLock();}
+      const preview=JSON.parse(Buffer.concat(chunks).toString('utf8')).product_preview;
+      if(preview?.jan_code!==expected.jan||!preview.canonical_product_id||!preview.name)
+        throw new Error('Unsigned product preview does not match the approved JAN');
     }
   }finally{await response.body?.cancel();}
 }
@@ -101,15 +123,16 @@ export async function auditGpdMcpAcquisition(baseline,expectedVersion,expectedBu
   return {schema:'gpd-mcp-acquisition-audit-v1',scope:'public_mcp_listing_and_read_only_connection',
     version:draft.version,build_id:expectedBuild,observed_at:listing.observed_at,registry_status:listing.status,
     mcp_connection:'verified',free_trial:'product_identity_verified',
-    ...(expectedPayment?{unsigned_x402_challenge:'verified'}:{}),channel_ready:listing.status==='listing_verified'};
+    ...(expectedPayment?{unsigned_x402_challenge:'verified'}:{}),
+    ...(expectedPayment?.jan?{unsigned_product_preview:'verified'}:{}),channel_ready:listing.status==='listing_verified'};
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   try{
-    if(![4,6].includes(process.argv.length))throw new Error('Expected deployed version and build ID, optionally recipient and atomic amount');
+    if(![4,6,7].includes(process.argv.length)||(process.argv[6]&&!/^(45|49)\d{11}$/.test(process.argv[6])))throw new Error('Expected deployed version and build ID, optionally recipient, atomic amount and catalogue JAN');
     const baseline=JSON.parse(await readFile(new URL('../server.json',import.meta.url),'utf8'));
     const result=await auditGpdMcpAcquisition(baseline,process.argv[2],process.argv[3],{
-      expectedPayment:process.argv.length===6?{recipient:process.argv[4],atomicAmount:process.argv[5]}:undefined
+      expectedPayment:process.argv.length>=6?{recipient:process.argv[4],atomicAmount:process.argv[5],jan:process.argv[6]}:undefined
     });
     process.stdout.write(JSON.stringify(result)+'\n');
     if(!result.channel_ready)process.exitCode=2;
