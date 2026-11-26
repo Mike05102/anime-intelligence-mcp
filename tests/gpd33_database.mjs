@@ -140,9 +140,11 @@ assert.equal(after.events.reduce((sum,event)=>sum+event.eligible_rows,0),0);
 assert.ok(after.events_total_bytes<before.events_total_bytes/2);
 console.log(`PASS retention protection and physical compaction (${before.events_total_bytes} -> ${after.events_total_bytes} bytes)`);
 await db.query(await readSql('supabase/migrations/20261125063000_gpd33_compact_telemetry.sql'));
+await db.query(await readSql('supabase/migrations/20261126180000_gpd33_protect_refund_ingress.sql'));
 const ingress={method:'GET',payment_header_present:false,query_present:false,id_present:false,response_status:402};
 for(const [eventType,metadata] of [['payment_required',ingress],['payment_required',{...ingress,request_id:'paid'}],
-  ['paid_call',{request_id:'paid'}],['payment_required',{...ingress,method:'POST'}],
+  ['paid_call',{request_id:'paid'}],['x402_refund',{request_id:'refunded'}],
+  ['payment_required',{...ingress,request_id:'refunded'}],['payment_required',{...ingress,method:'POST'}],
   ['payment_required',{...ingress,query_present:true}],['payment_required',{...ingress,payment_header_present:true}]]) {
   await db.query("insert into api_events(event_type,occurred_at,metadata,amount_atomic,payment_network) values ($1,now()-interval '20 days',$2,100,'solana')",[eventType,metadata]);
 }
@@ -153,7 +155,7 @@ await db.query('set role service_role');
 assert.equal(await one('select public.gpd33_prune_events() result'),2);
 assert.equal(await one('select public.gpd33_prune_events() result'),0);
 assert.equal((await one('select public.gpd33_ingress_rollup() result'))[0].events,1);
-assert.equal(await one("select count(*)::int result from api_events where event_type='payment_required'"),4);
+assert.equal(await one("select count(*)::int result from api_events where event_type='payment_required'"),5);
 assert.equal(await one("select count(*)::int result from api_events where event_type='dynamic_catalog_pool'"),2);
 await db.query('reset role');
 await db.query(await readSql('supabase/migrations/20261125070000_gpd33_storage_control.sql'));
