@@ -20,6 +20,8 @@ on:
       - scripts/gpd33_seller_discovery_tick.mjs
       - scripts/gpd33_energy_star_washers.mjs
       - scripts/gpd33_bnf_edition.py
+      - scripts/gpd33_identity_batch.py
+      - scripts/gpd33_tw_cooker_audit.py
       - server.json
       - scripts/gpd33_seller_discovery.mjs
       - scripts/gpd33_seller_opt_in.mjs

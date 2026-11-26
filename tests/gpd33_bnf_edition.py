@@ -89,3 +89,19 @@ except ValueError:
     assert len(seen) == 2
 else:
     raise AssertionError("Invalid ISBN admitted")
+
+from tempfile import TemporaryDirectory
+from gpd33_identity_batch import prepare_batch
+
+with TemporaryDirectory() as directory:
+    first = Path(directory, "first.xml")
+    second = Path(directory, "second.xml")
+    first.write_bytes(sample)
+    second.write_bytes(sample.replace(b"cb123456789", b"cb987654321"))
+    deduplicated = prepare_batch(None, None, [(isbn, first), (isbn, first)])
+    assert [item["gtin"] for item in deduplicated["identities"]] == ["0" + isbn]
+    assert deduplicated["conflicting_gtins"] == []
+    conflicted = prepare_batch(None, None, [(isbn, first), (isbn, second)])
+    assert conflicted["identities"] == []
+    assert conflicted["conflicting_gtins"] == ["0" + isbn]
+print("PASS shared catalogue identity batch deduplication and conflict quarantine")
