@@ -1291,20 +1291,22 @@ async function massDiscoverGoodSmile(env,limit=20,options={}){
 
 function officialFeedAnchorCandidates(html,feed){
   const out=[],seen=new Set();
+  const feedOrigin=new URL(feed.listUrl).origin;
   for(const m of String(html||"").matchAll(/<a\b[^>]*href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi)){
     try{
       const url=canonicalOfficialUrl(new URL(decodeHtml(m[1]),feed.listUrl).toString());
+      if(new URL(url).origin!==feedOrigin)continue;
       const name=htmlTextCompact(m[2]);
       if(!name||name.length<4||name.length>180)continue;
       const c=classifyProduct(name);if(!COLLECTIBLE_CATALOG_TYPES.has(c.type))continue;
       if(/(?:\u30c8\u30c3\u30d7|HOME|\u4e00\u89a7|\u691c\u7d22|\u5e97\u8217|\u30cb\u30e5\u30fc\u30b9|MORE|\u8a73\u7d30\u3092\u898b\u308b)$/i.test(name))continue;
       if(feed.detailRegex&&!feed.detailRegex.test(url)&&new URL(url).pathname!==new URL(feed.listUrl).pathname)continue;
-      const key=`${name}|${url}`;if(seen.has(key))continue;seen.add(key);out.push({name,url,classification:c});
+      const key=url;if(seen.has(key))continue;seen.add(key);out.push({name,url,classification:c});
     }catch{}
   }
   // Some JS-backed official lists expose titles as text but not crawlable product anchors.
   // Keep strong product-like lines as feed evidence; they still dedupe by deterministic identity.
-  if(out.length<5){
+  if(!out.length){
     const text=decodeHtml(String(html||"")).replace(/<br\s*\/?\s*>/gi,"\n").replace(/<\/li>|<\/article>|<\/section>|<\/div>/gi,"\n").replace(/<[^>]+>/g," ");
     for(const raw of text.split("\n")){
       const name=raw.replace(/\s+/g," ").trim();if(name.length<8||name.length>160)continue;
@@ -1332,7 +1334,10 @@ async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,o
     const selected=all.slice(offset,offset+pageSize);
     report.selected=selected.length;
     if(!selected.length)return report;
-    const payloads=selected.map(x=>officialFeedSeedPayload(feed,x));
+    const payloads=[...new Map(selected.map(x=>{
+      const payload=officialFeedSeedPayload(feed,x);
+      return [payload.source_product_key,payload];
+    })).values()];
     const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key),true);const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
     const missing=payloads.filter(x=>!keys.has(x.source_product_key));report.existing=payloads.length-missing.length;
     if(missing.length){report.inserted=await insertOfficialSeedBatch(env,missing);}
