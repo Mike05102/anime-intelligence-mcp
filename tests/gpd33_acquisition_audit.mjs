@@ -18,6 +18,8 @@ const originalFetch=globalThis.fetch;
 globalThis.fetch=()=>assert.fail('Acquisition audit fixtures must not use network');
 try{
   const requests=[];
+  const recipient='9YLxx6HtrN4HFd2wBTcBX5Uwn2rtMUYxcUwohzG9aBGT';
+  const atomicAmount='100000';
   const connection=(options={})=>async(url,input)=>{
     const headers=new Headers(input.headers);
     for(const header of ['authorization','x-merchant-key','x-refresh-key','payment-signature','x-payment']){
@@ -34,6 +36,17 @@ try{
     }
     const endpoint=new URL(url);
     assert.equal(endpoint.origin,origin);
+    if(endpoint.pathname==='/v1/purchase-decision'){
+      assert.equal(input.method,'GET');
+      assert.equal(input.body,undefined);
+      if(options.offlineChallenge)return Response.json({}, {status:503});
+      return new Response(null,{status:402,headers:{'payment-required':Buffer.from(JSON.stringify({
+        x402Version:2,resource:{url},accepts:[{scheme:'exact',
+          network:'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+          asset:'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',payTo:recipient,
+          amount:options.wrongAmount?'1':atomicAmount,extra:{feePayer:recipient}}]
+      })).toString('base64')}});
+    }
     if(input.method==='POST'){
       assert.equal(endpoint.pathname,'/mcp');
       const message=JSON.parse(input.body);
@@ -61,6 +74,12 @@ try{
   });
   assert.deepEqual(requests,['/health','/.well-known/mcp.json','/.well-known/gpd','registry',
     'initialize','notifications/initialized','tools/list','tools/call']);
+  const auditPayment=(options={})=>auditGpdMcpAcquisition(baseline,health.version,health.build_id,{
+    now,fetchImpl:connection(options),expectedPayment:{recipient,atomicAmount}
+  });
+  assert.equal((await auditPayment()).unsigned_x402_challenge,'verified');
+  await assert.rejects(auditPayment({wrongAmount:true}),/approved payment terms/);
+  await assert.rejects(auditPayment({offlineChallenge:true}),/challenge unavailable/);
   const absent=await run({registryMissing:true});
   assert.equal(absent.registry_status,'listing_missing');
   assert.equal(absent.mcp_connection,'verified');

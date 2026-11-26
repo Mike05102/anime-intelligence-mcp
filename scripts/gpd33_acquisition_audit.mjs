@@ -52,10 +52,38 @@ async function verifyMcpConnection(endpoint,version,onboarding,fetchImpl){
   }
 }
 
-export async function auditGpdMcpAcquisition(baseline,expectedVersion,expectedBuild,{fetchImpl=fetch,now=Date.now()}={}){
+const SOLANA_MAINNET='solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+const USDC='EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const SOLANA_ADDRESS=/^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+async function verifyUnsignedChallenge(url,expected,fetchImpl){
+  const response=await fetchImpl(url,{method:'GET',redirect:'error',signal:AbortSignal.timeout(8000),
+    headers:{accept:'application/json'}});
+  try{
+    const header=response.headers.get('payment-required');
+    if(response.status!==402||response.redirected||(response.url&&response.url!==url)
+      ||!header||header.length>12000||!/^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(header)){
+      throw new Error('Unsigned x402 challenge unavailable');
+    }
+    const challenge=JSON.parse(Buffer.from(header,'base64').toString('utf8'));
+    const accepted=Array.isArray(challenge?.accepts)&&challenge.accepts.length===1?challenge.accepts[0]:null;
+    if(challenge?.x402Version!==2||challenge.resource?.url!==url||accepted?.scheme!=='exact'
+      ||accepted.network!==SOLANA_MAINNET||accepted.asset!==USDC||accepted.payTo!==expected.recipient
+      ||accepted.amount!==expected.atomicAmount||!SOLANA_ADDRESS.test(accepted.extra?.feePayer||'')){
+      throw new Error('Unsigned x402 challenge differs from approved payment terms');
+    }
+  }finally{await response.body?.cancel();}
+}
+
+export async function auditGpdMcpAcquisition(baseline,expectedVersion,expectedBuild,{fetchImpl=fetch,now=Date.now(),expectedPayment}={}){
   const draft=buildMcpRegistryDraft(baseline,expectedVersion);
   if(typeof expectedBuild!=='string'||!/^[-a-zA-Z0-9._]{1,120}$/.test(expectedBuild)){
     throw new Error('Expected deployed build ID is required');
+  }
+  if(expectedPayment!==undefined&&(!expectedPayment||typeof expectedPayment.recipient!=='string'
+    ||!SOLANA_ADDRESS.test(expectedPayment.recipient)||typeof expectedPayment.atomicAmount!=='string'
+    ||!/^[1-9][0-9]{0,11}$/.test(expectedPayment.atomicAmount))){
+    throw new Error('Expected x402 recipient and positive USDC atomic amount are required');
   }
   const [surfaces,listing]=await Promise.all([
     readRegistrySurfaces(draft.websiteUrl,fetchImpl),
@@ -69,16 +97,20 @@ export async function auditGpdMcpAcquisition(baseline,expectedVersion,expectedBu
     throw new Error('Public onboarding metadata disagrees with the registry draft');
   }
   await verifyMcpConnection(draft.remotes[0].url,draft.version,onboarding,fetchImpl);
+  if(expectedPayment)await verifyUnsignedChallenge(surfaces.gpd.purchase_decision_url,expectedPayment,fetchImpl);
   return {schema:'gpd-mcp-acquisition-audit-v1',scope:'public_mcp_listing_and_read_only_connection',
     version:draft.version,build_id:expectedBuild,observed_at:listing.observed_at,registry_status:listing.status,
-    mcp_connection:'verified',free_trial:'product_identity_verified',channel_ready:listing.status==='listing_verified'};
+    mcp_connection:'verified',free_trial:'product_identity_verified',
+    ...(expectedPayment?{unsigned_x402_challenge:'verified'}:{}),channel_ready:listing.status==='listing_verified'};
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   try{
-    if(process.argv.length!==4)throw new Error('Expected deployed version and build ID');
+    if(![4,6].includes(process.argv.length))throw new Error('Expected deployed version and build ID, optionally recipient and atomic amount');
     const baseline=JSON.parse(await readFile(new URL('../server.json',import.meta.url),'utf8'));
-    const result=await auditGpdMcpAcquisition(baseline,process.argv[2],process.argv[3]);
+    const result=await auditGpdMcpAcquisition(baseline,process.argv[2],process.argv[3],{
+      expectedPayment:process.argv.length===6?{recipient:process.argv[4],atomicAmount:process.argv[5]}:undefined
+    });
     process.stdout.write(JSON.stringify(result)+'\n');
     if(!result.channel_ready)process.exitCode=2;
   }catch{
