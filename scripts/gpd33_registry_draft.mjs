@@ -38,7 +38,7 @@ export function verifyMcpRegistryDiscovery(draft,expectedBuild,{health,mcp,gpd})
   }
   const surface={mcp_url:'/mcp',openapi_url:'/openapi.json',x402_url:'/.well-known/x402',
     merchant_directory_url:'/v1/merchant/directory',purchase_decision_url:'/v1/purchase-decision'};
-  if(gpd?.schema!=='gpd-agent-discovery-v1'||Object.entries(surface).some(([key,path])=>gpd[key]!==origin+path)){
+  if(gpd?.schema!=='gpd-agent-discovery-v1'||gpd.commercial_scope!=='anime_collectibles'||Object.entries(surface).some(([key,path])=>gpd[key]!==origin+path)){
     throw new Error('GPD discovery metadata disagrees with the registry draft');
   }
 }

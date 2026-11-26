@@ -15,6 +15,7 @@ try{
   const draft=buildMcpRegistryDraft(baseline,health.version);
   assert.equal(draft.version,health.version);
   assert.equal(draft.name,baseline.name);
+  assert.match(draft.description,/anime merchandise/);
   assert.equal(draft.remotes[0].url,baseline.websiteUrl+'/mcp');
   const observed=[];
   const surfaces=await readRegistrySurfaces(baseline.websiteUrl,(url,options)=>{
@@ -34,6 +35,9 @@ try{
   }),/metadata disagrees/);
   assert.throws(()=>verifyMcpRegistryDiscovery(draft,health.build_id,{
     ...surfaces,gpd:{...surfaces.gpd,purchase_decision_url:'https://other.example/purchase'}
+  }),/metadata disagrees/);
+  assert.throws(()=>verifyMcpRegistryDiscovery(draft,health.build_id,{
+    ...surfaces,gpd:{...surfaces.gpd,commercial_scope:undefined}
   }),/metadata disagrees/);
   assert.throws(()=>buildMcpRegistryDraft(baseline,'33.0.0-preview'),/invalid/);
   assert.throws(()=>buildMcpRegistryDraft({...baseline,description:'x'.repeat(101)},health.version),/invalid/);

@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Mike05102/anime-intelligence-mcp",
-  "title": "GLOBAL PURCHASE DECISION — AI Agent Product & Sourcing Intelligence",
-  "description": "AI agent purchase decisions for physical products and industrial parts, with x402 USDC payments.",
+  "title": "ANIME INTELLIGENCE — AI Agent Purchase Guidance",
+  "description": "Free anime merchandise search and paid buying guidance for AI agents via x402 USDC.",
   "websiteUrl": "https://anime-intelligence.goodmy0312.workers.dev",
   "repository": {
     "url": "https://github.com/Mike05102/anime-intelligence-mcp",
