@@ -163,8 +163,9 @@ function indexFinalized(rows,environment) {
       facts.payer = row.payer;
     }
     const prior = instructions.get(index);
-    if (prior && JSON.stringify(prior) !== JSON.stringify(facts)) conflicts.add(key);
-    instructions.set(index,facts);
+    if (prior && (prior.mint!==facts.mint || prior.payee!==facts.payee || prior.amount!==facts.amount ||
+      (prior.payer && facts.payer && prior.payer!==facts.payer))) conflicts.add(key);
+    instructions.set(index,{...prior,...facts});
   }
   for (const key of failedFinalized) if (transactions.has(key)) conflicts.add(key);
   return {transactions,conflicts};

@@ -51,6 +51,15 @@ const refund={event_type:'x402_refund',payment_network,transaction_hash:refundHa
 const originalWithPayer={...finalized,payer:buyer};
 const refundTransfer={...finalized,transaction_hash:refundHash,payer:payee,payee:buyer,amount_atomic:'30'};
 const paidAndRefunded=test.run([expected,refund,refund],[originalWithPayer,refundTransfer]);
+for (const transfers of [[finalized,originalWithPayer],[originalWithPayer,finalized]]) {
+  const enriched=test.run([expected,refund],[...transfers,refundTransfer]);
+  assert.deepEqual(enriched.matched_refund_atomic,{[asset]:'30'});
+}
+const conflictingPayer=test.run([expected,refund],[
+  originalWithPayer,{...originalWithPayer,payer:payee},refundTransfer
+]);
+assert.equal(conflictingPayer.transactions.conflicting,1);
+assert.equal(conflictingPayer.net_matched_information_fee_atomic,null);
 assert.deepEqual(paidAndRefunded.matched_refund_atomic,{[asset]:'30'});
 assert.deepEqual(paidAndRefunded.refund_transactions,{matched:1,unresolved:0});
 assert.deepEqual(paidAndRefunded.net_matched_information_fee_atomic,{[asset]:'9007199254740963'});
