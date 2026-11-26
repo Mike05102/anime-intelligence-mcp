@@ -86,6 +86,7 @@ jobs:
           PGDATABASE: postgres
       - name: Exercise the production archive and isolated restore path on fixtures
         run: |
+          bash -n supabase/maintenance/run_gpd33_storage.sh
           bash -n supabase/maintenance/github_storage.sh
           bash -n supabase/maintenance/github_db_run.sh
           bash -n supabase/maintenance/github_restore_check.sh

@@ -23,6 +23,19 @@ backup_events() {
   sha256sum -c "$archive.sha256"
 }
 
+require_rewrite_headroom() {
+  local free="${DISK_FREE_BYTES:-}" measured
+  if [[ ! "$free" =~ ^[1-9][0-9]{0,9}$ ]]; then
+    echo 'Physical rewrite requires DISK_FREE_BYTES from a current disk measurement.' >&2
+    return 1
+  fi
+  measured="$(run_sql -Atc "select pg_total_relation_size('public.api_events')")"
+  if [[ ! "$measured" =~ ^[0-9]{1,12}$ ]] || (( free < 2 * measured + 128000000 )); then
+    echo 'Physical rewrite withheld because verified headroom is below the conservative table-and-WAL budget.' >&2
+    return 1
+  fi
+}
+
 case "${1:---audit}" in
   --audit)
     run_sql -f "$audit"
@@ -68,12 +81,12 @@ case "${1:---audit}" in
     run_sql -f "$audit"
     ;;
   --apply)
-    # Run only after reviewing the audit and confirming rewrite headroom.
+    require_rewrite_headroom
     bash "$root/supabase/maintenance/run_gpd33_storage.sh" --prune
     bash "$root/supabase/maintenance/run_gpd33_storage.sh" --reclaim
     ;;
   --reclaim)
-    # Rewriting requires free disk for a new copy plus indexes and WAL.
+    require_rewrite_headroom
     # A short lock wait prevents an unexpected queue behind live traffic.
     run_sql -c "set lock_timeout='2s'" -f "$root/supabase/maintenance/gpd33_reclaim_events.sql"
     run_sql -f "$audit"

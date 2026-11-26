@@ -47,3 +47,5 @@ node scripts/gpd33_seller_discovery_tick.mjs <非公開ソース台帳.json> <�
 `nhtsa_vpic` は鍵なしの公式メーカー一覧を利用する。ソースのカテゴリーは `automotive_parts` に限定し、台帳で `https://vpic.nhtsa.dot.gov/api/vehicles/GetAllManufacturers?format=json&page=1` のようにページを固定する。照会は既存の回数・応答サイズ・クールダウン制限に従う。米国市場向けの公的メーカー情報を提供するが、個別製品、販売可否、配送能力、同意は別途確認する。 [API仕様](https://vpic.nhtsa.dot.gov/api/) · [公開データ案内](https://data.transportation.gov/Automobiles/NHTSA-Product-Information-Catalog-and-Vehicle-List/j8kd-qyeh)
 
 2026-11-25 UTCに第1ページを公開GETで取得し、応答100件を隔離環境のアダプターでメーカー候補100件に変換した。実販売業者の同意確認、取込、本番設定は未実施。
+
+2026-11-26 UTCに第2ページを17,459バイトで取得した。第1ページと公式メーカーIDで照合し、新規候補100件、累計200件を確認した。ページ設定名を変更しても同じメーカーIDに対応する候補キーは一定。

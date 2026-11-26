@@ -177,7 +177,7 @@ function candidateRows(source,payload,now){
     }
     const observed_at=new Date(now).toISOString();
     const rows=payload.Results.filter(row=>Number.isSafeInteger(row?.Mfr_ID)&&row.Mfr_ID>0).map(row=>({
-      source:source.kind,source_seller_id:source.id+'.'+row.Mfr_ID,public_name:row.Mfr_Name,
+      source:source.kind,source_seller_id:'vpic.'+row.Mfr_ID,public_name:row.Mfr_Name,
       evidence_url:VPIC_ORIGIN+'/api/vehicles/GetManufacturerDetails/'+row.Mfr_ID,observed_at
     }));
     return {rows,excluded:payload.Results.length-rows.length};

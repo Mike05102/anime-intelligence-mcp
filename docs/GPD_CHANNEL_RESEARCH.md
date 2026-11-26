@@ -42,6 +42,10 @@
 
 掲載件数は発見可能性の証拠。掲載の版、掲載ページが示すツール数・価格、実際の本番仕様は個別に照合する。買い手の登録、販売業者への引き渡し、成立・入金には、各工程の記録を使う。
 
+2026-11-26には **ProtocolProbe** の運営者ページで6件目の掲載を確認した。登録名 `io.github.Mike05102/anime-intelligence-mcp`、Registry版 `32.0.0`、リポジトリ、GPD本番ホストが一致する。同サイトの2026-11-19の読み取り専用MCP接続で、25ツール、0リソース、0プロンプトを観測したと記載されている。ツールの実行や支払いはこの観測に含まれない。 [ProtocolProbeの公開レコード](https://protocolprobe.com/mcp/servers/io.github.Mike05102/anime-intelligence-mcp)
+
+同運営者の無料・認証不要の単一サーバーAPIも、対象レコードだけを8秒、最大128 KiB、リダイレクトなしで読み取り照会した。今回の接続経路ではHTTP 403。このため上記の掲載・履歴は運営者の公開ページによる確認で、JSON応答による照合は未確認。申請・登録の更新・決済は発生していない。 [無料APIの公式説明](https://protocolprobe.com/docs/api) · [対象レコードのAPI](https://protocolprobe.com/api/v1/servers/io.github.Mike05102/anime-intelligence-mcp)
+
 ## Bingと参加検索エンジンへの更新通知
 
 2026-11-26調査。IndexNowは、公開URLの追加・更新・削除をBingなどの参加検索エンジンに通知する公開プロトコル。直接通知には、同じホストで専用の所有権確認テキストを外部から取得可能にし、そのホストで変更したURLを送る。正常な応答は通知の受領を示し、検索結果への掲載はBing Webmaster Toolsなどの検査で別途確認する。 [IndexNow仕様](https://www.indexnow.org/documentation?hl=en) · [Bingの設定と確認方法](https://www.bing.com/indexnow/getstarted)

@@ -133,7 +133,7 @@ const vpicDirectory=await mkdtemp(join(tmpdir(),'gpd-vpic-tick-'));
 try{
   const registryFile=join(vpicDirectory,'registry.json'),demandFile=join(vpicDirectory,'demand.json');
   const endpoint='https://vpic.nhtsa.dot.gov/api/vehicles/GetAllManufacturers?format=json&page=1';
-  const vpic=source('vpic',['automotive_parts'],['US'],{kind:'nhtsa_vpic',endpoint,
+  const vpic=source('vpic_page_one',['automotive_parts'],['US'],{kind:'nhtsa_vpic',endpoint,
     terms_url:'https://vpic.nhtsa.dot.gov/api/',evidence_origins:['https://vpic.nhtsa.dot.gov'],consent_origins:[]});
   const setSource=entry=>writeFile(registryFile,JSON.stringify({...registry,sources:[entry]}),{mode:0o600});
   await writeFile(demandFile,JSON.stringify(demand),{mode:0o600});
