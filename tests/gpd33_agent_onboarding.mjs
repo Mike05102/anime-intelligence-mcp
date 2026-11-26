@@ -65,7 +65,7 @@ try{
   }
   assert.equal(byName.get(manifest.onboarding.paid_decision_mcp_tool)?.annotations?.paid,true);
   const examples=await (await request('/agents/examples')).json();
-  assert.equal(examples.free_product_identity.url,origin+'/v1/product/resolve?mpn=E2E-X5ME1&manufacturer=OMRON');
+  assert.equal(examples.free_product_identity.url,origin+'/v1/product/resolve?gtin=4901234567894&domain=anime_collectibles');
   assert.equal(examples.free_merchant_discovery.url,origin+'/v1/merchant/directory?limit=10');
   assert.equal(examples.discovery.manifest,origin+'/.well-known/gpd');
 }finally{globalThis.fetch=globalFetch;}
