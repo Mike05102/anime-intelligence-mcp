@@ -36,7 +36,10 @@ def verify_unsigned_purchase():
             if len(data) > 16384:
                 return False
             challenge = json.loads(base64.b64decode(response.headers["Payment-Required"], validate=True))
-            preview = json.loads(data).get("product_preview") or {}
+            body = json.loads(data)
+            preview = body.get("product_preview") if isinstance(body, dict) else None
+            if not isinstance(challenge, dict) or not isinstance(preview, dict):
+                return False
             return (challenge.get("x402Version") == 2 and preview.get("jan_code") == smoke_jan
                     and bool(preview.get("canonical_product_id")) and bool(preview.get("name")))
 
