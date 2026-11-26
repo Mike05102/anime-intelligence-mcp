@@ -201,7 +201,7 @@ globalThis.fetch=async (target,options={})=>{
   }
   if(url.pathname==='/rest/v1/products'&&mode.startsWith('decision')){
     if(mode==='decision_anime')return Response.json([{
-      id:'10000000-0000-4000-8000-000000000005',product_type:'nendoroid',canonical_name_ja:'Hatsune Miku Nendoroid'
+      id:'10000000-0000-4000-8000-000000000005',product_type:'nendoroid',jan_code:'4901234567887',canonical_name_ja:'Hatsune Miku Nendoroid'
     }]);
     return Response.json([{id:'10000000-0000-4000-8000-000000000005',manufacturer:'Example',
       product_type:'food_grocery',source_product_key:'universal:gtin:00012345678905',
@@ -332,6 +332,8 @@ assert.equal((await (await call(nonAnimeSearch)).json()).count,0);
 mode='decision_anime';
 assert.equal((await (await call('/v1/search?query=Hatsune%20Miku%20Nendoroid')).json()).count,1);
 assert.equal((await scopedProduct('10000000-0000-4000-8000-000000000005')).status,402);
+assert.equal((await call('/v1/purchase-decision?gtin=4901234567887&buyer_country=JP')).status,402);
+assert.equal((await call('/v1/purchase-decision?canonical_product_id=10000000-0000-4000-8000-000000000005')).status,402);
 const mismatchedGtin=await post('/v1/purchase-decision',{
   domain:'anime_collectibles',product:{canonical_product_id:'10000000-0000-4000-8000-000000000005',gtin:'4901234567894'},buyer_country:'JP'
 });

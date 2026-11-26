@@ -7987,7 +7987,10 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
     if(!hasPaymentHeader)return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision",async()=>{throw new Error("purchase_query_or_product_required");},ctx);
     return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"purchase_query_or_product_required",charged:false,normalized_intent:intent},400);
   }
-  if(intent.domain!=="anime_collectibles"){
+  const declaredDomain=body?.domain||body?.vertical||body?.category;
+  const inferredFromExactIdentity=!declaredDomain && intent.domain==="general_commerce" &&
+    (intent.product.canonical_product_id || /^(45|49)\d{11}$/.test(intent.product.gtin||""));
+  if(intent.domain!=="anime_collectibles"&&!inferredFromExactIdentity){
     return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_purchase_scope_required",
       commercial_scope:"anime_collectibles",charged:false},422,{"cache-control":"no-store"});
   }
