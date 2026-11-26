@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
 import {runSellerDiscoveryTick} from '../scripts/gpd33_seller_discovery_tick.mjs';
 import {prepareSellerOptInReview} from '../scripts/gpd33_seller_opt_in.mjs';
-import {prepareMerchantOfferFeed} from '../scripts/gpd33_merchant_offer_feed.mjs';
+import {runMerchantCoverageTick} from '../scripts/gpd33_merchant_coverage_tick.mjs';
+import {fetchApprovedMerchantOfferFeed} from '../scripts/gpd33_merchant_feed_fetch.mjs';
 import {fingerprintPartnerReview,publishApprovedMerchantFeed} from '../scripts/gpd33_merchant_feed_publish.mjs';
 import {assertReconciliationFromHandoff} from './gpd33_reconcile_journey.mjs';
 import {createHash, createHmac, generateKeyPairSync, randomUUID, sign} from 'node:crypto';
@@ -166,11 +167,34 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal(merchantDraft.status,'operator_review_required');
     assert.equal(merchantDraft.feed_connection_draft.approved_until,undefined);
     const approval={...merchantDraft.feed_connection_draft,approved_until:merchantDraft.consent_expires_at};
-    const review={schema:'gpd-partner-review-v1',status:'review_required',snapshot_id:randomUUID(),
-      merchant_feed:prepareMerchantOfferFeed(approval,{
-        schema:'gpd-merchant-offer-feed-input-v1',merchant_id:seller,feed_url:approval.feed_url,
-        observed_at:feedOffer.source_updated_at,offers:[feedOffer]
-      })};
+    const stagingDirectory=await mkdtemp(join(tmpdir(),'gpd-feed-journey-'));
+    let review;
+    try {
+      const registry=join(stagingDirectory,'registry.json');
+      await writeFile(registry,JSON.stringify({schema:'gpd-merchant-coverage-registry-v1',
+        max_feeds_per_tick:1,stage_previews:true,sources:[{source:'merchant',approval_file:'approval.json'}]}),{mode:0o600});
+      await writeFile(join(stagingDirectory,'approval.json'),JSON.stringify(approval),{mode:0o600});
+      const manifest={schema:'gpd-merchant-offer-feed-input-v1',merchant_id:seller,feed_url:feedUrl,
+        observed_at:observed,offers:[feedOffer]};
+      const tick=await runMerchantCoverageTick(registry,stagingDirectory,{fetchFeed:(input,options)=>
+        fetchApprovedMerchantOfferFeed(input,{...options,resolve:async()=>['93.184.215.14'],
+          request:async (url,{address})=>{
+            assert.equal(url.href,feedUrl);
+            assert.equal(address,'93.184.215.14');
+            return Object.assign(Readable.from([Buffer.from(JSON.stringify(manifest))]),
+              {statusCode:200,headers:{'content-type':'application/json'}});
+          }})});
+      assert.deepEqual(tick,{status:'coverage_checked',configured:1,attempted:1,observed:1,unavailable:0});
+      const stage=JSON.parse(await readFile(join(stagingDirectory,'merchant-coverage.json'),'utf8')).results[0];
+      review=JSON.parse(await readFile(join(stagingDirectory,stage.preview_file),'utf8'));
+      assert.equal(review.snapshot_id,stage.snapshot_id);
+      assert.equal(review.schema,'gpd-merchant-feed-review-v1');
+      assert.equal((await runMerchantCoverageTick(registry,stagingDirectory,{
+        fetchFeed:()=>assert.fail('feed update budget must survive replay')
+      })).status,'coverage_not_due');
+    } finally {
+      await rm(stagingDirectory,{recursive:true,force:true});
+    }
     const writeApproval={schema:'gpd-merchant-feed-write-approval-v1',allow_publish:true,
       snapshot_id:review.snapshot_id,merchant_id:seller,approved_until:approvalExpiry,worker_origin:'https://gpd.example',
       report_sha256:fingerprintPartnerReview(review)};
