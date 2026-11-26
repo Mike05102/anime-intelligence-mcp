@@ -9541,7 +9541,14 @@ async function preflightPaidProduct(env,url,{exactJan=false}={}){
     return {ok:true,product,resolution:"canonical_id",selection:{method:"canonical_id",automatic:false,commercial_default:false,shopping_intent:shoppingIntent,recommended_paid_endpoint:naturalPaidRoute(shoppingIntent,query),alternatives:[]}};
   }
   if(exactJan){
-    const products=(await loadProductsByJans(env,[query])).filter(isAnimeLaunchProduct);
+    let rows;
+    try{
+      rows=await sb(env,`/products?select=*&jan_code=eq.${cleanJan(query)}&limit=2`);
+      if(!Array.isArray(rows))throw new Error("Invalid catalogue response");
+    }catch{
+      return {ok:false,status:503,body:{error:"catalogue_unavailable",charged:false}};
+    }
+    const products=rows.filter(isAnimeLaunchProduct);
     if(products.length!==1)return {ok:false,status:products.length?409:404,body:{
       error:products.length?"ambiguous_jan":"jan_not_found",charged:false
     }};
