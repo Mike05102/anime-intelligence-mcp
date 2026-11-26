@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from github_db_connection import connection_fields
@@ -22,7 +23,9 @@ if token:
             raise ValueError("stale")
         supplied = str(int(data["metrics"]["fs_avail_bytes"]))
     except Exception:
-        raise SystemExit("The live Supabase disk sample was unavailable or stale.") from None
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", supplied):
+            raise SystemExit("The live Supabase disk sample was unavailable or stale.") from None
+        print("Live disk telemetry unavailable. Using the operator-supplied recent measurement.", file=sys.stderr)
 if not re.fullmatch(r"[1-9][0-9]{0,9}", supplied):
     raise SystemExit("A verified positive free-disk measurement is required.")
 print(supplied)
