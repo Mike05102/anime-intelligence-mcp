@@ -7993,7 +7993,7 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   }
   const u=new URL(`${origin}/v1/full-intelligence`);
   if(intent.product.canonical_product_id)u.searchParams.set("id",intent.product.canonical_product_id);
-  else u.searchParams.set("query",intent.original_query||intent.product.gtin||"");
+  else u.searchParams.set("query",intent.product.gtin||intent.original_query||"");
   u.searchParams.set("buyer_country",intent.destination.country);u.searchParams.set("lang",intent.language);
   const preflight=await preflightPaidProduct(env,u);
   if(!preflight.ok)return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"collectible_not_resolved",charged:false,normalized_intent:intent,resolution:preflight.body},preflight.status||404,{"cache-control":"no-store"});
@@ -8001,6 +8001,13 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   if(!isAnimeLaunchProduct(product)){
     return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_product_evidence_required",
       charged:false},422,{"cache-control":"no-store"});
+  }
+  if(intent.product.gtin){
+    const stored=normalizeUniversalIdentifiers({gtin:product.jan_code||product.metadata?.identifiers?.gtin}).gtin;
+    if(!stored||stored.padStart(14,"0")!==intent.product.gtin.padStart(14,"0")){
+      return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"product_gtin_mismatch",
+        charged:false},422,{"cache-control":"no-store"});
+    }
   }
   return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision: exact identity, market evidence and purchase options",async()=>{
     const lockedBody={...body,domain:"anime_collectibles",product:{...body.product,canonical_product_id:product.id}};
