@@ -51,6 +51,8 @@
 - **MCPCheckup** はRegistry版 `32.0.0` 由来の接続先を掲載。認証なしで25ツールを読み取ったとし、公開データの直近30日では計測対象29日中29日に応答あり。カタログ上の所有権は未確認と表示されている。数値は同サイトの観測。 [公開チェック記録](https://mcpcheckup.com/check/mike05102/anime-intelligence-mcp)
 - **MCP Queen** は同じ公式登録名と接続先を掲載。公開レコードはRegistry版 `3.10.2`、接続観測は2026-10-31、リポジトリとの対応付けの同期は2026-11-07。過去の運用観測として扱う。 [公開エビデンスページ](https://mcpqueen.com/s/io.github.Mike05102/anime-intelligence-mcp)
 
+**Rooms by Aurmada** の公開ディレクトリで9件目を確認した。旧名称のコミュニティ掲載で、Claude Codeなどの設定例がGPDの正確なStreamable HTTP接続先 `https://anime-intelligence.goodmy0312.workers.dev/mcp` を案内する。2026-11-25確認の稼働表示には25ツール、無料確認を実施した26日間の稼働率100%、Rooms経由の直近30日呼び出しは**0件**と記載されている。0件はRoomsの仲介経路に限る。掲載は所有者未確認と表示され、ページはDNSまたはファイルによる無料の所有者確認を案内している。今回行ったのは運営者の公開レコードの照合。 [Roomsの公開掲載](https://rooms.aurmada.com/agents/anime-intelligence-ai-purchase-intelligence)
+
 ## Bingと参加検索エンジンへの更新通知
 
 2026-11-26調査。IndexNowは、公開URLの追加・更新・削除をBingなどの参加検索エンジンに通知する公開プロトコル。直接通知には、同じホストで専用の所有権確認テキストを外部から取得可能にし、そのホストで変更したURLを送る。正常な応答は通知の受領を示し、検索結果への掲載はBing Webmaster Toolsなどの検査で別途確認する。 [IndexNow仕様](https://www.indexnow.org/documentation?hl=en) · [Bingの設定と確認方法](https://www.bing.com/indexnow/getstarted)

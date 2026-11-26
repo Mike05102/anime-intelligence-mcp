@@ -150,6 +150,49 @@ try{
   const dictionaries=brands.total_bytes+taxonomy.total_bytes+providers.total_bytes;
   const measurements={compact,dictionaries};
   const scenarios={compact_exact:compact.total_bytes+dictionaries};
+  // Order the initial load by category so BRIN can prune unrelated blocks in category reads.
+  // Exact identity lookups retain both btree indexes and arbitrary persisted UUIDs.
+  await sql(`
+    create unlogged table public.capacity_products_lean(
+      gtin bigint primary key,
+      display_id uuid not null unique,
+      checked_at timestamptz not null,
+      source_record bigint not null,
+      brand_id int not null references public.capacity_brand(id),
+      domain_id smallint not null references public.capacity_domain(id),
+      source_id smallint not null references public.capacity_source(id),
+      reported_gtin_length smallint not null check (reported_gtin_length in (8,12,13,14)),
+      title text not null
+    );
+    insert into public.capacity_products_lean
+      select p.gtin,p.display_id,p.checked_at,p.source_record,p.brand_id,p.domain_id,p.source_id,
+        length(s.reported_gtin),p.title
+      from public.capacity_products p join capacity_samples s on s.n=p.source_record
+      order by p.domain_id,p.gtin;
+    create index capacity_lean_category_brin on public.capacity_products_lean using brin(domain_id)
+      with (pages_per_range=16,autosummarize=on);
+  `);
+  await sql('vacuum (analyze) public.capacity_products_lean');
+  const leanEvidenceMatches=await scalar(`select count(*)::int value
+    from public.capacity_products_lean l join public.capacity_products p using(gtin)
+    join capacity_samples s on s.n=l.source_record
+    where (l.display_id,l.checked_at,l.source_record,l.brand_id,l.domain_id,l.source_id,l.title)
+      =(p.display_id,p.checked_at,p.source_record,p.brand_id,p.domain_id,p.source_id,p.title)
+    and right(lpad(l.gtin::text,14,'0'),l.reported_gtin_length)=s.reported_gtin`);
+  assert.equal(leanEvidenceMatches,TARGET);
+  const leanBatchPlan=await sql(`explain (analyze,buffers,format json)
+    select gtin,display_id,checked_at,title from public.capacity_products_lean
+    where domain_id=12 order by checked_at desc,gtin limit 40`);
+  const leanPlan=leanBatchPlan.rows[0]['QUERY PLAN'][0].Plan;
+  const planNames=node=>[(node['Index Name']||node['Node Type']),...(node.Plans||[]).flatMap(planNames)];
+  assert.ok(planNames(leanPlan).includes('capacity_lean_category_brin'));
+  const leanExactPlan=await sql(`explain (format json)
+    select gtin,display_id,source_record from public.capacity_products_lean where gtin=90000011`);
+  assert.equal(leanExactPlan.rows[0]['QUERY PLAN'][0].Plan['Node Type'],'Index Scan');
+  measurements.lean_category_brin={...await size('capacity_products_lean'),
+    matching_evidence_rows:leanEvidenceMatches,category_page_returned:leanPlan['Actual Rows'],
+    category_page_plan:planNames(leanPlan),category_page_ms:leanPlan['Actual Total Time']};
+  scenarios.lean_category_brin=measurements.lean_category_brin.total_bytes+dictionaries;
   if(!demandOnly){
     const [current,trimmed]=await Promise.all(['products','products_trimmed'].map(size));
     await sql('create index on public.capacity_products using gin (title gin_trgm_ops)');
@@ -247,6 +290,7 @@ try{
       " where expires_at<="+sampleStart+"+interval '90 hours'"),0);
     const growthBytes=compact.total_bytes+dictionaries+daily.at(-1).total_bytes;
     scenarios['compact_demand_offer_'+percentage+'pct']=growthBytes;
+    scenarios['lean_demand_offer_'+percentage+'pct']=scenarios.lean_category_brin+daily.at(-1).total_bytes;
     demandCache.push({percent_of_products:percentage,max_offers:limit,expiry_hours:24,rotation_hours:6,
       rotations:12,initial,daily_after_vacuum:daily});
   }
