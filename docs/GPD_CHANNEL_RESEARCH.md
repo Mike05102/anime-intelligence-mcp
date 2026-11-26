@@ -53,6 +53,8 @@
 
 **Rooms by Aurmada** の公開ディレクトリで9件目を確認した。旧名称のコミュニティ掲載で、Claude Codeなどの設定例がGPDの正確なStreamable HTTP接続先 `https://anime-intelligence.goodmy0312.workers.dev/mcp` を案内する。2026-11-25確認の稼働表示には25ツール、無料確認を実施した26日間の稼働率100%、Rooms経由の直近30日呼び出しは**0件**と記載されている。0件はRoomsの仲介経路に限る。掲載は所有者未確認と表示され、ページはDNSまたはファイルによる無料の所有者確認を案内している。今回行ったのは運営者の公開レコードの照合。 [Roomsの公開掲載](https://rooms.aurmada.com/agents/anime-intelligence-ai-purchase-intelligence)
 
+**PluginBench** の公開ディレクトリで10件目を確認した。公式登録名の一致と、公開の接続設定が案内する正確なGPD `/mcp` URLを照合した。掲載内容は旧名称のANIME INTELLIGENCEとRegistry版 `3.7.98` で、現行の総合購買判断機能の掲載範囲、プラットフォーム経由の利用・支払いは未確認。 [PluginBenchの公開掲載](https://pluginbench.com/mcp/io.github.Mike05102/anime-intelligence-mcp)
+
 ## Bingと参加検索エンジンへの更新通知
 
 2026-11-26調査。IndexNowは、公開URLの追加・更新・削除をBingなどの参加検索エンジンに通知する公開プロトコル。直接通知には、同じホストで専用の所有権確認テキストを外部から取得可能にし、そのホストで変更したURLを送る。正常な応答は通知の受領を示し、検索結果への掲載はBing Webmaster Toolsなどの検査で別途確認する。 [IndexNow仕様](https://www.indexnow.org/documentation?hl=en) · [Bingの設定と確認方法](https://www.bing.com/indexnow/getstarted)
@@ -76,6 +78,15 @@ Coinbase Bazaarの公式資料を再確認した。カタログAPIはファシ�
 旧経路も読み取りで再確認した。Circleは申請フォームと手動審査を案内し、掲載料金は資料内で確認できなかった。402.adの提出ページは今回の取得でタイムアウトし、前回の料金記録を維持する。xpayshとMerit Systemsの公開一覧本文に `anime-intelligence` は見つからず、GPDの掲載証拠は得られなかった。 [Circle掲載手順](https://developers.circle.com/agent-stack/agent-marketplace/get-listed) · [402.ad提出ページ](https://402.ad/submit) · [xpaysh一覧](https://github.com/xpaysh/awesome-x402) · [Merit Systems一覧](https://github.com/Merit-Systems/awesome-agentic-commerce)
 
 累計は調査20経路、無償条件確認4件、登録手順実装1件、既存掲載確認9件。追加3経路は無料適格・登録準備・実掲載に算入していない。
+
+## MCP専門ディレクトリの追加調査
+
+| 経路 | 無料条件・提出・自動化 | GPD掲載 |
+|---|---|---|
+| MCP.so | 現行公開フォームはリポジトリURLまたはリモートURLでの提出を案内。自動即時掲載の表示料金は一回39 USD。フォームからの無料提出経路は確認できなかった。 [公式提出ページ](https://mcp.so/submit) | 正式名称、所有者、接続先を照合できる公開レコードは未確認。 |
+| PulseMCP | 2026-09-03更新の公式案内で新規提出・変更とも停止中。再開後は公式MCP Registryを取り込む方針。再開日と再開後の費用条件は未確認。 [公式提出ページ](https://www.pulsemcp.com/submit) | 対象サーバーの公開レコードは未確認。 |
+
+累計は調査22経路、無償条件確認4件、登録手順実装1件、既存掲載確認9件。今回確認した公式資料は提出条件の証拠として記録した。既存掲載の増分は0件。
 
 ## 確認の順序
 
