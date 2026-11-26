@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -17,15 +17,18 @@ const socket=join(parent,'socket'),databasePath=join(parent,'data');
 const postgresBin=resolve(process.argv[2]||'/usr/lib/postgresql/17/bin');
 const demandOnly=process.argv.includes('--demand-only');
 const logicalCopy=process.argv.includes('--logical-copy');
-const retainedEvents=process.argv.includes('--retained-events');
+const archiveRestore=process.argv.includes('--archive-restore');
+const retainedEvents=archiveRestore||process.argv.includes('--retained-events');
+let activeDatabase=databasePath;
 const importPath=process.env.GPD33_PG_MODULE;
 let client,started=false;
 
-function command(name,args){
-  const result=spawnSync(join(postgresBin,name),args,{encoding:'utf8',timeout:60000});
+function execute(name,args){
+  const result=spawnSync(name,args,{encoding:'utf8',timeout:60000});
   if(result.error)throw result.error;
   if(result.status!==0)throw new Error(name+' failed: '+result.stderr.trim());
 }
+const command=(name,args)=>execute(join(postgresBin,name),args);
 
 try{
   const pg=await import(importPath?pathToFileURL(resolve(importPath)).href:'pg');
@@ -397,6 +400,69 @@ try{
     page_size:40,current_product_lookup_utf8_bytes:legacyPage?Buffer.byteLength(JSON.stringify(legacyPage.rows)):null,
     compact_identity_profile_utf8_bytes:Buffer.byteLength(JSON.stringify(compactPage.rows))
   };
+  if(archiveRestore){
+    const targets=[
+      ['capacity_brand','id',3000],
+      ['capacity_domain','id',24],
+      ['capacity_source','id',2],
+      ['capacity_products_lean','gtin',TARGET],
+      ['capacity_demand_1','product_gtin,merchant,country',2400],
+      ['capacity_retained_restore','id',20118]
+    ];
+    // Keep archive validation independent of unlogged-table recovery semantics.
+    await sql(`alter table public.capacity_demand_1
+      drop constraint capacity_demand_1_product_gtin_fkey,
+      add constraint capacity_demand_1_product_gtin_fkey
+        foreign key (product_gtin) references public.capacity_products_lean(gtin)`);
+    for(const [table] of targets){
+      await sql('alter table public.'+table+' set logged');
+    }
+    async function archiveManifest(){
+      const result={};
+      for(const [table,order,count] of targets){
+        const rows=await scalar(`select jsonb_build_object('rows',count(*),
+          'digest',encode(sha256(convert_to(string_agg(row_to_json(r)::text,E'\\n' order by ${order}),'UTF8')),'hex'))
+          value from public.${table} r`);
+        assert.equal(rows.rows,count);
+        const indexes=await scalar(`select jsonb_agg(pg_get_indexdef(indexrelid) order by indexrelid) value
+          from pg_index where indrelid=$1::regclass and indisvalid and indisready`,['public.'+table]);
+        const constraints=await scalar(`select jsonb_agg(pg_get_constraintdef(oid) order by conname) value
+          from pg_constraint where conrelid=$1::regclass and convalidated`,['public.'+table]);
+        result[table]={...rows,indexes,constraints};
+      }
+      result.event_security=await scalar(`select jsonb_build_object('rls',relrowsecurity,
+        'anon_select',has_table_privilege('anon',oid,'SELECT'),
+        'authenticated_select',has_table_privilege('authenticated',oid,'SELECT'),
+        'service_select',has_table_privilege('service_role',oid,'SELECT'),
+        'service_insert',has_table_privilege('service_role',oid,'INSERT')) value
+        from pg_class where oid='public.capacity_retained_restore'::regclass`);
+      assert.deepEqual(result.event_security,{rls:true,anon_select:false,authenticated_select:false,
+        service_select:true,service_insert:true});
+      return result;
+    }
+    const expected=await archiveManifest();
+    await client.end();
+    client=null;
+    command('pg_ctl',['-D',activeDatabase,'-m','fast','-w','stop']);
+    started=false;
+    const archive=join(parent,'physical.tar.gz'), restored=join(parent,'restored');
+    execute('tar',['-czf',archive,'-C',databasePath,'.']);
+    await mkdir(restored,{mode:0o700});
+    execute('tar',['-xzf',archive,'-C',restored]);
+    activeDatabase=restored;
+    command('pg_ctl',['-D',activeDatabase,'-l',join(parent,'restored.log'),'-o',
+      `-k "${socket}" -p 55471 -c listen_addresses='' -c timezone=UTC`,'-w','start']);
+    started=true;
+    client=new pg.default.Client({host:socket,port:55471,user:'postgres',database:'postgres',ssl:false});
+    await client.connect();
+    const actual=await archiveManifest();
+    assert.deepEqual(actual,expected);
+    const nextId=await scalar(`select nextval(pg_get_serial_sequence('public.capacity_retained_restore','id'))::int value`);
+    assert.equal(nextId,20120);
+    measurements.archive_restore={scope:'synthetic_local_clean_shutdown_physical_archive',
+      archive_bytes:(await stat(archive)).size,products:TARGET,offers:2400,retained_events:20118,
+      restored_tables:targets.length,row_digests_indexes_constraints_and_rls_match:true,next_event_id:nextId};
+  }
   process.stdout.write(JSON.stringify({
     scope:'synthetic_isolated_postgres',server_version:await scalar("select current_setting('server_version') value"),
     categories:domains.length,products_per_category:10000,total_products:TARGET,
@@ -408,7 +474,7 @@ try{
 }finally{
   try{if(client)await client.end();}
   finally{
-    try{if(started)command('pg_ctl',['-D',databasePath,'-m','fast','-w','stop']);}
+    try{if(started)command('pg_ctl',['-D',activeDatabase,'-m','fast','-w','stop']);}
     finally{await rm(parent,{recursive:true,force:true});}
   }
 }

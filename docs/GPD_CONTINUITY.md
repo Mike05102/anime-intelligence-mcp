@@ -172,3 +172,5 @@ PluginBenchで公式登録名とGPDの接続先が一致する旧版の掲載を
 探索配分を更新した `a80577e` のGPD33統合CIは合格。管理画面をx402決済イベントの観測表示に改め、収益ステータスAPIに独立照合済み金額の未計測値を追加した。再開時は `node tests/gpd33_worker.mjs` と `node tests/gpd33_x402_reconcile.mjs` で確認する。 [統合CI](https://github.com/Mike05102/anime-intelligence-mcp/actions/runs/45780331734)
 
 既存の本番保守ワークフロー履歴では直近実行の失敗箇所が入力・接続確認だった。監視側の最後のDB容量・商品数・回収量を引き継ぎ、今回は新規実測と物理回収を行っていない。 [保守ジョブの履歴](https://github.com/Mike05102/anime-intelligence-mcp/actions/runs/45583899566)
+
+隔離PostgreSQL 17で通常テーブル化した24万商品・期限付き販売条件2,400件・保持イベント20,118件を、停止済みクラスタの圧縮物理アーカイブから復元した。アーカイブは141,447,935バイト。6表の全行ダイジェスト、索引、制約、イベント表のRLS・権限と次回採番が一致した。再実行は `GPD33_PG_MODULE=/path/to/pg/lib/index.js node scripts/gpd33_catalog_capacity.mjs /path/to/postgres/bin --demand-only --archive-restore`。これは合成データのローカル試験。本番の保持量、アーカイブ転送、物理領域と本番移行の適合性は監視計測が必要。 [容量と復元手順](GPD_CATALOG_CAPACITY.md)
