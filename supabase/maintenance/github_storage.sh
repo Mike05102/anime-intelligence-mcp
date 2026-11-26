@@ -26,8 +26,9 @@ SQL
     [[ "$logical_bytes" =~ ^[0-9]+$ ]]
     # Reserve twice the logical JSON size for COPY encoding, schema and
     # concurrent writes. Local archive compression does not reduce DB egress.
-    if (( 2 * logical_bytes + 100000000 > $2 )); then
-      echo 'Uncached egress remaining is below the backup estimate.' >&2
+    required_egress=$(( 2 * logical_bytes + 100000000 ))
+    if (( required_egress > $2 )); then
+      echo "Uncached egress is below the backup estimate. Required: $required_egress bytes." >&2
       exit 1
     fi
     ;;
