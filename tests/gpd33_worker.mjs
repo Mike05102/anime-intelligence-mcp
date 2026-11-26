@@ -253,7 +253,7 @@ try {
   globalThis.fetch=originalPaymentFetch;
 }
 const directGtin='/v1/purchase-decision?gtin=012345678905&buyer_country=JP';
-assert.equal((await call(directGtin)).status,402);
+assert.equal((await call(directGtin)).status,422);
 const invalidSignature={headers:{'payment-signature':'invalid-signature'}};
 for(const gtinRequest of [await call(directGtin,invalidSignature),await call('/v1/purchase-decision',{
   method:'POST',headers:{'content-type':'application/json',...invalidSignature.headers},
@@ -261,8 +261,9 @@ for(const gtinRequest of [await call(directGtin,invalidSignature),await call('/v
 })]){
   assert.ok(gtinRequest.status>=400);
   const rejection=await gtinRequest.json();
-  assert.match(rejection.error,/payment|x402/i);
-  assert.notEqual(rejection.error,'purchase_query_or_product_required');
+  assert.equal(rejection.error,'anime_purchase_scope_required');
+  assert.equal(rejection.charged,false);
+  assert.equal(gtinRequest.headers.has('payment-required'),false);
 }
 const invalidGtin=await call('/v1/purchase-decision?gtin=012345678906',invalidSignature);
 assert.equal(invalidGtin.status,400);

@@ -7942,30 +7942,33 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   }else{
     try{body=await request.json();}catch{
       if(hasPaymentHeader)return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"invalid_json",charged:false},400);
-      return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{throw new Error("purchase_body_required");},ctx);
+      const product=preflight.product;
+  if(product.metadata?.universal_commerce||(!discoverySafeFranchise(product)
+    &&!["figure","scale_figure","nendoroid","figma"].includes(product.product_type))){
+    return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_product_evidence_required",
+      charged:false},422,{"cache-control":"no-store"});
+  }
+  return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision: exact identity, market evidence and purchase options",async()=>{throw new Error("purchase_body_required");},ctx);
     }
   }
   const intent=normalizePurchaseDecisionIntent(body,request);
-  if(intent.original_query&&!hasPaymentHeader){
-    deferTelemetry(ctx,logEvent(env,"universal_product_demand",{endpoint:"/v1/purchase-decision",metadata:{domain:intent.domain,query_text:String(intent.original_query).slice(0,180),query_key:universalQueryKey(intent.domain,intent.original_query),query_family:universalQueryFamily(intent.domain,intent.original_query),language:intent.language,buyer_country:intent.destination.country,pre_payment:true,attribution_key:purchaseAttributionKey(intent),version:VERSION}}));
-  }
   if(!purchaseDecisionHasProduct(intent)){
-    if(!hasPaymentHeader)return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{throw new Error("purchase_query_or_product_required");},ctx);
-    return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"purchase_query_or_product_required",charged:false,normalized_intent:intent},400);
+    if(!hasPaymentHeader)return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision",async()=>{throw new Error("purchase_query_or_product_required");},ctx);
+    return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"purchase_query_or_product_required",charged:false,normalized_intent:intent},400);
   }
-  // Preserve the existing pre-payment identity principle: unresolved exact products are rejected before settlement.
-  if(intent.domain==="parts"){
-    const resolved=await resolvePart(env,{query:intent.original_query||"",part_number:intent.product.mpn||"",manufacturer:intent.product.manufacturer||""});
-    if(!resolved.ok)return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"part_not_resolved",charged:false,normalized_intent:intent,resolution:resolved},resolved.status||404,{"cache-control":"no-store"});
-  }else if(intent.domain==="anime_collectibles"){
-    const u=new URL(`${origin}/v1/full-intelligence`);
-    if(intent.product.canonical_product_id)u.searchParams.set("id",intent.product.canonical_product_id);else u.searchParams.set("query",intent.original_query||"");
-    u.searchParams.set("buyer_country",intent.destination.country);u.searchParams.set("lang",intent.language);
-    const preflight=await preflightPaidProduct(env,u);
-    if(!preflight.ok)return json({ok:false,service:"AI PURCHASE INTELLIGENCE",version:VERSION,error:"collectible_not_resolved",charged:false,normalized_intent:intent,resolution:preflight.body},preflight.status||404,{"cache-control":"no-store"});
+  if(intent.domain!=="anime_collectibles"){
+    return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_purchase_scope_required",
+      commercial_scope:"anime_collectibles",charged:false},422,{"cache-control":"no-store"});
   }
-  return x402Gate(request,env,PRICES.purchaseDecision,"Global multilingual purchase decision: resolve product identity, evidence, merchant offers, known landed cost and best purchase route",async()=>{
-    const out=await buildUniversalPurchaseDecision(request,env,body,origin);
+  const u=new URL(`${origin}/v1/full-intelligence`);
+  if(intent.product.canonical_product_id)u.searchParams.set("id",intent.product.canonical_product_id);
+  else u.searchParams.set("query",intent.original_query||intent.product.gtin||"");
+  u.searchParams.set("buyer_country",intent.destination.country);u.searchParams.set("lang",intent.language);
+  const preflight=await preflightPaidProduct(env,u);
+  if(!preflight.ok)return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"collectible_not_resolved",charged:false,normalized_intent:intent,resolution:preflight.body},preflight.status||404,{"cache-control":"no-store"});
+  return x402Gate(request,env,PRICES.purchaseDecision,"Anime collectible purchase decision: exact identity, market evidence and purchase options",async()=>{
+    const lockedBody={...body,domain:"anime_collectibles",product:{...body.product,canonical_product_id:product.id}};
+    const out=await buildUniversalPurchaseDecision(request,env,lockedBody,origin);
     if(out?.status&&out.status>=400){const e=new Error(out.error||"purchase_decision_failed");e.public_payload=out;throw e;}
     deferTelemetry(ctx,logRequestStage(env,request,"universal_purchase_decision_served",{metadata:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||intent.product.gtin||""),attribution_key:purchaseAttributionKey(intent),language:intent.language,destination_country:intent.destination.country,can_purchase:!!out?.decision?.can_purchase,decision_action:out?.decision?.action||null,reason_codes:Array.isArray(out?.decision?.reason_codes)?out.decision.reason_codes.slice(0,12):[],cross_provider_corroborated_offers:Number(out?.cross_provider_corroborated_offers||out?.persistence?.cross_provider_corroborated_candidates||0)}}));
     return {...out,_payment_attribution:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||""),attribution_key:purchaseAttributionKey(intent),decision_action:out?.decision?.action||null,can_purchase:!!out?.decision?.can_purchase},price_usdc_atomic:PRICES.purchaseDecision,price_usdc:Number(PRICES.purchaseDecision)/1000000};
@@ -13613,7 +13616,7 @@ export default{
       if(url.pathname==="/robots.txt"&&request.method==="GET")return new Response(`User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`,{headers:{"content-type":"text/plain; charset=utf-8","cache-control":"public, max-age=3600"}});
       if(url.pathname==="/sitemap.xml"&&request.method==="GET")return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${origin}/agents</loc></url><url><loc>${origin}/llms.txt</loc></url><url><loc>${origin}/agent/profile</loc></url><url><loc>${origin}/openapi.json</loc></url><url><loc>${origin}/agents/examples</loc></url><url><loc>${origin}/agents/readiness</loc></url></urlset>`,{headers:{"content-type":"application/xml; charset=utf-8","cache-control":"public, max-age=3600"}});
       if(url.pathname==="/.well-known/agent.json"&&request.method==="GET")return json({name:"GLOBAL PURCHASE DECISION",version:VERSION,discovery_url:origin+"/.well-known/gpd",description:"AI agent product discovery and evidence-based purchase decisions across physical products, including anime collectibles and industrial parts",website:`${origin}/agents`,free_search:{method:"GET",url:`${origin}/v1/search?query=Hatsune%20Miku`},paid_decision:{method:"POST",url:`${origin}/v1/purchase-decision`,price:"0.10 USDC",payment_protocol:"x402",note:"Payment availability must be verified with /x402/status"},mcp:`${origin}/mcp`,openapi:`${origin}/openapi.json`,llms:`${origin}/llms.txt`,x402:`${origin}/.well-known/x402`,bazaar:`${origin}/.well-known/x402-bazaar`,examples:`${origin}/agents/examples`,readiness:`${origin}/agents/readiness`},200,{"cache-control":"public, max-age=300"});
-      if(url.pathname==="/agents/examples"&&request.method==="GET")return json({ok:true,version:VERSION,base_url:origin,free_search:{method:"GET",url:`${origin}/v1/search?query=${encodeURIComponent("Hatsune Miku Nendoroid")}`,note:"No payment required; product coverage and live availability vary"},free_product_identity:{method:"GET",url:`${origin}/v1/product/resolve?mpn=E2E-X5ME1&manufacturer=OMRON`},free_merchant_discovery:{method:"GET",url:`${origin}/v1/merchant/directory?limit=10`},paid_purchase_decision:{method:"POST",url:`${origin}/v1/purchase-decision`,headers:{"content-type":"application/json"},body:{query:"Sony WH-1000XM5 headphones",destination:{country:"US"},requirements:{currency:"USD"}},expected_initial_response:"HTTP 402 with PAYMENT-REQUIRED when x402 is configured; HTTP 503 if unavailable",retry:"Use an x402-compatible payer to sign and retry the identical request with PAYMENT-SIGNATURE; do not invent a payment signature",expected_success:"HTTP 200 with purchase-decision evidence after successful settlement; not a completed product purchase",price_usdc:0.10},discovery:{manifest:`${origin}/.well-known/gpd`,mcp:`${origin}/mcp`,openapi:`${origin}/openapi.json`,x402_status:`${origin}/x402/status`,service_catalog:`${origin}/agent/services`,agent_metadata:`${origin}/.well-known/agent.json`},disclaimer:"Examples describe API invocation, not confirmed payment or guaranteed offers"},200,{"cache-control":"public, max-age=300"});
+      if(url.pathname==="/agents/examples"&&request.method==="GET")return json({ok:true,version:VERSION,base_url:origin,free_search:{method:"GET",url:`${origin}/v1/search?query=${encodeURIComponent("Hatsune Miku Nendoroid")}`,note:"No payment required; product coverage and live availability vary"},free_product_identity:{method:"GET",url:`${origin}/v1/product/resolve?mpn=E2E-X5ME1&manufacturer=OMRON`},free_merchant_discovery:{method:"GET",url:`${origin}/v1/merchant/directory?limit=10`},paid_purchase_decision:{method:"POST",url:`${origin}/v1/purchase-decision`,headers:{"content-type":"application/json"},body:{query:"Hatsune Miku Nendoroid",destination:{country:"US"},requirements:{currency:"USD"}},expected_initial_response:"HTTP 402 with PAYMENT-REQUIRED when x402 is configured; HTTP 503 if unavailable",retry:"Use an x402-compatible payer to sign and retry the identical request with PAYMENT-SIGNATURE; do not invent a payment signature",expected_success:"HTTP 200 with purchase-decision evidence after successful settlement; not a completed product purchase",price_usdc:0.10},discovery:{manifest:`${origin}/.well-known/gpd`,mcp:`${origin}/mcp`,openapi:`${origin}/openapi.json`,x402_status:`${origin}/x402/status`,service_catalog:`${origin}/agent/services`,agent_metadata:`${origin}/.well-known/agent.json`},disclaimer:"Examples describe API invocation, not confirmed payment or guaranteed offers"},200,{"cache-control":"public, max-age=300"});
       if(url.pathname==="/agents/readiness"&&request.method==="GET"){
         const manifest=gpd33AgentManifest(env,origin);
         return json({ok:true,version:VERSION,build_id:BUILD_ID,discovery_metadata_published:true,example_endpoint:manifest.onboarding.examples_url,
