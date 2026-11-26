@@ -335,7 +335,13 @@ assert.equal((await (await call(nonAnimeSearch)).json()).count,0);
 mode='decision_anime';
 assert.equal((await (await call('/v1/search?query=Hatsune%20Miku%20Nendoroid')).json()).count,1);
 assert.equal((await scopedProduct('10000000-0000-4000-8000-000000000005')).status,402);
-assert.equal((await call('/v1/purchase-decision?gtin=4901234567887&buyer_country=JP')).status,402);
+const janQuote=await call('/v1/purchase-decision?gtin=4901234567887&buyer_country=JP');
+assert.equal(janQuote.status,402);
+const janQuoteBody=await janQuote.json();
+assert.equal(janQuoteBody.product_preview.jan_code,'4901234567887');
+assert.equal(janQuoteBody.product_preview.name,'Hatsune Miku Nendoroid');
+const protocolQuote=JSON.parse(Buffer.from(janQuote.headers.get('payment-required'),'base64'));
+assert.deepEqual(janQuoteBody.accepts,protocolQuote.accepts);
 assert.equal((await call('/v1/purchase-decision?canonical_product_id=10000000-0000-4000-8000-000000000005')).status,402);
 for(const [testMode,status,error] of [
   ['decision_unavailable',503,'catalogue_unavailable'],['decision_missing',404,'jan_not_found']

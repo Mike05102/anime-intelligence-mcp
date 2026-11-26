@@ -8018,7 +8018,11 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
     if(out?.status&&out.status>=400){const e=new Error(out.error||"purchase_decision_failed");e.public_payload=out;throw e;}
     deferTelemetry(ctx,logRequestStage(env,request,"universal_purchase_decision_served",{metadata:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||intent.product.gtin||""),attribution_key:purchaseAttributionKey(intent),language:intent.language,destination_country:intent.destination.country,can_purchase:!!out?.decision?.can_purchase,decision_action:out?.decision?.action||null,reason_codes:Array.isArray(out?.decision?.reason_codes)?out.decision.reason_codes.slice(0,12):[],cross_provider_corroborated_offers:Number(out?.cross_provider_corroborated_offers||out?.persistence?.cross_provider_corroborated_candidates||0)}}));
     return {...out,_payment_attribution:{domain:out?.domain||intent.domain,query_family:universalQueryFamily(intent.domain,intent.original_query||intent.product.mpn||""),attribution_key:purchaseAttributionKey(intent),decision_action:out?.decision?.action||null,can_purchase:!!out?.decision?.can_purchase},price_usdc_atomic:PRICES.purchaseDecision,price_usdc:Number(PRICES.purchaseDecision)/1000000};
-  },ctx);
+  },ctx,{
+    canonical_product_id:product.id,
+    name:product.canonical_name_en||product.canonical_name_ja||null,
+    jan_code:product.jan_code||null
+  });
 }
 
 function shapePaidResponse(path,intel){
@@ -8730,7 +8734,7 @@ function paymentCapabilitySignals(request){
     user_agent_hint:String(request.headers.get("user-agent")||"").slice(0,180)||null
   };
 }
-async function x402Gate(request,env,amount,description,work,ctx=null){
+async function x402Gate(request,env,amount,description,work,ctx=null,productPreview=null){
   deferTelemetry(ctx,logRequestStage(env,request,"x402_gate_entered",{
     amount_atomic:Number(amount),
     amount_usdc:Number(amount)/1000000,
@@ -8820,7 +8824,7 @@ async function x402Gate(request,env,amount,description,work,ctx=null){
       "access-control-expose-headers":"PAYMENT-REQUIRED,PAYMENT-RESPONSE,WWW-Authenticate,x402-price,x402-asset,x402-network,x402-pay-to,x402-retry-header,x402-service,x402-endpoint,x402-value,x402-requirement-fingerprint",
       "cache-control":"no-store"
     };
-    return json(cfg.required,402,probeHeaders);
+    return json(productPreview?{...cfg.required,product_preview:productPreview}:cfg.required,402,probeHeaders);
   }
 
   // Retry with PAYMENT-SIGNATURE: decode the exact accepted requirement
