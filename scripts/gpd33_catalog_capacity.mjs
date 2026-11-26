@@ -417,6 +417,30 @@ try{
     for(const [table] of targets){
       await sql('alter table public.'+table+' set logged');
     }
+    const refreshTable='capacity_products_lean';
+    const initial=await size(refreshTable);
+    const walStart=await scalar('select pg_current_wal_insert_lsn()::text value');
+    const rounds=[];
+    for(let round=0;round<7;round++){
+      const updated=await sql(`update public.capacity_products_lean
+        set checked_at=checked_at+interval '1 day' where source_record % 10=$1`,[round]);
+      assert.equal(updated.rowCount,TARGET/10);
+      const beforeVacuum=await size(refreshTable);
+      await sql('vacuum (analyze) public.capacity_products_lean');
+      rounds.push({updated:updated.rowCount,before_vacuum:beforeVacuum,after_vacuum:await size(refreshTable)});
+    }
+    const refreshWal=Number(await scalar(
+      'select pg_wal_lsn_diff(pg_current_wal_insert_lsn(),$1::pg_lsn)::bigint value',[walStart]));
+    const stableIdentities=await scalar(`select count(*)::int value
+      from public.capacity_products_lean l join public.capacity_products p using(gtin)
+      where (l.display_id,l.source_record,l.brand_id,l.domain_id,l.source_id,l.title)
+        =(p.display_id,p.source_record,p.brand_id,p.domain_id,p.source_id,p.title)
+      and l.checked_at=p.checked_at+case when l.source_record % 10<7 then interval '1 day' else interval '0' end`);
+    assert.equal(stableIdentities,TARGET);
+    measurements.logged_identity_refresh={initial,rounds,wal_bytes:refreshWal,
+      non_event_baseline_plus_peak_bytes:NON_EVENT_DB_BASELINE+dictionaries+
+        (await size('capacity_demand_1')).total_bytes+(await size('capacity_retained_restore')).total_bytes+
+        Math.max(initial.total_bytes,...rounds.map(round=>round.before_vacuum.total_bytes))};
     async function archiveManifest(){
       const result={};
       for(const [table,order,count] of targets){
