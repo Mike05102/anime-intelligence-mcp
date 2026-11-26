@@ -11,6 +11,10 @@ on:
         description: Recently verified free physical disk bytes shown in Supabase
         type: string
         default: '0'
+      smoke_jan:
+        description: Optional catalogue JAN for the unsigned post-activation purchase check
+        type: string
+        default: ""
       deploy_worker:
         description: Activate v33 only after maintenance and the storage gate pass
         type: boolean
@@ -128,7 +132,7 @@ jobs:
       - name: Apply catalog schema and activate the Worker
         if: inputs.mode == 'maintain' && inputs.deploy_worker
         env:
-          GPD33_RELEASE_SMOKE_JAN: ${{ vars.GPD33_RELEASE_SMOKE_JAN }}
+          GPD33_RELEASE_SMOKE_JAN: ${{ inputs.smoke_jan || vars.GPD33_RELEASE_SMOKE_JAN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
