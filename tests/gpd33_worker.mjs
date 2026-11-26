@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -40,6 +40,15 @@ try {
     return Response.json({message:'database unavailable'},{status:503});
   };
   await assert.rejects(refresh);
+  const seedBatch=()=>api.insertOfficialSeedBatch(env,[{source_product_key:'fixture:1'},{source_product_key:'fixture:2'}]);
+  globalThis.fetch=async (input,options)=>{
+    assert.equal(new URL(input).searchParams.get('select'),'id');
+    assert.equal(options.method,'POST');
+    return Response.json([{id:'saved'}]);
+  };
+  assert.equal(await seedBatch(),1);
+  globalThis.fetch=async ()=>Response.json({unexpected:true});
+  await assert.rejects(seedBatch,/Invalid official seed insert response/);
 } finally {
   globalThis.fetch=originalCatalogFetch;
 }

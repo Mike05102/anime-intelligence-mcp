@@ -1237,6 +1237,14 @@ async function saveGoodSmileReleaseSeed(env,rec){
   return {status:"inserted",product:Array.isArray(rows)?rows[0]:null};
 }
 
+async function insertOfficialSeedBatch(env,payloads){
+  const rows=await sb(env,"/products?select=id",{method:"POST",
+    headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});
+  if(!Array.isArray(rows)||rows.length>payloads.length||rows.some(row=>!row?.id))
+    throw new Error("Invalid official seed insert response");
+  return rows.length;
+}
+
 async function massDiscoverGoodSmile(env,limit=20,options={}){
   const cal=await fetchGoodSmileCalendars();
   const existing=await loadProductsByJans(env,cal.merged.map(x=>x.jan_code));
@@ -1251,8 +1259,7 @@ async function massDiscoverGoodSmile(env,limit=20,options={}){
     try{
       const now=new Date().toISOString();
       const payloads=selected.map(rec=>goodSmileReleaseSeedPayload(rec,now));
-      const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});
-      inserted=Array.isArray(rows)?rows.length:selected.length;
+      inserted=await insertOfficialSeedBatch(env,payloads);
     }catch(e){
       errors.push({batch:true,selected:selected.length,error:safeError(e)});
     }
@@ -1316,7 +1323,7 @@ async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,o
     const payloads=selected.map(x=>officialFeedSeedPayload(feed,x));
     const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key));const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
     const missing=payloads.filter(x=>!keys.has(x.source_product_key));report.existing=payloads.length-missing.length;
-    if(missing.length){const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(missing)});report.inserted=Array.isArray(rows)?rows.length:missing.length;}
+    if(missing.length){report.inserted=await insertOfficialSeedBatch(env,missing);}
   }catch(e){report.errors.push({error:safeError(e)});}
   return report;
 }
@@ -1368,8 +1375,7 @@ async function archiveDiscoverGoodSmile(env,categoryId=6,page=1,limit=40){
   if(missing.length){
     try{
       const now=new Date().toISOString(),payloads=missing.map(x=>archiveSeedPayload(x,category,pg,now));
-      const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation,resolution=ignore-duplicates"},body:JSON.stringify(payloads)});
-      inserted=Array.isArray(rows)?rows.length:missing.length;
+      inserted=await insertOfficialSeedBatch(env,payloads);
     }catch(e){errors.push({batch:true,error:safeError(e)});}
   }
   return {category:category.slug,category_id:category.id,page:pg,list_url:listUrl,discovered:cards.length,selected:selected.length,inserted,existing:selected.length-missing.length,exhausted:false,errors};
