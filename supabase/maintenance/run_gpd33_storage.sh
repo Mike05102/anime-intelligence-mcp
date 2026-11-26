@@ -51,6 +51,7 @@ case "${1:---audit}" in
     if [[ "$compact" != t ]]; then
       run_sql -f "$root/supabase/migrations/20261125063000_gpd33_compact_telemetry.sql"
     fi
+    run_sql -c "set lock_timeout='2s'" -f "$root/supabase/migrations/20261126180000_gpd33_protect_refund_ingress.sql"
     storage="$(run_sql -Atc "select to_regprocedure('public.gpd33_storage_status()') is not null")"
     if [[ "$storage" != t ]]; then
       run_sql -f "$root/supabase/migrations/20261125070000_gpd33_storage_control.sql"

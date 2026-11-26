@@ -50,6 +50,7 @@ SQL
     [[ "$start_lsn" =~ ^[0-9A-F]+/[0-9A-F]+$ ]]
     # A database-wide application backup is held outside the database.
     # No legacy data is removed until the artifact has been round-tripped.
+    sql -c "set lock_timeout='2s'" -f supabase/migrations/20261126180000_gpd33_protect_refund_ingress.sql
     for fn in prune_events compact_ingress prune_superseded_state prune_operational_events; do
       for (( batch=0; batch<200; batch++ )); do
         count="$(sql <<SQL
