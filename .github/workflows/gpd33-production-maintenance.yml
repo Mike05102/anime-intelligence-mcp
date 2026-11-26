@@ -50,11 +50,16 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MODE: ${{ inputs.mode }}
           DEPLOY_WORKER: ${{ inputs.deploy_worker }}
+          GPD33_RELEASE_SMOKE_JAN: ${{ inputs.smoke_jan || vars.GPD33_RELEASE_SMOKE_JAN }}
           DISK_FREE_BYTES: ${{ inputs.disk_free_bytes }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           EGRESS_AVAILABLE_BYTES: ${{ inputs.egress_available_bytes || secrets.GPD33_EGRESS_AVAILABLE_BYTES }}
         run: |
           if [[ "$MODE" == maintain && "$DEPLOY_WORKER" == true ]]; then
+            if [[ -n "$GPD33_RELEASE_SMOKE_JAN" && ! "$GPD33_RELEASE_SMOKE_JAN" =~ ^(45|49)[0-9]{11}$ ]]; then
+              echo "The optional smoke JAN must be a 13-digit Japanese catalogue identifier." >&2
+              exit 1
+            fi
             today="$(date -u +%F)"
             if [[ "$today" < 2026-12-02 ]]; then
               echo "Worker activation is available from 2026-12-02 UTC." >&2
