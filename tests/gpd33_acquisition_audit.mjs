@@ -40,7 +40,7 @@ try{
       assert.equal(input.method,'GET');
       assert.equal(input.body,undefined);
       if(options.offlineChallenge)return Response.json({}, {status:503});
-      return new Response(null,{status:402,headers:{'payment-required':Buffer.from(JSON.stringify({
+      return new Response(endpoint.searchParams.has('gtin')?JSON.stringify({product_preview:{canonical_product_id:'fixture',name:'Anime figure',jan_code:options.wrongJan?'000':endpoint.searchParams.get('gtin')}}):null,{status:402,headers:{'payment-required':Buffer.from(JSON.stringify({
         x402Version:2,resource:{url},accepts:[{scheme:'exact',
           network:'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
           asset:'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',payTo:recipient,
@@ -75,9 +75,11 @@ try{
   assert.deepEqual(requests,['/health','/.well-known/mcp.json','/.well-known/gpd','registry',
     'initialize','notifications/initialized','tools/list','tools/call']);
   const auditPayment=(options={})=>auditGpdMcpAcquisition(baseline,health.version,health.build_id,{
-    now,fetchImpl:connection(options),expectedPayment:{recipient,atomicAmount}
+    now,fetchImpl:connection(options),expectedPayment:{recipient,atomicAmount,jan:options.jan}
   });
   assert.equal((await auditPayment()).unsigned_x402_challenge,'verified');
+  assert.equal((await auditPayment({jan:'4901234567894'})).unsigned_product_preview,'verified');
+  await assert.rejects(auditPayment({jan:'4901234567894',wrongJan:true}),/approved JAN/);
   await assert.rejects(auditPayment({wrongAmount:true}),/approved payment terms/);
   await assert.rejects(auditPayment({offlineChallenge:true}),/challenge unavailable/);
   const absent=await run({registryMissing:true});
