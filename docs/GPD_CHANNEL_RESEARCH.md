@@ -97,6 +97,17 @@ Coinbase Bazaarの公式資料を再確認した。カタログAPIはファシ�
 
 累計は調査24経路、無償条件確認5件、登録準備2件、既存掲載確認10件。Postmanの無償条件は公式仕様による確認で、アカウント登録と提出は行っていない。
 
+## 無料プランの買い手が利用できるMCP接続経路
+
+2026-11-26、既存のGPDリモートURLで買い手が使える経路を2件確認した。クライアントの無料枠と、GPDの有料購買判断に対するx402支払いは別に扱う。
+
+| 経路 | 買い手の無料入口 | ディレクトリとGPDの照合結果 |
+|---|---|---|
+| GitHub MCP Registry / VS Code | VS CodeはリモートMCPのURL指定と、CustomizationsのGitHub Feedからの探索を案内。Copilot Freeには月次利用枠がある。Feedは実験段階で、利用可否は組織ポリシーにも依存する。 | GitHub自身の公開ディレクトリで `anime-intelligence-mcp` を検索し、表示一致は0件。公式MCP Registryの確認済み掲載とは別の経路。URLでの追加は案内されているが、今回のクライアント接続は未実施。 [VS CodeのMCP案内](https://code.visualstudio.com/docs/agent-customization/mcp-servers) · [無料枠](https://code.visualstudio.com/docs/setup/copilot/) · [GitHubの検索結果](https://github.com/mcp?search=anime-intelligence-mcp) |
+| Claude Custom Connector / Connectors Directory | ClaudeのFree利用者もリモートMCPをカスタムコネクタとしてURLで追加できる。接続先はAnthropicのクラウドから到達可能である必要がある。 | 公開ディレクトリへの提供者申請は有料Claudeプラン、審査、文書・連絡先・プライバシー情報が必要。無料枠の買い手への直接案内候補として扱い、無料でのディレクトリ申請・掲載には算入しない。GPD掲載、クライアント接続ともに未確認。 [無料プランのカスタム接続](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp) · [提供者の申請要件](https://claude.com/docs/connectors/building/submission) |
+
+累計は調査26経路、無償の公開条件確認5件、登録準備2件、既存掲載確認10件。追加2件は既存URLでの買い手側接続の候補で、無償の公開条件確認件数や外部での利用実績に加えていない。
+
 ## 確認の順序
 
 1. 外部公開・課金を伴わない範囲で、リリース候補のMCPとOpenAPI、402応答、Bazaarメタデータを検証する。

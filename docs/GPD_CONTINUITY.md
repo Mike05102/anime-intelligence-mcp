@@ -184,3 +184,5 @@ WooCommerceとPrestaShopの公式仕様を確認し、接続許諾が必要な�
 WooCommerce Store API用の承認制プレビューを追加し、店舗の許諾範囲内で商品ID、SKU、GTIN、URLを突合する。価格の小数単位、在庫の不確実性、期限・配送条件を検証し、既存の認証済み取込経路で承認範囲を再確認する。再開時は `node tests/gpd33_woocommerce_feed.mjs` と `node tests/gpd33_merchant_feed_publish.mjs` を実行する。実店舗の読み取りには同意済み販売業者と有効な承認書が必要で、今回の新規接続は0件。 [販売業者フィード手順](GPD_MERCHANT_OFFER_FEED.md)
 
 台湾の公開電鍋登録CSVを取得し、1,174件の登録会社名・型番を検証した。公開サンプル確認済み情報源は累計4件。登録会社名109件は既存候補と未名寄せのため、販売業者候補200件への加算は保留。再開コマンドは `python3 scripts/gpd33_tw_cooker_audit.py <公式CSV>`。型番証拠の追加であり、在庫・購入・販売業者同意、本番接続の増分は0件。 [商品情報源台帳](GPD_SOURCE_RESEARCH.md)
+
+VS CodeとClaudeの無料クライアントから既存MCP URLを指定できる条件を確認した。掲載調査は累計26経路、無償公開条件5件、準備2件、既存掲載10件。クライアントでの実接続は未確認で、公開提出も保留。 [掲載経路台帳](GPD_CHANNEL_RESEARCH.md)
