@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import re
@@ -89,11 +90,17 @@ metadata = {
     "compatibility_date": runtime["compatibility_date"],
     "compatibility_flags": runtime.get("compatibility_flags", []),
 }
+source = Path("releases/GPD33_0_COMPLETE_WORKER.js").read_bytes()
+build_id = "anime-" + hashlib.sha256(source).hexdigest()[:24]
+source, replacements = re.subn(rb'^const BUILD_ID="[^"]+";', f'const BUILD_ID="{build_id}";'.encode(),
+                               source, count=1, flags=re.MULTILINE)
+if replacements != 1:
+    raise SystemExit("Worker release build ID could not be stamped.")
 boundary = uuid.uuid4().hex
 parts = []
 for name, mime, content in [
     ("metadata", "application/json", json.dumps(metadata).encode()),
-    ("index.mjs", "application/javascript+module", Path("releases/GPD33_0_COMPLETE_WORKER.js").read_bytes()),
+    ("index.mjs", "application/javascript+module", source),
 ]:
     parts.extend([f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{name}\"\r\nContent-Type: {mime}\r\n\r\n".encode(), content, b"\r\n"])
 parts.append(f"--{boundary}--\r\n".encode())
@@ -106,10 +113,12 @@ for attempt in range(8):
     try:
         with urlopen(Request(health, headers={"Cache-Control": "no-cache"}), timeout=15) as response:
             status = json.load(response)
-        if status.get("version") == "33.0.0" and status.get("verified_catalog") is not None:
+        if (isinstance(status, dict) and status.get("ok") is True
+                and status.get("version") == "33.0.0" and status.get("build_id") == build_id
+                and status.get("verified_catalog") is not None and current() == candidate):
             if smoke_jan and not verify_unsigned_purchase():
                 raise ValueError("Unsigned purchase preview did not match")
-            print("Worker 33.0.0 active with verified database coverage.")
+            print(f"Worker 33.0.0 active with verified database coverage. build_id={build_id}")
             if smoke_jan:
                 print("Unsigned catalogue product preview verified.")
             break
