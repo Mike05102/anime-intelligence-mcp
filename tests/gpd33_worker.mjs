@@ -171,7 +171,12 @@ for(const route of ['/v1/purchase-decision','/v1/buy-wait','/v1/full-intelligenc
   assert.equal(challenge.x402Version,2);
   assert.match(challenge.accepts[0].network,/^solana:/);
 }
-const mockPaymentChallenge=await call('/v1/purchase-decision');
+const buyerDiscovery=await (await call('/.well-known/agent.json')).json();
+const trial=await call(buyerDiscovery.free_search.url.replace(origin,''));
+assert.equal(trial.status,200);
+assert.equal(trial.headers.has('payment-required'),false);
+assert.equal(buyerDiscovery.paid_decision.payment_protocol,'x402');
+const mockPaymentChallenge=await call(buyerDiscovery.paid_decision.url.replace(origin,''));
 const accepted=JSON.parse(Buffer.from(mockPaymentChallenge.headers.get('payment-required'),'base64')).accepts[0];
 const signedPayment=new Request(origin+'/v1/purchase-decision',{
   headers:{'x-ai-test-mode':'x402_fixture','payment-signature':Buffer.from(JSON.stringify({x402Version:2,accepted,payload:{}})).toString('base64')}
@@ -246,10 +251,12 @@ assert.equal(participation.registration.initially_verified,false);
 assert.equal(participation.supply.url,origin+'/v1/merchant/offers/feed-import');
 assert.equal(participation.supply.auth_header,'x-merchant-key');
 assert.equal(participation.buyer_preview.mcp_url,origin+'/mcp');
+assert.equal(participation.seller_fees,'none');
 assert.equal(participation.merchant_workflow.handoff_inbox_url,origin+'/v1/merchant/handoffs');
 assert.equal(participation.merchant_workflow.signed_handoff_events_url,origin+'/v1/merchant/handoffs/events');
 assert.deepEqual(participation.merchant_workflow.handoff_signals,['accepted','order_reported','cancelled']);
 const sellerLanding=await (await call('/merchant')).text();
+assert.match(sellerLanding,/free registration, listing and feed connection/);
 assert.match(sellerLanding,/href="\/v1\/merchant\/participation"/);
 const merchantOpenApi=await (await call('/openapi.json')).json();
 assert.equal(merchantOpenApi.paths['/v1/merchant/participation'].get.operationId,'getMerchantParticipation');
@@ -351,7 +358,10 @@ assert.equal((await call(adminRoute)).status,401);
 const businessResponse=await call(adminRoute,{headers:{'x-refresh-key':'fixture-admin'}});
 assert.equal(businessResponse.status,200);
 assert.equal(businessResponse.headers.get('cache-control'),'no-store');
-assert.equal((await businessResponse.json()).metrics.verified_outcomes.confirmed_goods_transactions,null);
+const businessOutcomes=await businessResponse.json();
+assert.equal(businessOutcomes.revenue_model,'buyer_x402_purchase_intelligence');
+assert.equal(businessOutcomes.settlement_event_evidence,'worker_telemetry');
+assert.equal(businessOutcomes.metrics.verified_outcomes.confirmed_goods_transactions,null);
 const handoff='10000000-0000-4000-8000-000000000003';
 const offerId='10000000-0000-4000-8000-000000000004';
 const handoffRequest=(path,body,headers={})=>call(path,{

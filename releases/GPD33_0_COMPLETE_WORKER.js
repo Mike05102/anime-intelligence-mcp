@@ -2977,6 +2977,7 @@ async function revenueMetrics(env){
   const query_intent_samples=realShoppingIntentCalls.slice(0,20).map(x=>{const rid=String(x.metadata?.request_id||"");const sel=selectedByRequest.get(rid),req=requiredByRequest.get(rid),att=attemptByRequest.get(rid);return {occurred_at:x.occurred_at||null,endpoint:x.endpoint||null,source_class:x.metadata?.source_class||null,source_fingerprint:x.metadata?.source_fingerprint||null,user_agent:x.metadata?.user_agent||null,client_name:x.metadata?.client_name||null,referer:x.metadata?.referer||null,origin:x.metadata?.origin||null,country:x.metadata?.country||null,query:String(x.metadata?.intent_query||x.metadata?.query_text||"").slice(0,180)||null,canonical_product_id:sel?.product_id||sel?.metadata?.canonical_product_id||null,payment_required:!!req,payment_attempted:!!att,payment_header_name:att?.metadata?.payment_header_name||null};});
   const query_source_fingerprints=countBy(realShoppingIntentCalls,x=>x.metadata?.source_fingerprint||x.metadata?.source_class);
   return {
+    revenue_model:"buyer_x402_purchase_intelligence",settlement_event_evidence:"worker_telemetry",
     telemetry_read_ok:telemetry.ok,telemetry_read_mode:telemetry.read_mode,telemetry_read_error:telemetry.ok?null:(telemetry.error||null),telemetry_primary_error:telemetry.primary_error||null,telemetry_fallback_error:telemetry.fallback_error||null,telemetry_api_events_rows_seen:telemetry.api_events_rows_seen,telemetry_api_events_total_estimate:telemetry.total_event_count_estimate,telemetry_count_error:telemetry.count_error||null,telemetry_table_has_events:telemetry.table_has_events,
     event_window:versionEvents.length?`current_version_${VERSION}_events_within_latest_${PIPELINE.kpiEventReadLimit}`:`latest_${PIPELINE.kpiEventReadLimit}_x402_funnel_events_fallback`,events_in_window:events.length,all_recent_events_seen:allEvents.length,funnel_stage:stage,
     first_revenue_confirmed:paid.length>0,recent_history_revenue_confirmed:recentHistoryPaid.length>0,
@@ -5803,7 +5804,7 @@ a{color:inherit}.wrap{max-width:1120px;margin:auto;padding:0 22px}.nav{display:f
 <div class="wrap"><nav class="nav"><div class="brand">AI PURCHASE INTELLIGENCE / MERCHANT INTELLIGENCE</div><div class="navlinks"><a href="/openapi.json">API</a><a href="/llms.txt">LLMs</a><a class="btn" href="/merchant/onboard">Register merchant</a></div></nav>
 
 <section class="hero"><div><div class="eyebrow">AGENT COMMERCE INFRASTRUCTURE</div><h1>Make your store readable to AI purchasing agents.</h1>
-<p>AI agents increasingly compare exact products, stock, lead time, shipping and trust evidence before choosing where to buy. Merchant Intelligence gives your store a machine-readable offer feed, an evidence-based score and a diagnostic showing what prevents selection.</p>
+<p>AI agents increasingly compare exact products, stock, lead time, shipping and trust evidence before choosing where to buy. Merchant Intelligence gives your store a machine-readable offer feed, an evidence-based score and a diagnostic showing what prevents selection.</p><p>Reach more AI buyers with free registration, listing and feed connection. GPD charges no seller referral, commission or subscription fees. Buyers pay via x402 for paid purchase intelligence.</p>
 <div class="cta"><a class="btn" href="/merchant/onboard">Start merchant onboarding</a><a class="btn secondary" href="/v1/merchant/search?part_number=E2E-X5ME1">See agent-ready search</a><a class="btn secondary" href="/v1/merchant/participation">Machine-readable participation guide</a></div></div>
 <div class="proof"><h3>What an AI agent can evaluate</h3><div class="metric"><span>Exact MPN identity</span><b>YES</b></div><div class="metric"><span>Price / stock / lead time</span><b>YES</b></div><div class="metric"><span>Ship-to coverage</span><b>YES</b></div><div class="metric"><span>Official documents / evidence</span><b>YES</b></div><div class="metric"><span>Merchant trust and readiness</span><b>YES</b></div><div class="metric"><span>Paid placement changes ranking</span><b>NO</b></div></div></section>
 
@@ -5826,6 +5827,7 @@ a{color:inherit}.wrap{max-width:1120px;margin:auto;padding:0 22px}.nav{display:f
 function gpd33MerchantParticipation(origin){
   return {
     schema:"gpd-merchant-participation-v1",
+    seller_fees:"none",
     merchant_guide_url:origin+"/merchant",
     benefits:["machine_readable_offers","destination_aware_offer_matching","verified_buyer_handoffs"],
     registration:{method:"POST",url:origin+"/v1/merchant/register",
@@ -13830,7 +13832,8 @@ export default{
             gpd33Rpc(env,"handoff_outcomes",{}).catch(()=>null)
           ]);
           return json({ok:metrics!==null,service:PLATFORM_NAME,version:VERSION,
-            ...(metrics?{metrics,merchant_reported_handoffs:merchantReportedHandoffs}:{error:"business_telemetry_unavailable"})},metrics?200:503,{"cache-control":"no-store"});
+            ...(metrics?{metrics,revenue_model:"buyer_x402_purchase_intelligence",
+              settlement_event_evidence:"worker_telemetry",merchant_reported_handoffs:merchantReportedHandoffs}:{error:"business_telemetry_unavailable"})},metrics?200:503,{"cache-control":"no-store"});
         }
         if(url.pathname==="/admin/kpi"&&request.method==="GET"){
           const [kpi,ingress_daily]=await Promise.all([revenueMetrics(env),
