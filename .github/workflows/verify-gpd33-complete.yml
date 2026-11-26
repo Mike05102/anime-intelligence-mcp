@@ -109,3 +109,4 @@ jobs:
           bash supabase/maintenance/github_db_run.sh backup
           bash supabase/maintenance/github_restore_check.sh
           bash supabase/maintenance/github_db_run.sh apply 1000000000
+          bash supabase/maintenance/github_db_run.sh catalog
