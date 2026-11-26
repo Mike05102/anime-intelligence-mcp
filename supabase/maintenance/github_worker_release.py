@@ -78,6 +78,18 @@ def activate(version):
         "versions": [{"version_id": version, "percentage": 100}]}).encode())
 
 
+def await_deployment(version):
+    for attempt in range(8):
+        try:
+            if current() == version:
+                return True
+        except (RuntimeError, TimeoutError, ValueError):
+            pass
+        if attempt < 7:
+            time.sleep(8)
+    return False
+
+
 def signature(resources):
     return sorted((binding["name"], binding["type"]) for binding in resources["bindings"])
 
@@ -109,7 +121,11 @@ candidate = cf("/versions", b"".join(parts), f"multipart/form-data; boundary={bo
 uploaded = cf(f"/versions/{candidate}")["resources"]
 if signature(uploaded) != signature(baseline) or current() != previous:
     raise SystemExit("Production bindings or active Worker changed. Activation withheld.")
-activate(candidate)
+try:
+    activate(candidate)
+except (RuntimeError, TimeoutError, ValueError):
+    if not await_deployment(candidate):
+        raise SystemExit("Worker activation outcome unconfirmed. Check the active Cloudflare deployment before retrying.") from None
 for attempt in range(8):
     try:
         with urlopen(Request(health, headers={"Cache-Control": "no-cache"}), timeout=15) as response:
@@ -128,14 +144,11 @@ for attempt in range(8):
     time.sleep(8)
 else:
     if current() == candidate:
-        activate(previous)
-        for attempt in range(8):
-            try:
-                if current() == previous:
-                    raise SystemExit("Worker health check failed. Restored prior deployment confirmed by Cloudflare.")
-            except RuntimeError:
-                pass
-            if attempt < 7:
-                time.sleep(8)
+        try:
+            activate(previous)
+        except (RuntimeError, TimeoutError, ValueError):
+            pass
+        if await_deployment(previous):
+            raise SystemExit("Worker health check failed. Restored prior deployment confirmed by Cloudflare.")
         raise SystemExit("Worker health check failed. Cloudflare has not confirmed restoration of the prior deployment.")
     raise SystemExit("Worker health check failed and a different deployment is active.")
