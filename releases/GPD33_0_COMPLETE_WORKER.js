@@ -1390,11 +1390,13 @@ async function saveOfficialProduct(env,connector,url,parsed){
   let existing=[];
   if(jan)existing=await loadProductsByJans(env,[jan]);
   if(!existing.length){
-    existing=await sbOptional(env,`/products?select=*&official_url=eq.${encodeURIComponent(canonicalOfficialUrl(url))}&limit=1`)||[];
+    existing=await sbOptional(env,`/products?select=*&official_url=eq.${encodeURIComponent(canonicalOfficialUrl(url))}&limit=2`)||[];
   }
   const now=new Date().toISOString();
+  if(existing.length>1)throw new Error("Ambiguous official product identity");
   const base=existing[0]||{};
-  if(base.jan_code&&jan&&cleanJan(base.jan_code)!==jan&&base.canonical_name_ja&&!janNameCompatible(base.canonical_name_ja,parsed.canonical_name_ja))throw new Error("JAN/name conflict guard");
+  if(base.metadata?.universal_commerce)throw new Error("Official product collides with legacy commerce data");
+  if(base.jan_code&&jan&&cleanJan(base.jan_code)!==jan)throw new Error("JAN/name conflict guard");
   const merged={...base,...parsed};
   const quality=identityQualityReasons(merged);
   const metadata={...(base.metadata||{}),...(parsed.metadata||{}),official_connector:connector.slug,quality_version:VERSION,identity_quality_score:quality.score,official_english_url:connector.slug==="goodsmile"?goodSmileEnglishUrl(url):base.metadata?.official_english_url||null,field_provenance:{...(base.metadata?.field_provenance||{}),official_url:sourceEvidence(connector.slug,now),jan_code:jan?sourceEvidence(connector.slug,now):base.metadata?.field_provenance?.jan_code}};

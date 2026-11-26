@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -17,6 +17,26 @@ const pending=[];
 const ctx={waitUntil(task){pending.push(task);}};
 const call=(path,init)=>worker.fetch(new Request(origin+path,init),env,ctx);
 const post=(path,body)=>call(path,{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify(body)});
+const originalCatalogFetch=globalThis.fetch;
+try {
+  const checkedUrl='https://www.goodsmile.com/ja/product/12345';
+  const parsed={jan_code:'4901234567894',canonical_name_ja:'Hatsune Miku Nendoroid'};
+  const refresh=()=>api.saveOfficialProduct(env,{slug:'goodsmile'},checkedUrl,parsed);
+  const stored={id:'old',jan_code:'4901234567887',canonical_name_ja:parsed.canonical_name_ja};
+  for(const [rows,error] of [
+    [[stored],/JAN\/name conflict/],
+    [[stored,{...stored,id:'duplicate'}],/Ambiguous official product identity/],
+    [[{...stored,metadata:{universal_commerce:true}}],/legacy commerce data/]
+  ]){
+    globalThis.fetch=async (input,options)=>{
+      assert.equal(options.method,'GET','Identity conflicts must reject before any database write');
+      return Response.json(new URL(input).searchParams.has('official_url')?rows:[]);
+    };
+    await assert.rejects(refresh,error);
+  }
+} finally {
+  globalThis.fetch=originalCatalogFetch;
+}
 const selftest=await call('/selftest');
 const results=await selftest.json();
 assert.equal(selftest.status,200,JSON.stringify(results.checks.filter(c=>!c.ok)));
