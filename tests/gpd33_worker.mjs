@@ -200,6 +200,7 @@ globalThis.fetch=async (target,options={})=>{
     return Response.json({itemSummaries:[{itemId:'e1',title:'Example Pasta 500 g'}]});
   }
   if(url.pathname==='/rest/v1/products'&&mode.startsWith('decision')){
+    if(mode==='decision_ambiguous')return Response.json(['first','second'].map(id=>({id,product_type:'nendoroid',jan_code:'4901234567887'})));
     if(mode==='decision_anime')return Response.json([{
       id:'10000000-0000-4000-8000-000000000005',product_type:'nendoroid',jan_code:'4901234567887',canonical_name_ja:'Hatsune Miku Nendoroid'
     }]);
@@ -334,6 +335,11 @@ assert.equal((await (await call('/v1/search?query=Hatsune%20Miku%20Nendoroid')).
 assert.equal((await scopedProduct('10000000-0000-4000-8000-000000000005')).status,402);
 assert.equal((await call('/v1/purchase-decision?gtin=4901234567887&buyer_country=JP')).status,402);
 assert.equal((await call('/v1/purchase-decision?canonical_product_id=10000000-0000-4000-8000-000000000005')).status,402);
+mode='decision_ambiguous';
+const ambiguousJan=await call('/v1/purchase-decision?gtin=4901234567887');
+assert.equal(ambiguousJan.status,409);
+assert.equal(ambiguousJan.headers.has('payment-required'),false);
+mode='decision_anime';
 const mismatchedGtin=await post('/v1/purchase-decision',{
   domain:'anime_collectibles',product:{canonical_product_id:'10000000-0000-4000-8000-000000000005',gtin:'4901234567894'},buyer_country:'JP'
 });

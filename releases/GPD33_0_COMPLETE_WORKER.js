@@ -7998,7 +7998,7 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   if(intent.product.canonical_product_id)u.searchParams.set("id",intent.product.canonical_product_id);
   else u.searchParams.set("query",intent.product.gtin||intent.original_query||"");
   u.searchParams.set("buyer_country",intent.destination.country);u.searchParams.set("lang",intent.language);
-  const preflight=await preflightPaidProduct(env,u);
+  const preflight=await preflightPaidProduct(env,u,{exactJan:!intent.product.canonical_product_id&&!!cleanJan(intent.product.gtin)});
   if(!preflight.ok)return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"collectible_not_resolved",charged:false,normalized_intent:intent,resolution:preflight.body},preflight.status||404,{"cache-control":"no-store"});
   const product=preflight.product;
   if(!isAnimeLaunchProduct(product)){
@@ -9530,7 +9530,7 @@ async function directNarutoTshirtCandidates(env,intent,limit=12){
   return [];
 }
 
-async function preflightPaidProduct(env,url){
+async function preflightPaidProduct(env,url,{exactJan=false}={}){
   const id=String(url.searchParams.get("id")||"").trim();
   const query=String(url.searchParams.get("query")||"").trim();
   const shoppingIntent=naturalShoppingIntent(query,url,env);
@@ -9539,6 +9539,13 @@ async function preflightPaidProduct(env,url){
     const product=Array.isArray(rows)?rows[0]:null;
     if(!product)return {ok:false,status:404,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_not_found",charged:false,detail:"The supplied canonical product id does not exist. Use /v1/search first."}};
     return {ok:true,product,resolution:"canonical_id",selection:{method:"canonical_id",automatic:false,commercial_default:false,shopping_intent:shoppingIntent,recommended_paid_endpoint:naturalPaidRoute(shoppingIntent,query),alternatives:[]}};
+  }
+  if(exactJan){
+    const products=(await loadProductsByJans(env,[query])).filter(isAnimeLaunchProduct);
+    if(products.length!==1)return {ok:false,status:products.length?409:404,body:{
+      error:products.length?"ambiguous_jan":"jan_not_found",charged:false
+    }};
+    return {ok:true,product:products[0]};
   }
   if(!query)return {ok:false,status:400,body:{service:"ANIME INTELLIGENCE",version:VERSION,error:"product_identity_required",charged:false,detail:"Supply a product query or canonical product id. Natural-language shopping queries are ranked automatically to a recommended product before x402."}};
   const suppliedExternalContext=!!(url.searchParams.get("listing_url")||url.searchParams.get("listing_title"));
