@@ -437,10 +437,25 @@ try{
         =(p.display_id,p.source_record,p.brand_id,p.domain_id,p.source_id,p.title)
       and l.checked_at=p.checked_at+case when l.source_record % 10<7 then interval '1 day' else interval '0' end`);
     assert.equal(stableIdentities,TARGET);
+    const peakProductBytes=Math.max(initial.total_bytes,...rounds.flatMap(round=>[
+      round.before_vacuum.total_bytes,round.after_vacuum.total_bytes
+    ]));
+    const peakWithoutEvents=NON_EVENT_DB_BASELINE+dictionaries+
+      (await size('capacity_demand_1')).total_bytes+peakProductBytes;
+    const retainedScenarios=measurements.retained_events.map(fixture=>{
+      const total=peakWithoutEvents+fixture.total_bytes;
+      return {
+        payment_rows:fixture.fixture_payment_rows,other_rows:fixture.fixture_other_rows,
+        retained_relation_bytes:fixture.total_bytes,projected_database_bytes:total,
+        under_400m:total<GPD_BYTES,under_500m:total<FREE_DB_BYTES
+      };
+    });
     measurements.logged_identity_refresh={initial,rounds,wal_bytes:refreshWal,
-      non_event_baseline_plus_peak_bytes:NON_EVENT_DB_BASELINE+dictionaries+
-        (await size('capacity_demand_1')).total_bytes+(await size('capacity_retained_restore')).total_bytes+
-        Math.max(initial.total_bytes,...rounds.map(round=>round.before_vacuum.total_bytes))};
+      peak_products_bytes:peakProductBytes,non_event_peak_bytes:peakWithoutEvents,
+      max_retained_relation_bytes_under_400m:Math.max(0,GPD_BYTES-1-peakWithoutEvents),
+      max_retained_relation_bytes_under_500m:Math.max(0,FREE_DB_BYTES-1-peakWithoutEvents),
+      retained_scenarios:retainedScenarios,
+      non_event_baseline_plus_peak_bytes:peakWithoutEvents+(await size('capacity_retained_restore')).total_bytes};
     async function archiveManifest(){
       const result={};
       for(const [table,order,count] of targets){
