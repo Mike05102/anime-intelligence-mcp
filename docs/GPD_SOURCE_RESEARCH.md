@@ -98,3 +98,15 @@ BnFが作成する書誌メタデータの Etalab 2.0 は、出典と最終更�
 | 国・地域別の可用性確認が必要・書籍 | Google Books API。Volumesの検索に `isbn:` を指定できる。公式手順にはプロジェクトと認証情報が必要な取得方法がある。 [取得手順](https://developers.google.com/books/docs/v1/using) · [利用規約](https://developers.google.com/books/terms) | 利用枠と商用カタログでの保持・再配布条件の確認が必要。商品識別候補であり、在庫と購入可能性は別途証拠が必要。未接続。 |
 
 追加2件はAPI候補で、無償適格情報源・本番接続には算入していない。新規キー発行、外部登録、取得実行は行っていない。
+
+## 販売業者のEC基盤と北米小売の追加確認
+
+2026-11-26 UTC、販売業者の許諾を得て商品・在庫を取り込める基盤を2件、API契約が前提の小売候補を1件確認した。新規キー発行、販売業者の登録、第三者の実店舗データ取得は行っていない。
+
+| 情報源 | 公式仕様で確認した販売条件 | GPDでの採用条件 |
+|---|---|---|
+| WooCommerce Store API | 公開商品の取得は認証不要。商品URL、SKU、`global_unique_id`、価格・通貨の最小単位、購入可否・在庫状態の欄を持つ。 | 接続許諾を得た店舗の対象商品だけを、既存の承認済みフィード経路で取得する。SKUは店舗内キー。構造化IDが空ならGTIN証拠なし。対象国への配送は商品ごとに別途確認する。 [Store API](https://developer.woocommerce.com/docs/apis/store-api/) · [商品API](https://developer.woocommerce.com/docs/apis/store-api/resources-endpoints/products) · [識別子の定義](https://developer.woocommerce.com/docs/apis/rest-api/v3/products) |
+| PrestaShop 9 Webservice | 商品にEAN-13・UPC・ISBN・MPNなどの欄がある。販売可能数量は商品・組合せ・店舗単位の `stock_availables` で扱う。 | 稼働店舗の運用者が読取対象を承認した場合に接続する。親商品と組合せの識別を分け、通貨・税込価格・仕向け国については販売業者の確認を得る。 [商品属性](https://devdocs.prestashop-project.org/9/webservice/resources/products/) · [在庫属性](https://devdocs.prestashop-project.org/9/webservice/resources/stock_availables/) · [アクセス権限](https://devdocs.prestashop-project.org/9/webservice/tutorials/creating-access/) |
+| Best Buy Products API | 米国小売事業者が価格・可用性・仕様を含む過去と現在の製品情報を案内。現行キーが必要で、契約は原則72時間を超えるコンテンツキャッシュおよび無許可の第三者アクセスを制限する。 | GPDの永続カタログや第三者向け再提供の経路として数えない。契約と権限が適合する場合のみ、販売条件の短期表示候補。過去の商品も含むため、API上の商品数を販売中件数に変換しない。 [公式Products API](https://developer.bestbuy.com/apis) · [API利用条件](https://developer.bestbuy.com/legal) |
+
+取得が許されている公式WooCommerce文書の `GET /products/:id` 応答例1件を確認した。SKU、GBP価格、`is_purchasable`、`is_in_stock` を含むが、`global_unique_id` は空欄。これは公式の形式例であり、実店舗の在庫、実取引対応、カタログ登録件数の証拠から外す。今回確認した実店舗の商品行は0件、本番接続は0件。 [公式の単一商品応答例](https://developer.woocommerce.com/docs/apis/store-api/resources-endpoints/products#single-product-by-id)
