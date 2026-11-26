@@ -203,3 +203,5 @@ vPIC第3ページを取得し、公式IDで重複を除いたメーカー候補�
 承認制フィード更新ジョブに `stage_previews: true` を追加。既存の巡回と取得上限を使い、検証済みオファーをソースごとの非公開レビューに保存する。レビューと書き込み承認がそろえば既存の取込コマンドに渡せる。販売業者の収益台帳を求めない。再開は `node scripts/gpd33_merchant_coverage_tick.mjs <非公開ソース台帳> <非公開状態ディレクトリ>`。取込前に状態ファイルとレビューのスナップショットIDが同じことを確認し、既存の書き込み承認でレポートのダイジェストを固定する。 [取込手順](GPD_MERCHANT_OFFER_FEED.md)
 
 既存の公開MCP監査に無料試用を追加し、`tools/call` で商品識別の応答とビルドに対応するバージョンを照合する。根拠は固定GTINの正規化結果で、販売中の商品や外部買い手の利用には計上しない。隔離Workerでは正常系とツール失敗時の扱いが合格。運用再開は `node scripts/gpd33_acquisition_audit.mjs <公開バージョン> <公開build_id>`。
+
+ENERGY STARの北米住宅用洗濯機データについて、40件×最大4ページの取得とページ横断の識別競合検出を追加した。公式4ページを既存の外部接続経路で取得し、160行のうち厳密なUPC・型番条件を満たす7件を確認した。型番・ブランド不明確139、UPC不正・複数13、UPC欠落1。単独の固定接続CLIは今回の環境から取得できなかった。再開は `node scripts/gpd33_energy_star_washers.mjs --batch 0` または取得済みの連結JSONを `--local-batch <JSON>` で検証する。商品識別の証拠として保存し、本番商品・販売可能オファーには加えていない。 [公式データセット](https://data.energystar.gov/Active-Specifications/ENERGY-STAR-Certified-Residential-Clothes-Washers/bghd-e2wd/data)

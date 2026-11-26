@@ -8,6 +8,7 @@ const RESOURCE='https://data.energystar.gov/resource/'+DATASET+'.json';
 const MAX_BYTES=64*1024;
 const PAGE_SIZE=40;
 const MAX_OFFSET=4000;
+const MAX_BATCH_PAGES=4;
 const sourceFields=['pd_id','brand_name','model_number','upc','intended_market','markets','energy_star_model_identifier'];
 const markets=new Map([['United States','US'],['Canada','CA']]);
 
@@ -47,6 +48,10 @@ export function collectEnergyStarWasherEvidence(rows,now=Date.now()){
   if(!Array.isArray(rows)||rows.length>PAGE_SIZE||!Number.isSafeInteger(now)||now<0){
     throw new Error('invalid_energy_star_washer_page');
   }
+  return collectRecords(rows,now);
+}
+
+function collectRecords(rows,now){
   const rejected={},byCode=new Map(),byModel=new Map(),byRecord=new Map(),conflicts=new Set();
   let duplicates=0;
   for(const row of rows){
@@ -77,10 +82,9 @@ export function collectEnergyStarWasherEvidence(rows,now=Date.now()){
     rows_seen:rows.length,duplicate_rows:duplicates,conflicting_gtins:conflicts.size,rejected_rows:rejected,products};
 }
 
-export async function fetchEnergyStarWasherEvidence(offset=0,{
-  now=Date.now(),resolve,request=requestPinnedHttps
+async function fetchWasherPage(offset,{
+  resolve,request=requestPinnedHttps
 }={}){
-  if(!Number.isInteger(offset)||offset<0||offset>MAX_OFFSET||offset%PAGE_SIZE!==0)throw new Error('invalid_energy_star_washer_offset');
   const url=new URL(RESOURCE);
   url.search=new URLSearchParams({'$select':sourceFields.join(','),'$order':'pd_id ASC',
     '$where':"intended_market = 'Residential'",'$limit':String(PAGE_SIZE),'$offset':String(offset)});
@@ -110,22 +114,50 @@ export async function fetchEnergyStarWasherEvidence(offset=0,{
     let rows;
     try{rows=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));}
     catch{throw new Error('invalid_energy_star_json');}
-    const evidence=collectEnergyStarWasherEvidence(rows,now);
-    const next=offset+PAGE_SIZE;
-    return {...evidence,evidence_origin:'pinned_public_https',observed_at:evidence.processed_at,offset,
-      next_offset:rows.length===PAGE_SIZE&&next<=MAX_OFFSET?next:null};
+    if(!Array.isArray(rows)||rows.length>PAGE_SIZE)throw new Error('invalid_energy_star_washer_page');
+    return rows;
   }finally{
     response.destroy();
   }
 }
 
+export async function fetchEnergyStarWasherBatch(offset=0,pageLimit=MAX_BATCH_PAGES,options={}){
+  const now=options.now??Date.now();
+  if(!Number.isInteger(offset)||offset<0||offset>MAX_OFFSET||offset%PAGE_SIZE!==0)throw new Error('invalid_energy_star_washer_offset');
+  if(!Number.isSafeInteger(now)||now<0||!Number.isInteger(pageLimit)||pageLimit<1||pageLimit>MAX_BATCH_PAGES){
+    throw new Error('invalid_energy_star_washer_batch');
+  }
+  const rows=[];
+  let pages=0,next=offset;
+  while(pages<pageLimit&&next!==null){
+    const page=await fetchWasherPage(next,options);
+    rows.push(...page);
+    pages++;
+    next=page.length===PAGE_SIZE&&next+PAGE_SIZE<=MAX_OFFSET?next+PAGE_SIZE:null;
+  }
+  const evidence=collectRecords(rows,now);
+  return {...evidence,evidence_origin:'pinned_public_https',observed_at:evidence.processed_at,
+    offset,next_offset:next,pages_read:pages};
+}
+
+export async function fetchEnergyStarWasherEvidence(offset=0,options={}){
+  const {pages_read,...evidence}=await fetchEnergyStarWasherBatch(offset,1,options);
+  return evidence;
+}
+
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   try{
-    if(process.argv.length!==4)throw new Error('Expected --local <sample.json> or --read <offset>');
+    if(process.argv.length!==4)throw new Error('Expected --local <sample.json>, --local-batch <sample.json>, --read <offset>, or --batch <offset>');
     const [action,value]=process.argv.slice(2);
     let evidence;
     if(action==='--local')evidence=collectEnergyStarWasherEvidence((await readBoundedJson(value,MAX_BYTES)).data);
+    else if(action==='--local-batch'){
+      const {data}=await readBoundedJson(value,MAX_BATCH_PAGES*MAX_BYTES);
+      if(!Array.isArray(data)||data.length>MAX_BATCH_PAGES*PAGE_SIZE)throw new Error('invalid_energy_star_washer_batch');
+      evidence=collectRecords(data,Date.now());
+    }
     else if(action==='--read'&&/^\d{1,4}$/.test(value))evidence=await fetchEnergyStarWasherEvidence(Number(value));
+    else if(action==='--batch'&&/^\d{1,4}$/.test(value))evidence=await fetchEnergyStarWasherBatch(Number(value));
     else throw new Error('Invalid read mode');
     process.stdout.write(JSON.stringify(evidence,null,2)+'\n');
   }catch{

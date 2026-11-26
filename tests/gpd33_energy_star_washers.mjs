@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
-import {collectEnergyStarWasherEvidence,fetchEnergyStarWasherEvidence} from '../scripts/gpd33_energy_star_washers.mjs';
+import {collectEnergyStarWasherEvidence,fetchEnergyStarWasherBatch,fetchEnergyStarWasherEvidence} from '../scripts/gpd33_energy_star_washers.mjs';
 
 const now=Date.parse('2026-11-25T12:00:00Z');
 const exact={pd_id:'2545602',brand_name:'AEG',model_number:'W14120',upc:'051497390297',
@@ -95,4 +95,19 @@ await assert.rejects(pull(1,reply([])),/invalid_energy_star_washer_offset/);
 await assert.rejects(pull(4040,reply([])),/invalid_energy_star_washer_offset/);
 await assert.rejects(pull(0,reply([]),async()=>['8.8.8.8','127.0.0.1']),/requires_public_ipv4/);
 assert.equal(calls,9);
+const offsets=[];
+const batch=await fetchEnergyStarWasherBatch(0,4,{now,resolve:async()=>['8.8.8.8'],
+  request:async url=>{
+    const offset=Number(url.searchParams.get('$offset'));
+    offsets.push(offset);
+    return reply(offset===0?Array(40).fill(exact):[alternate]);
+  }});
+assert.deepEqual(offsets,[0,40]);
+assert.equal(batch.pages_read,2);
+assert.equal(batch.next_offset,null);
+assert.equal(batch.rows_seen,41);
+assert.equal(batch.conflicting_gtins,1);
+assert.deepEqual(batch.products,[]);
+await assert.rejects(fetchEnergyStarWasherBatch(null,1),/invalid_energy_star_washer_offset/);
+await assert.rejects(fetchEnergyStarWasherBatch(0,5),/invalid_energy_star_washer_batch/);
 console.log('PASS EPA residential washers exact UPC/model evidence, conflict quarantine, and bounded pinned HTTP');
