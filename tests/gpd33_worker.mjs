@@ -21,7 +21,11 @@ const selftest=await call('/selftest');
 const results=await selftest.json();
 assert.equal(selftest.status,200,JSON.stringify(results.checks.filter(c=>!c.ok)));
 assert.equal(results.embedded_parts_collector.ok,true);
-assert.equal(results.checks.length,116);
+assert.ok(results.checks.some(check=>check.name==='anime_catalogue_cron'&&check.ok));
+await worker.scheduled({scheduledTime:Date.UTC(2026,10,26,0,5)},env,{
+  waitUntil:()=>assert.fail('Off-cadence anime cron must not run')
+});
+assert.equal((await (await call('/.well-known/gpd')).json()).commercial_scope,'anime_collectibles');
 assert.equal(results.embedded_parts_collector.checks,61);
 
 assert.equal(api.normalizeUniversalIdentifiers({isbn:'0-306-40615-2'}).gtin,'9780306406157');

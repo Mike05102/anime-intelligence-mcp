@@ -5533,7 +5533,7 @@ function gpd33AgentManifest(env,origin){
     &&/^sb_publishable_[A-Za-z0-9_-]+$/.test(env.SUPABASE_PUBLISHABLE_KEY||"");
   const authUrl=signup?parseGpd33PublicAuthUrl(env.SUPABASE_URL):null;
   const buyerMode=authUrl?"registration_advertised":enabled?"account_verification_configured":"unavailable";
-  return {schema:"gpd-agent-discovery-v1",name:"Global Purchase Decision",
+  return {schema:"gpd-agent-discovery-v1",name:"Global Purchase Decision",commercial_scope:"anime_collectibles",
     mcp_url:origin+"/mcp",openapi_url:origin+"/openapi.json",x402_url:origin+"/.well-known/x402",
     merchant_directory_url:origin+"/v1/merchant/directory",merchant_offer_search_url:origin+"/v1/merchant/search",purchase_decision_url:origin+"/v1/purchase-decision",
     onboarding:{guide_url:origin+"/agents",examples_url:origin+"/agents/examples",readiness_url:origin+"/agents/readiness",
@@ -7272,13 +7272,9 @@ function universalSelftest(){
   add("admin_kpi_unwrap_enabled",adminPage({}).includes("k=k&&k.kpi?k.kpi:k"));
   add("external_revenue_only_admin",adminPage({}).includes("recent_history_external_revenue_usdc")&&!adminPage({}).includes("external_revenue_usdc','recent_history_external_revenue_usdc','revenue_usdc"));
   const testDay=Date.UTC(2026,9,27,12,0,0);
-  add("cron_10min_contract_collector_00",scheduledTaskForTime(testDay)==="parts_collector_v3");
-  add("cron_10min_contract_rotation_10",scheduledTaskForTime(testDay+10*60*1000)==="rotation");
-  add("cron_10min_contract_collector_20",scheduledTaskForTime(testDay+20*60*1000)==="parts_collector_v3");
-  add("cron_10min_contract_enrichment_30",scheduledTaskForTime(testDay+30*60*1000)==="catalog_enrichment");
-  add("cron_10min_contract_fallback_40",scheduledTaskForTime(testDay+40*60*1000)==="universal_discovery");
-  add("cron_10min_contract_demand_50",scheduledTaskForTime(testDay+50*60*1000)==="universal_discovery");
-  add("cron_non_10min_idle",scheduledTaskForTime(testDay+5*60*1000)==="discovery_recovery");
+  add("anime_catalogue_cron",["mass","official","official","mass","official","official"]
+    .every((stage,i)=>scheduledTaskForTime(testDay+i*600000)===stage));
+  add("anime_catalogue_off_cadence_idle",scheduledTaskForTime(testDay+300000)===null);
   add("merchant_backlog_due_only",universalMerchantDueBacklog.toString().includes("next_attempt_at=lte"));
   add("merchant_soft_limit_does_not_full_pause",UNIVERSAL_MERCHANT_DUE_BUDGET===120&&UNIVERSAL_MERCHANT_DUE_HARD_CEILING===180&&UNIVERSAL_MERCHANT_DUE_BUDGET<UNIVERSAL_MERCHANT_DUE_HARD_CEILING);
   add("merchant_hard_ceiling_full_pause",UNIVERSAL_MERCHANT_DUE_HARD_CEILING===180);
@@ -7331,9 +7327,7 @@ function universalSelftest(){
   add("identity_query_compaction",identityOptimizedSearchQuery("中古 Canon camera HG-100TBR ※動作未確認 保証なし返品返金不可","", "consumer_electronics").length<70);
   add("identity_volume_beats_tiny_perfect_sample",universalIdentityRoleScore({query:"canon camera",history_runs:1,history_candidates:30,history_gtin_candidates:15,history_canonical_new_count:8,history_avg_candidates_per_run:30,history_unique_yield:.9,history_canonical_per_provider_call:4})>universalIdentityRoleScore({query:"GTIN 4900000000000",history_runs:1,history_candidates:1,history_gtin_candidates:1,history_canonical_new_count:1,history_avg_candidates_per_run:1,history_unique_yield:1,history_canonical_per_provider_call:1}));
   add("identity_yahoo_retry_bounded",genericCommerceSearch.toString().includes('providerRole==="identity"&&hits.length<10')&&genericCommerceSearch.toString().includes("yahooCalls++"));
-    add("cron_resilient_discovery_fallback_route",scheduledTaskForTime(Date.UTC(2026,0,1,0,40))==="universal_discovery");
   add("v20_direct_discovery_diagnostics",typeof universalDiscoveryDiagnostics==="function");
-  add("cron_primary_discovery_route_preserved",scheduledTaskForTime(Date.UTC(2026,0,1,0,50))==="universal_discovery");
 add("canonical_offer_resolver_present",typeof resolveCanonicalOffersForProducts==="function"&&persistUniversalCommerceObservations.toString().includes("resolveCanonicalOffersForProducts"));
   add("canonical_offer_resolver_exact_gtin_filter",resolveCanonicalOffersForProducts.toString().includes("ebayBrowseRequest(env,{gtin,limit:10})"));
   add("canonical_offer_resolver_detail_verifies_identity",resolveCanonicalOffersForProducts.toString().includes("detailGtins.some")&&resolveCanonicalOffersForProducts.toString().includes("detailExactMpnMatch"));
@@ -13567,21 +13561,11 @@ async function embeddedCollectorFetch(request,env,ctx){
   return EMBEDDED_PARTS_COLLECTOR.fetch(req,env,ctx);
 }
 
-// v7.1 deterministic cron contract. Works with either */1 or */10 Cloudflare triggers.
-// Only UTC minutes divisible by 10 perform network-heavy scheduled work.
-// 00/20/40 = embedded Parts Collector v3; 10 = universal rotation;
-// 30 = catalog enrichment; 50 = universal demand refresh.
+// Only run the official anime catalogue on the six hourly cron slots.
+const ANIME_SCHEDULE=["mass","official","official","mass","official","official"];
 function scheduledTaskForTime(timeMs){
-  // All ten-minute slots are productive. This avoids relying on :40/:50 cron configuration.
-  const d=new Date(Number(timeMs||Date.now()));
-  const m=d.getUTCMinutes();
-  if(m%10!==0)return "discovery_recovery"; // also works with an unusual single-minute cron
-  if(m===0||m===20)return "parts_collector_v3";
-  if(m===10)return "rotation";
-  if(m===30)return "catalog_enrichment";
-  if(m===40)return "universal_discovery";
-  if(m===50)return "universal_discovery";
-  return "discovery_recovery";
+  const minute=new Date(Number(timeMs)).getUTCMinutes();
+  return minute%10===0?ANIME_SCHEDULE[minute/10]:null;
 }
 
 async function universalDiscoveryLeaseStatus(env,nowMs=Date.now(),freshMinutes=55){
@@ -13908,42 +13892,33 @@ export default{
   },
 
   async scheduled(event,env,ctx){
-    const scheduledTime=Number(event?.scheduledTime||Date.now());
-    const dt=new Date(scheduledTime);
+    const scheduledTime=Number(event?.scheduledTime??Date.now());
     const task=scheduledTaskForTime(scheduledTime);
+    if(!task)return;
+    const dt=new Date(scheduledTime);
     ctx.waitUntil((async()=>{
-      const report={version:VERSION,scheduled_time:dt.toISOString(),task,result:null,errors:[]};
+      let result;
       try{
-        report.heartbeat_persisted=await logEvent(env,"gpd_cron_heartbeat",{endpoint:"scheduled",metadata:{task,scheduled_time:dt.toISOString(),build_id:BUILD_ID}});
-        if(task==="parts_collector_v3"){
-          const needed=await embeddedPartsCollectorNeedsRun(env,scheduledTime);
-          report.result=needed?await runEmbeddedPartsCollectorFailover(event,env):{ok:true,status:"collector_recent"};
-        }else if(task==="rotation"){
-          const slot=rotationSlotFromTime(scheduledTime),stage=ROTATION[slot];
-          report.result=await runRotationStage(env,stage,"cron",{timeMs:scheduledTime});
-        }else if(task==="catalog_enrichment"){
-          report.result=await enrichExistingCatalogBatch(env,1);
-        }else{
-          report.result=await checkpointedUniversalDemandRefresh(env,1,task,scheduledTime);
-        }
-      }catch(e){report.errors.push({task,error:safeError(e)});}
-      // Run discovery at every scheduled slot if the primary slot did not do so.
-      // This is an independent waitUntil job so failure of Parts/rotation/enrichment cannot suppress it.
-      try{await logEvent(env,"scheduled_growth_run",{endpoint:"scheduled",metadata:{task,ok:report.errors.length===0,errors:report.errors,heartbeat_persisted:report.heartbeat_persisted}});}catch{}
+        result=await runRotationStage(env,task,"cron",{timeMs:scheduledTime});
+      }catch(error){
+        result={ok:false,error:safeError(error)};
+      }
+      // Failures stay in the audit trail. Report successful activity once per hour.
+      if(!result.ok||dt.getUTCMinutes()===50){
+        await logEvent(env,"scheduled_growth_run",{endpoint:"scheduled",metadata:{
+          task,ok:result.ok,scheduled_time:dt.toISOString(),
+          ...(!result.ok?{failure_count:result.failure_count||1}:{})
+        }});
+      }
       if(dt.getUTCMinutes()===50){
+        await logEvent(env,"gpd_cron_heartbeat",{endpoint:"scheduled",metadata:{task,scheduled_time:dt.toISOString(),build_id:BUILD_ID}});
         try{
           const storage=await sb(env,"/rpc/gpd33_storage_status",{method:"POST",body:"{}"});
           if(storage?.catalog_paused)console.warn("GPD storage pressure",JSON.stringify(storage));
           await sb(env,"/rpc/gpd33_prune_events",{method:"POST",body:"{}"});
-        }catch(e){console.warn("GPD event retention",safeError(e));}
+        }catch(error){console.warn("GPD event retention",safeError(error));}
       }
-      console.log("GPD scheduled",JSON.stringify(report));
+      console.log("Anime catalogue scheduled",JSON.stringify({task,ok:result.ok}));
     })());
-    if(!["universal_discovery","discovery_recovery"].includes(task)){
-      ctx.waitUntil((async()=>{
-        try{await checkpointedUniversalDemandRefresh(env,1,`parallel_${task}`,scheduledTime);}
-        catch(e){console.warn("GPD parallel discovery failed",safeError(e));}
-      })());
-    }
   }
 };
