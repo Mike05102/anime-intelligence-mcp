@@ -1319,12 +1319,18 @@ function officialFeedSeedPayload(feed,x,now=new Date().toISOString()){
   return {canonical_name_ja:x.name,canonical_name_en:feed.language==="en"?x.name:null,manufacturer:feed.manufacturer,brand:sp.brand||null,series:sp.set_code||sp.lottery_series||null,franchise:sp.card_game||sp.collaboration||null,character_names:[],jan_code:null,model_number:sp.style_code||sp.card_number||null,product_type:x.classification.type,scale:sp.scale||null,edition:sp.edition||sp.rarity||null,limited_type:(sp.limited||sp.event_limited)?"limited":null,msrp_jpy:null,original_release_date:null,official_url:x.url||null,official_image_url:null,image_source_url:x.url||feed.listUrl,image_status:"pending",source_product_key:`officialfeed:${feed.slug}:${ident.fingerprint||simpleHash(x.name)}`,product_status:"active",identification_confidence:x.url?.74:.68,source_last_checked_at:now,metadata:{connector:"official_mass_feed",official_feed:true,official_feed_slug:feed.slug,official_feed_url:feed.listUrl,specialist_intelligence:true,specialist:sp,classification:{...x.classification,version:VERSION},canonical_identity_method:ident.identity_method,canonical_identity:ident.identity||null,canonical_fingerprint:ident.fingerprint||null,field_provenance:{canonical_name_ja:sourceEvidence(feed.slug,now),manufacturer:sourceEvidence(feed.slug,now)},quality_version:VERSION,ingestion_version:VERSION}};
 }
 async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,options={}){
-  const feed=deterministicWindow(OFFICIAL_MASS_FEEDS,1,options.timeMs||Date.now(),29)[0];
+  const hour=Math.floor((options.timeMs??Date.now())/3600000);
+  const feed=OFFICIAL_MASS_FEEDS[(hour+29)%OFFICIAL_MASS_FEEDS.length];
   if(!feed)return {status:"no_feeds"};
   const report={feed:feed.slug,manufacturer:feed.manufacturer,list_url:feed.listUrl,discovered:0,selected:0,inserted:0,existing:0,errors:[]};
   try{
     const page=await fetchOfficial(feed.listUrl),all=officialFeedAnchorCandidates(page.html,feed);report.discovered=all.length;
-    const selected=deterministicWindow(all,Math.min(Math.max(1,Number(limit)||30),50),options.timeMs||Date.now(),31);report.selected=selected.length;
+    const pageSize=Math.min(Math.max(1,Math.floor(Number(limit)||30)),50);
+    const pageCount=Math.ceil(all.length/pageSize);
+    const visit=Math.floor((hour+29)/OFFICIAL_MASS_FEEDS.length);
+    const offset=pageCount?(visit%pageCount)*pageSize:0;
+    const selected=all.slice(offset,offset+pageSize);
+    report.selected=selected.length;
     if(!selected.length)return report;
     const payloads=selected.map(x=>officialFeedSeedPayload(feed,x));
     const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key),true);const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
