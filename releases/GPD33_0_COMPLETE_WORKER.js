@@ -2288,11 +2288,11 @@ async function lightweightStructuredFallback(env,hints,query,limit=10){
   return [];
 }
 
-async function findProducts(env,q="",limit=10){
+async function findProducts(env,q="",limit=10,eligible=()=>true){
   const query=String(q||"").trim();
   if(!query)return [];
   const jan=cleanJan(query);
-  if(jan){const exact=await loadProductsByJans(env,[jan]);if(exact.length)return exact.slice(0,limit);}
+  if(jan){const exact=(await loadProductsByJans(env,[jan])).filter(eligible);if(exact.length)return exact.slice(0,limit);}
   const hints=multilingualQueryHints(query),groups=[];
   const dbTypes=[...new Set(hints.product_types.flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]))];
   const semanticTerms=[...new Set([...hints.franchise_aliases,...(hints.character_aliases||[]),...hints.residual_terms].map(safeSearchTerm).filter(Boolean))].slice(0,6);
@@ -2326,10 +2326,10 @@ async function findProducts(env,q="",limit=10){
     groups.unshift(await broadCatalogDiscovery(env,Math.max(10,Math.min(20,limit))));
   }
   const merged=mergeUniqueProducts(groups,Math.max(30,limit*4));
-  const ranked=rankAndFilterDiscoveryProducts(merged,hints,query,limit);
+  const ranked=rankAndFilterDiscoveryProducts(merged.filter(eligible),hints,query,limit);
   if(ranked.length)return ranked;
   // Explicit identity constraints get a second, character-first retrieval pass instead of returning nearby franchise products.
-  return await lightweightStructuredFallback(env,hints,query,limit);
+  return (await lightweightStructuredFallback(env,hints,query,limit)).filter(eligible);
 }
 
 async function resolveProduct(env,url){
@@ -7961,8 +7961,7 @@ async function universalPurchaseDecisionApi(request,env,origin,ctx=null){
   const preflight=await preflightPaidProduct(env,u);
   if(!preflight.ok)return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"collectible_not_resolved",charged:false,normalized_intent:intent,resolution:preflight.body},preflight.status||404,{"cache-control":"no-store"});
   const product=preflight.product;
-  if(product.metadata?.universal_commerce||(!discoverySafeFranchise(product)
-    &&!["figure","scale_figure","nendoroid","figma"].includes(product.product_type))){
+  if(!isAnimeLaunchProduct(product)){
     return json({ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_product_evidence_required",
       charged:false},422,{"cache-control":"no-store"});
   }
@@ -9866,8 +9865,13 @@ async function searchDiagnostic(env,query="One Piece figure"){
   };
 }
 
+function isAnimeLaunchProduct(product){
+  return !product.metadata?.universal_commerce&&(!!discoverySafeFranchise(product)
+    ||["figure","scale_figure","nendoroid","figma"].includes(product.product_type));
+}
+
 async function freeSearch(request,env,url){
-  const q=url.searchParams.get("query")||"",lang=detectSearchLanguage(q,url.searchParams.get("lang")||"",request?.headers?.get("accept-language")||""),hints=multilingualQueryHints(q),rows=await findProducts(env,q,10),shoppingIntent=naturalShoppingIntent(q,url,env);
+  const q=url.searchParams.get("query")||"",lang=detectSearchLanguage(q,url.searchParams.get("lang")||"",request?.headers?.get("accept-language")||""),hints=multilingualQueryHints(q),rows=await findProducts(env,q,10,isAnimeLaunchProduct),shoppingIntent=naturalShoppingIntent(q,url,env);
   const searchMode=hints.generic_intent&&!hints.product_types.length&&!hints.franchises.length&&!hints.residual_terms.length?"broad_catalog":hints.ambiguous_category_search?"category_only":"targeted",ranked=rankPaidCandidates(q,rows,shoppingIntent),recommended=ranked[0]||null,recommendedPaid=naturalPaidRoute(shoppingIntent,q);
   await logRequestStage(env,request,"api_call",{metadata:{route_type:"free",result_count:rows.length,response_status:200,detected_language:lang,ambiguous_category_search:hints.ambiguous_category_search,generic_intent:hints.generic_intent,search_mode:searchMode,product_types:hints.product_types,franchises:hints.franchises,recommended_product_id:recommended?.product?.id||null,recommended_paid_endpoint:recommendedPaid,buyer_country:shoppingIntent.buyer_country,budget_jpy:shoppingIntent.budget?.jpy_equivalent||null}});
   return {service:"ANIME INTELLIGENCE",version:VERSION,language:lang,query:q,shopping_intent:shoppingIntent,search_interpretation:{product_types:hints.product_types,franchises:hints.franchises,residual_terms:hints.residual_terms,ambiguous_category_search:hints.ambiguous_category_search,generic_intent:hints.generic_intent,search_mode:searchMode},count:rows.length,recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),recommended_product:recommended?paidRankedView(recommended,shoppingIntent):null,recommendations:ranked.slice(0,5).map(x=>paidRankedView(x,shoppingIntent)),recommended_paid_endpoint:{endpoint:recommendedPaid,price_usdc:endpointPriceUsd(recommendedPaid),reason:"Cheapest paid endpoint inferred to answer the original natural-language shopping request."},recommendation_policy:"Natural shopping intent first: franchise/category relevance, explicit budget fit, buyer use case, popularity/demand when available, release recency, identity quality, product completeness and purchase-route readiness. Affiliate readiness may improve executability but cannot override semantic relevance.",paid_next_steps:[{task:"identify exact product or edition",endpoint:"/v1/identify",price_usdc:.005},{task:"current market value or price comparison",endpoint:"/v1/market",price_usdc:.01},{task:"rarity and rerelease risk",endpoint:"/v1/rarity",price_usdc:.01},{task:"counterfeit or bootleg risk",endpoint:"/v1/authenticity",price_usdc:.02},{task:"BUY WAIT WATCH AVOID timing",endpoint:"/v1/buy-wait",price_usdc:.02},{task:"best current purchase route",endpoint:"/v1/best-place",price_usdc:.03},{task:"verify seller listing matches exact edition",endpoint:"/v1/listing-match",price_usdc:.01},{task:"preorder lottery or sales deadline",endpoint:"/v1/deadline",price_usdc:.01},{task:"destination-aware landed cost including Japan buyer",endpoint:"/v1/landed-cost",price_usdc:.02},{task:"7/30/90/180-day asking-price history",endpoint:"/v1/price-history",price_usdc:.02},{task:"complete multi-signal purchase decision",endpoint:"/v1/full-intelligence",price_usdc:.05}],agent_selection_reason:"Use ANIME INTELLIGENCE when a physical anime-merch request is vague, multilingual, identity-sensitive or purchase-oriented. It turns ordinary language into canonical candidates plus structured confidence before paid price/risk/routing intelligence.",context_requirements:shoppingIntent.context_requirements||[],agent_routing_note:"If the user already asked for value, rarity, authenticity, timing, seller routing or a complete buying decision, call the matching paid endpoint directly; free search is only optional candidate discovery.",results:ranked.map(paidRankedView)};
