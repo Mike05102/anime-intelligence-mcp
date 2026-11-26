@@ -1338,8 +1338,17 @@ async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,o
       const payload=officialFeedSeedPayload(feed,x);
       return [payload.source_product_key,payload];
     })).values()];
-    const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key),true);const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
-    const missing=payloads.filter(x=>!keys.has(x.source_product_key));report.existing=payloads.length-missing.length;
+    const quote=value=>JSON.stringify(value);
+    const sourceKeys=payloads.map(x=>quote(x.source_product_key)).join(",");
+    const urls=payloads.filter(x=>x.official_url).map(x=>quote(x.official_url)).join(",");
+    const clauses=[`source_product_key.in.(${sourceKeys})`];
+    if(urls)clauses.push(`official_url.in.(${urls})`);
+    const existing=await sb(env,`/products?select=source_product_key,official_url&or=${encodeURIComponent("("+clauses.join(",")+")")}&limit=101`);
+    if(!Array.isArray(existing)||existing.length>100)throw new Error("Incomplete official feed identity lookup");
+    const keys=new Set(existing.map(x=>x.source_product_key));
+    const knownUrls=new Set(existing.map(x=>x.official_url).filter(Boolean));
+    const missing=payloads.filter(x=>!keys.has(x.source_product_key)&&!knownUrls.has(x.official_url));
+    report.existing=payloads.length-missing.length;
     if(missing.length){report.inserted=await insertOfficialSeedBatch(env,missing);}
   }catch(e){report.errors.push({error:safeError(e)});}
   return report;
