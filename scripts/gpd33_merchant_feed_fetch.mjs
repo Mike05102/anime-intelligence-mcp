@@ -2,7 +2,7 @@ import {Resolver} from 'node:dns/promises';
 import {get,request as httpsRequest} from 'node:https';
 import {BlockList,isIPv4} from 'node:net';
 import {pathToFileURL} from 'node:url';
-import {prepareMerchantOfferFeed,readBoundedJson,validateMerchantFeedApproval} from './gpd33_merchant_offer_feed.mjs';
+import {normalizeApprovedWooCommerceResponse,prepareMerchantOfferFeed,readBoundedJson,validateMerchantFeedApproval} from './gpd33_merchant_offer_feed.mjs';
 
 const MAX_BYTES=256*1024;
 const TIMEOUT_MS=8000;
@@ -55,7 +55,8 @@ export const readMerchantFeedApproval=readBoundedJson;
 export async function fetchApprovedMerchantOfferFeed(approval,{
   resolve=resolvePublicIPv4,request=requestPinnedHttps,now=Date.now()
 }={}){
-  const {feedUrl}=validateMerchantFeedApproval(approval,now);
+  const scope=validateMerchantFeedApproval(approval,now);
+  const {feedUrl}=scope;
   const signal=AbortSignal.timeout(TIMEOUT_MS);
   const address=await resolvePinnedPublicIpv4(feedUrl.hostname,signal,resolve);
   const response=await request(feedUrl,{address,signal});
@@ -79,6 +80,11 @@ export async function fetchApprovedMerchantOfferFeed(approval,{
     let manifest;
     try{manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));}
     catch{throw new Error('invalid_feed_json');}
+    if(scope.woo){
+      const age=response.headers.age;
+      if(age!==undefined&&(!/^\d+$/.test(age)||Number(age)>3600))throw new Error('woocommerce_response_too_old');
+      manifest=normalizeApprovedWooCommerceResponse(scope,manifest,new Date(now-Number(age??0)*1000).toISOString());
+    }
     return prepareMerchantOfferFeed(approval,manifest,now);
   }finally{
     response.destroy();

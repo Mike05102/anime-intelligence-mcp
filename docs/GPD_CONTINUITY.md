@@ -180,3 +180,5 @@ PluginBenchで公式登録名とGPDの接続先が一致する旧版の掲載を
 掲載経路は累計24件、無償条件確認5件、登録準備2件、既存掲載10件。Postman用の無料試用コレクションを公式v2.1スキーマと隔離Workerで検証した。外部公開の承認後、公開ワークスペースへ取り込む。APIs.guruの公開索引は取得サイズ上限に達したため、掲載照合を保留した。 [掲載経路台帳](GPD_CHANNEL_RESEARCH.md)
 
 WooCommerceとPrestaShopの公式仕様を確認し、接続許諾が必要な候補として記録した。Best Buyは保持・再提供の制約から永続カタログ候補に含めない。公開サンプル確認済み情報源3件とメーカー候補200件を引き継いだ。 [商品情報源台帳](GPD_SOURCE_RESEARCH.md)
+
+WooCommerce Store API用の承認制プレビューを追加し、店舗の許諾範囲内で商品ID、SKU、GTIN、URLを突合する。価格の小数単位、在庫の不確実性、期限・配送条件を検証し、既存の認証済み取込経路で承認範囲を再確認する。再開時は `node tests/gpd33_woocommerce_feed.mjs` と `node tests/gpd33_merchant_feed_publish.mjs` を実行する。実店舗の読み取りには同意済み販売業者と有効な承認書が必要で、今回の新規接続は0件。 [販売業者フィード手順](GPD_MERCHANT_OFFER_FEED.md)

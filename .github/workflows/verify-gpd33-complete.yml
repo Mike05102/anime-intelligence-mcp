@@ -74,6 +74,7 @@ jobs:
       - run: node tests/gpd33_seller_opt_in.mjs
       - run: node tests/gpd33_merchant_offer_feed.mjs
       - run: node tests/gpd33_merchant_feed_fetch.mjs
+      - run: node tests/gpd33_woocommerce_feed.mjs
       - run: node tests/gpd33_partner_review.mjs
       - run: node tests/gpd33_merchant_feed_publish.mjs
       - run: npm install --prefix "${RUNNER_TEMP}/gpd33" pg@8.16.3

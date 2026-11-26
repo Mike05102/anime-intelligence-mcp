@@ -9,6 +9,7 @@ const UUID=/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const COUNTRY=/^[A-Z]{2}$/;
 const FRESHNESS_MS=7*24*60*60*1000;
 const MAX_STOCK_QUANTITY=2147483647;
+const WOO_FORMAT='woocommerce-store-api-v1';
 
 function utcTime(value){
   return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)?Date.parse(value):NaN;
@@ -36,6 +37,68 @@ function currencyPrice(value){
   return value;
 }
 
+function approveWooProducts(approval,feedUrl,origins){
+  const endpoint=/^\/wp-json\/wc\/store\/v1\/products(?:\/([1-9]\d*))?\/?$/.exec(feedUrl.pathname);
+  const products=approval.woo_products;
+  if(!endpoint||!Array.isArray(products)||products.length<1||products.length>50){
+    throw new Error('invalid_woocommerce_approval');
+  }
+  const byId=new Map(),bySku=new Map();
+  for(const item of products){
+    const sku=textField(item?.merchant_sku,200,'invalid_woocommerce_approval');
+    if(!Number.isSafeInteger(item.id)||item.id<1||byId.has(item.id)||bySku.has(sku)
+      ||(endpoint[1]&&String(item.id)!==endpoint[1])
+      ||!['simple','variation'].includes(item.type)
+      ||!Array.isArray(item.ships_to)||item.ships_to.length>100
+      ||item.ships_to.some(country=>typeof country!=='string'||!COUNTRY.test(country))
+      ||(item.condition!=null&&!OFFER_CONDITIONS.has(item.condition)))throw new Error('invalid_woocommerce_approval');
+    const productUrl=safeHttps(item.product_url);
+    if(!origins.has(productUrl.origin))throw new Error('unapproved_product_origin');
+    const evidence={merchant_sku:sku,type:item.type,gtin:gtin(item.gtin),
+      manufacturer:textField(item.manufacturer,160,'manufacturer_required'),
+      part_number:textField(item.part_number,200,'part_number_required'),
+      product_url:productUrl.href,ships_to:[...new Set(item.ships_to)],condition:item.condition??null};
+    byId.set(item.id,evidence);
+    bySku.set(sku,evidence);
+  }
+  return {byId,bySku};
+}
+
+function wooPrice(prices){
+  const scale=prices?.currency_minor_unit,amount=prices?.price;
+  if(!Number.isInteger(scale)||scale<0||scale>4||typeof amount!=='string'
+    ||!/^(?:0|[1-9]\d{0,12})$/.test(amount)||prices.price_range!=null)throw new Error('invalid_woocommerce_price');
+  if(scale===0)return currencyPrice(amount);
+  const digits=amount.padStart(scale+1,'0');
+  return currencyPrice(digits.slice(0,-scale)+'.'+digits.slice(-scale));
+}
+
+export function normalizeApprovedWooCommerceResponse(scope,body,observedAt){
+  const rows=Array.isArray(body)?body:[body];
+  if(!scope.woo||!rows.length||rows.length>50||rows.some(item=>!Number.isSafeInteger(item?.id)||item.id<1)){
+    throw new Error('invalid_woocommerce_response');
+  }
+  const offers=[];
+  for(const row of rows){
+    const approved=scope.woo.byId.get(row.id);
+    if(!approved)continue;
+    const stock=typeof row.is_in_stock==='boolean'?row.is_in_stock:null;
+    const backorder=typeof row.is_on_backorder==='boolean'?row.is_on_backorder:null;
+    if(row.type!==approved.type||row.has_options!==false||row.is_password_protected!==false
+      ||row.sku!==approved.merchant_sku||gtin(row.global_unique_id).padStart(14,'0')!==approved.gtin.padStart(14,'0')
+      ||safeHttps(row.permalink).href!==approved.product_url
+      ||typeof row.is_purchasable!=='boolean'||(stock===false&&backorder===true))throw new Error('woocommerce_item_conflicts_with_approval');
+    const {merchant_sku,gtin:barcode,manufacturer,part_number,product_url,ships_to,condition}=approved;
+    offers.push({merchant_sku,gtin:barcode,manufacturer,part_number,product_url,ships_to,condition,title:row.name,
+      price:wooPrice(row.prices),currency:row.prices.currency_code,
+      stock_status:stock===false?'out_of_stock':!row.is_purchasable?'unknown':backorder===true?'backorder':
+        stock===true&&backorder===false?'in_stock':'unknown'});
+  }
+  if(!offers.length)throw new Error('no_approved_woocommerce_products');
+  return {schema:'gpd-merchant-offer-feed-input-v1',merchant_id:scope.selected,feed_url:scope.feedUrl.href,
+    observed_at:observedAt,offers};
+}
+
 export function validateMerchantFeedApproval(approval,now=Date.now()){
   const selected=approval?.merchant_id;
   const approvedUntil=utcTime(approval?.approved_until);
@@ -47,11 +110,15 @@ export function validateMerchantFeedApproval(approval,now=Date.now()){
     if(url.pathname!=='/')throw new Error('approved_product_origins_required');
     return url.origin;
   }));
+  if(approval.feed_format===WOO_FORMAT)return {selected,feedUrl,origins,woo:approveWooProducts(approval,feedUrl,origins)};
+  if(approval.feed_format!==undefined&&approval.feed_format!=='gpd-merchant-offer-feed-input-v1'){
+    throw new Error('invalid_merchant_feed_format');
+  }
   return {selected,feedUrl,origins};
 }
 
 export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
-  const {selected,feedUrl,origins}=validateMerchantFeedApproval(approval,now);
+  const {selected,feedUrl,origins,woo}=validateMerchantFeedApproval(approval,now);
   if(manifest?.schema!=='gpd-merchant-offer-feed-input-v1'||manifest?.merchant_id!==selected
     ||safeHttps(manifest?.feed_url).href!==feedUrl.href)throw new Error('feed_approval_required');
   const observed=utcTime(manifest.observed_at);
@@ -77,6 +144,15 @@ export function prepareMerchantOfferFeed(approval,manifest,now=Date.now()){
         ||offer.ships_to.some(country=>typeof country!=='string'||!COUNTRY.test(country)))throw new Error('invalid_ship_to');
       const product=safeHttps(offer.product_url);
       if(!origins.has(product.origin))throw new Error('unapproved_product_origin');
+      if(woo){
+        const approved=woo.bySku.get(sku);
+        const destinations=[...new Set(offer.ships_to)];
+        if(!approved||approved.gtin!==structuredGtin||approved.manufacturer!==manufacturer||approved.part_number!==partNumber
+          ||approved.product_url!==product.href||(condition??null)!==approved.condition||quantity!=null
+          ||destinations.length!==approved.ships_to.length||destinations.some(country=>!approved.ships_to.includes(country))){
+          throw new Error('woocommerce_item_conflicts_with_approval');
+        }
+      }
       return {merchant_sku:sku,manufacturer,part_number:partNumber,gtin:structuredGtin,
         title:textField(offer.title,500,'invalid_title'),currency:offer.currency,price:currencyPrice(offer.price),
         stock_status:offer.stock_status,...(quantity==null?{}:{stock_quantity:quantity}),

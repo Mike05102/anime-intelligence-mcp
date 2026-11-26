@@ -38,3 +38,15 @@ node scripts/gpd33_merchant_feed_publish.mjs private/report.json private/feed-ap
 公開処理はレポートをフィード承認と照合し直し、Workerにキーの所有者と確認済み状態を照会する。照合済みの対象にだけ専用フィード登録APIを呼ぶ。古い更新や同じ観測の再送は反映されず、既存オファーのIDを維持する。応答で反映件数と見送り件数を確認する。通信障害で応答が得られないときはこの処理から成功を判断できないため、同じ承認・同じレポートで状態を確認する。実取引や収益の確定処理とは独立している。
 
 同じレポートを繰り返し処理する運用では、公開コマンドの末尾に権限 `0700` の既存レシートディレクトリを指定する。Linuxの `flock` で並行公開を防ぎ、確認済みの応答だけを権限 `0600` のレシートとして保存する。同じWorker、販売業者、スナップショット、レポートの承認が再度確認できた場合は `already_imported` を返し、DNSやHTTPの通信を省く。`import_in_progress` は別プロセスが処理中であることを示す。レシート保存前に停止した場合は成功を確定できないため、同じ承認条件での再送をWorkerの冪等性で処理する。
+
+## WooCommerce Store APIからのプレビュー
+
+WooCommerceの店舗運用者が、具体的な商品と販売条件についてGPDへの取得を承認した場合に使う。署名付きのフィード接続への同意を確認し、運用者が独立した既存の読み取り承認JSONに次を追加する。
+
+- `feed_format: "woocommerce-store-api-v1"` を指定する。承認URLを `/wp-json/wc/store/v1/products` または単一商品 `/wp-json/wc/store/v1/products/<id>` に固定する。同じHTTPS接続の制限でGETを1回行い、追加ページを自動取得しない。
+- `woo_products` に最大50件の承認済み商品を登録する。各行にWooCommerceの正の整数 `id`、`type`（`simple` または個別の `variation`）、`merchant_sku`、`manufacturer`、`part_number`、`gtin`、正確な `product_url`、配送先の `ships_to` を記載する。`condition` は確認できる場合に指定する。
+- WooCommerceが返したID、SKU、GTIN、商品URLが承認と一致した行を取り込み候補にする。GTINは数字列とチェック桁を検証する。一般的なSKU、名称、ブランドをそのままメーカー型番やGTINとして扱わない。未承認の商品は候補に入れない。
+
+価格はStore APIが返した通貨と最小通貨単位から十進文字列に変換する。価格幅がある親商品や、パスワードで保護された商品は受け付けない。在庫・取り寄せの欄が揃う範囲で状態を記録し、店舗の低在庫表示から数量を推定しない。応答でキャッシュ経過を取得でき、1時間を超える場合は拒否する。観測時刻は取得した時点で、店舗データそのものの更新時刻とは区別する。
+
+実行方法は既存の `gpd33_merchant_feed_fetch.mjs approval.json` と同じ。結果は公開前のプレビューで、公開リクエストの作成時にも承認済み識別子、製造元、リンク、配送先を照合する。 `node tests/gpd33_woocommerce_feed.mjs` は独立した承認、GTIN照合、GBPとJPY、在庫不明、改変時の拒否をモックで確認する。 [公式のPublic Store API](https://developer.woocommerce.com/docs/apis/store-api/) · [商品と価格属性](https://developer.woocommerce.com/docs/apis/store-api/resources-endpoints/products) · [公式の在庫状態欄](https://woocommerce.github.io/code-reference/files/woocommerce-src-storeapi-schemas-v1-productschema.html)
