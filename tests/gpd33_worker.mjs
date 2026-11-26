@@ -428,3 +428,7 @@ assert.equal((await call(directory)).status,503);
 const directorySpec=await (await call('/openapi.json')).json();
 assert.equal(directorySpec.paths['/v1/merchant/directory'].get.operationId,'listVerifiedMerchants');
 console.log('PASS Worker routes, MCP, x402, identification, variants, source fallback, DB recovery and subrequest budget');
+
+const revenueStatus=await (await call('/admin/revenue-status',{headers:{'x-refresh-key':'fixture-admin'}})).json();
+assert.equal(revenueStatus.settlement_event_evidence,'worker_telemetry');
+assert.equal(revenueStatus.reconciled_external_revenue_usdc,null);
