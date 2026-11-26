@@ -29,6 +29,19 @@
 
 公開検索の応答を読み取れなかったため、三つのチャネルは掲載の有無を判断できない。実行時の照会は検索だけで、掲載申請や支払いは発生していない。上段の公式MCP Registryの掲載結果と、第三者の履歴をそれぞれ独立した証拠として保持する。
 
+## 確認できた外部掲載
+
+2026-11-25の追加調査で、各ディレクトリ運営者の公開ページを照会した。GPDのホスト名またはGitHubの所有者とリポジトリ名が一致する追加ページは4件。公式MCP Registryを合わせると5チャネルで既存サービスの掲載を確認した。
+
+| ディレクトリ | 照合した識別子と掲載数 | 証拠の範囲 |
+|---|---|---|
+| VerifyMCP | GPDのホストとStreamable HTTPの `/mcp`。2026-11-25のスキャンで接続可、25ツール・0リソース。 | 運営者が公開した接続観測。最新の統合候補や有料ツールの実行は観測範囲外。 [公開スキャン](https://verifymcp.io/servers/mike05102-anime-intelligence-mcp/anime-intelligence) |
+| Glama MCP Connectors | `io.github.Mike05102/anime-intelligence-mcp` とGitHubリポジトリが一致。参照したスナップショットでは24ツール。 | ページに掲載されたヘルス確認日時は2026-11-07。アクセス数や登録数は未確認。 [公開コネクタ](https://glama.ai/mcp/connectors/io.github.Mike05102/anime-intelligence-mcp) |
+| PayAPI Market | GPDの完全なホスト名と6エンドポイント。 | 提供者による所有権確認が済んでいない掲載。運営者の記載では決済照合なし。ページ内のSolanaとBaseの表示は食い違うため、支払い条件はGPDの直接応答を正とする。 [公開サービスページ](https://payapi.market/api/global-purchase-decision-api) |
+| x402 Trust | GPDの完全なホスト名。掲載中のエンドポイント10件と掲載終了の履歴2件を表示。 | ソースごとの健康状態と価格のスナップショット。同じエンドポイントが別ディレクトリにも載るため、掲載数を合算して運用実績にしない。 [公開提供者プロファイル](https://x402-trust.com/provider/anime-intelligence.goodmy0312.workers.dev) |
+
+掲載件数は発見可能性の証拠。掲載の版、掲載ページが示すツール数・価格、実際の本番仕様は個別に照合する。買い手の登録、販売業者への引き渡し、成立・入金には、各工程の記録を使う。
+
 ## 確認の順序
 
 1. 外部公開・課金を伴わない範囲で、リリース候補のMCPとOpenAPI、402応答、Bazaarメタデータを検証する。

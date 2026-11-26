@@ -291,14 +291,15 @@ export async function testHandoffJourney(query, seller, offer) {
     assert.equal(dbCalls, countBefore, 'Invalid credentials must be rejected before querying Postgres');
     assert.equal((await (await readStatus(token)).json()).handoff_state, 'requested');
     const merchant = {'x-merchant-key':merchantKey};
-    const inbox = await (await request('/v1/merchant/handoffs?handoff_id='+handoff,merchant)).json();
+    const inboxPath=new URL(participation.merchant_workflow.handoff_inbox_url).pathname;
+    const inbox = await (await request(inboxPath+'?handoff_id='+handoff,merchant)).json();
     assert.equal(inbox.handoffs[0].destination,'JP');
     assert.equal(inbox.handoffs[0].expected_condition,'NEW');
     assert.ok(!JSON.stringify(inbox).includes(buyer));
     for (const state of ['accepted', 'order_reported', 'cancelled']) {
       const body = {handoff_id:handoff,event_id:randomUUID(),state};
       if (state !== 'accepted') body.order_reference = 'fixture-order';
-      const eventPath = '/v1/merchant/handoffs/events';
+      const eventPath=new URL(participation.merchant_workflow.signed_handoff_events_url).pathname;
       assert.equal((await request(eventPath,merchant,body)).status,401);
       const referenceHash = body.order_reference
         ? createHash('sha256').update('gpd33-order|' + seller + '|' + body.order_reference).digest('hex') : null;

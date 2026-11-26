@@ -5807,6 +5807,8 @@ a{color:inherit}.wrap{max-width:1120px;margin:auto;padding:0 22px}.nav{display:f
 <div class="cta"><a class="btn" href="/merchant/onboard">Start merchant onboarding</a><a class="btn secondary" href="/v1/merchant/search?part_number=E2E-X5ME1">See agent-ready search</a><a class="btn secondary" href="/v1/merchant/participation">Machine-readable participation guide</a></div></div>
 <div class="proof"><h3>What an AI agent can evaluate</h3><div class="metric"><span>Exact MPN identity</span><b>YES</b></div><div class="metric"><span>Price / stock / lead time</span><b>YES</b></div><div class="metric"><span>Ship-to coverage</span><b>YES</b></div><div class="metric"><span>Official documents / evidence</span><b>YES</b></div><div class="metric"><span>Merchant trust and readiness</span><b>YES</b></div><div class="metric"><span>Paid placement changes ranking</span><b>NO</b></div></div></section>
 
+<section class="section"><h2>How merchants can measure participation</h2><p class="lead">Publish an offer with an exact identifier, available stock and supported destinations to qualify for matching purchasing requests. After verification, use the merchant handoff inbox to reconcile accepted requests, reported orders and cancellations with your own order records. Track conversion and compare completed orders with the time spent maintaining your feed.</p></section>
+
 <section class="section"><h2>What you publish</h2><p class="lead">The goal is not another storefront. It is a clean machine-readable layer that lets purchasing agents understand exactly what you sell and whether the offer is safe and actionable.</p>
 <div class="cards"><div class="card"><div class="num">01</div><h3>Exact product identity</h3><p>Manufacturer, MPN, GTIN/JAN/EAN, merchant SKU and stable product URL.</p></div><div class="card"><div class="num">02</div><h3>Availability and fulfillment</h3><p>Price, currency, stock status, quantity, lead time, shipping regions and shipping cost.</p></div><div class="card"><div class="num">03</div><h3>Trust evidence</h3><p>Official datasheet, return policy, authorized-channel evidence and compatibility evidence.</p></div></div></section>
 
@@ -5831,6 +5833,13 @@ function gpd33MerchantParticipation(origin){
     supply:{method:"POST",url:origin+"/v1/merchant/offers/feed-import",
       auth_header:"x-merchant-key",requires_verified_merchant:true,max_offers:200,
       comparison_fields:["manufacturer","gtin_or_part_number","condition","currency","price","stock_status","stock_quantity","ships_to","product_url"]},
+    merchant_workflow:{
+      account_status_url:origin+"/v1/merchant/me",
+      handoff_inbox_url:origin+"/v1/merchant/handoffs",
+      signed_handoff_events_url:origin+"/v1/merchant/handoffs/events",
+      handoff_signals:["accepted","order_reported","cancelled"],
+      conversion_evidence:"compare_handoffs_with_merchant_order_ledger"
+    },
     buyer_preview:{merchant_directory_url:origin+"/v1/merchant/directory",
       offer_search_url:origin+"/v1/merchant/search",mcp_url:origin+"/mcp"}
   };
