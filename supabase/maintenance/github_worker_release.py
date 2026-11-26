@@ -129,5 +129,13 @@ for attempt in range(8):
 else:
     if current() == candidate:
         activate(previous)
-        raise SystemExit("Worker health check failed. Prior version reactivated.")
+        for attempt in range(8):
+            try:
+                if current() == previous:
+                    raise SystemExit("Worker health check failed. Restored prior deployment confirmed by Cloudflare.")
+            except RuntimeError:
+                pass
+            if attempt < 7:
+                time.sleep(8)
+        raise SystemExit("Worker health check failed. Cloudflare has not confirmed restoration of the prior deployment.")
     raise SystemExit("Worker health check failed and a different deployment is active.")
