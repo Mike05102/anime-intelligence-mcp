@@ -232,12 +232,17 @@ function reconcileRows(expectedRows,finalizedRows,environment) {
     matchedRefunds+=bucket.count;
     refundTotals.set(payment.asset,(refundTotals.get(payment.asset)||0n)+bucket.amount);
   }
+  const unresolvedRefunds=refunds.size-matchedRefunds;
+  const netFees=unresolvedRefunds===0
+    ? Object.fromEntries([...totals].sort().map(([asset,total])=>[asset,(total-(refundTotals.get(asset)||0n)).toString()]))
+    : null;
   return {
     scope:environment === 'test' ? 'test_only' : 'supplied_live_evidence_only',
     evidence:'independent_signed_finalized_solana',
     matched_information_fee_atomic:Object.fromEntries([...totals].sort().map(([asset,total]) => [asset,total.toString()])),
     matched_refund_atomic:Object.fromEntries([...refundTotals].sort().map(([asset,total])=>[asset,total.toString()])),
-    refund_transactions:{matched:matchedRefunds,unresolved:refunds.size-matchedRefunds},
+    net_matched_information_fee_atomic:netFees,
+    refund_transactions:{matched:matchedRefunds,unresolved:unresolvedRefunds},
     transactions:counts,excluded_test_records:excludedTestRecords,unbound_expected_records:unboundRecords
   };
 }

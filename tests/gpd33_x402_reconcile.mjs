@@ -53,7 +53,10 @@ const refundTransfer={...finalized,transaction_hash:refundHash,payer:payee,payee
 const paidAndRefunded=test.run([expected,refund,refund],[originalWithPayer,refundTransfer]);
 assert.deepEqual(paidAndRefunded.matched_refund_atomic,{[asset]:'30'});
 assert.deepEqual(paidAndRefunded.refund_transactions,{matched:1,unresolved:0});
-assert.equal(test.run([expected,refund],[originalWithPayer,{...refundTransfer,payer:buyer}]).refund_transactions.unresolved,1);
+assert.deepEqual(paidAndRefunded.net_matched_information_fee_atomic,{[asset]:'9007199254740963'});
+const unresolvedRefund=test.run([expected,refund],[originalWithPayer,{...refundTransfer,payer:buyer}]);
+assert.equal(unresolvedRefund.refund_transactions.unresolved,1);
+assert.equal(unresolvedRefund.net_matched_information_fee_atomic,null);
 const overAmount='9007199254740994';
 assert.deepEqual(test.run([expected,{...refund,amount_atomic:overAmount}],
   [originalWithPayer,{...refundTransfer,amount_atomic:overAmount}]).matched_refund_atomic,{});
