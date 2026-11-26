@@ -1249,8 +1249,12 @@ async function insertOfficialSeedBatch(env,payloads){
 
 async function massDiscoverGoodSmile(env,limit=20,options={}){
   const cal=await fetchGoodSmileCalendars();
-  const existing=await loadProductsByJans(env,cal.merged.map(x=>x.jan_code),true);
-  const existingJans=new Set(existing.map(x=>cleanJan(x.jan_code)).filter(Boolean));
+  const existingJans=new Set();
+  for(let offset=0;offset<cal.merged.length;offset+=100){
+    const batch=cal.merged.slice(offset,offset+100);
+    const rows=await loadProductsByJans(env,batch.map(x=>x.jan_code),true);
+    for(const row of rows)if(row.jan_code)existingJans.add(cleanJan(row.jan_code));
+  }
   const missing=cal.merged.filter(x=>!existingJans.has(x.jan_code));
   const inspect=Math.min(missing.length,Math.max(limit,limit*PIPELINE.massInspectMultiplier));
   const candidates=deterministicWindow(missing,inspect,options.timeMs||Date.now(),17);
@@ -1272,7 +1276,7 @@ async function massDiscoverGoodSmile(env,limit=20,options={}){
     japanese_calendar_records:cal.ja.length,
     english_calendar_records:cal.en.length,
     bilingual_jan_matches:cal.merged.filter(x=>x.name_ja&&x.name_en).length,
-    already_in_database:existing.length,
+    already_in_database:existingJans.size,
     missing_from_database:missing.length,
     deduplicated_by_jan:deduplicatedByJan,
     deduplicated_by_source_key:0,
