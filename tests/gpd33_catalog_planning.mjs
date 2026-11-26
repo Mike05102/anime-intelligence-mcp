@@ -24,10 +24,11 @@ export async function testCatalogPlanning(one) {
   assert.equal(gpd33SelectDomain(0,growth,{}, {[demandDomain]:{buyers:50,responsive_sellers:20}}),domains[0]);
   assert.equal(gpd33SelectDomain(24,growth,{}, {[demandDomain]:{buyers:2,responsive_sellers:1}}),demandDomain);
   assert.equal(gpd33SelectDomain(24,growth,{}, {[demandDomain]:{buyers:1,responsive_sellers:1}}),domains[0]);
-  const settledSignals={[demandDomain]:{confirmed_orders:2,reconciled_invoices:2}};
-  assert.equal(gpd33SelectDomain(0,growth,{}, {},settledSignals),domains[0]);
-  assert.equal(gpd33SelectDomain(24,growth,{}, {},settledSignals),demandDomain);
-  assert.equal(gpd33SelectDomain(24,growth,{}, {},{[demandDomain]:{confirmed_orders:50,reconciled_invoices:0}}),domains[0]);
+  const orderQualitySignals={[demandDomain]:{confirmed_orders:2,reconciled_invoices:0}};
+  assert.equal(gpd33SelectDomain(0,growth,{}, {},orderQualitySignals),domains[0]);
+  assert.equal(gpd33SelectDomain(24,growth,{}, {},orderQualitySignals),demandDomain);
+  assert.equal(gpd33SelectDomain(24,growth,{}, {},{[demandDomain]:{confirmed_orders:50,reconciled_invoices:0}}),demandDomain);
+  assert.equal(gpd33SelectDomain(24,growth,{}, {},{[demandDomain]:{confirmed_orders:0,reconciled_invoices:10}}),domains[0]);
   const now = Date.parse('2026-11-25T05:00:00Z');
   const query = ['pasta','coffee'];
   const freshHistory = {'food_grocery:pasta':{new:9,calls:1,last_at:'2026-11-25T04:59:00Z'}};
@@ -42,7 +43,7 @@ export async function testCatalogPlanning(one) {
     const url = new URL(input);
     calls.push(url);
     if(url.pathname.endsWith('/rpc/gpd33_catalog_planning_reconciled')){
-      return Response.json({efficiency:{},reconciled_transaction_signals:settledSignals});
+      return Response.json({efficiency:{},reconciled_transaction_signals:orderQualitySignals});
     }
     if(url.pathname.endsWith('/rpc/gpd33_catalog_planning')) {
       return rpcAvailable ? Response.json(planning) : Response.json({message:'unavailable'},{status:503});

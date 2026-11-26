@@ -72,6 +72,11 @@ assert.equal(api.gpd33MarketRows('food_grocery',[offer,{...offer,provider:'yahoo
 assert.equal(api.gpd33MarketRows('parts',[offer,{...offer,provider:'yahoo_japan'}],'2026-11-25').length,0);
 assert.equal(new Set(Array.from({length:24},(_,i)=>api.gpd33SelectDomain(i,{}))).size,24);
 assert.equal(api.gpd33SelectDomain(24,{food_grocery:{remaining:10000},general_commerce:{remaining:100}}),'food_grocery');
+const orderQualityCoverage={food_grocery:{remaining:9000},consumer_electronics:{remaining:10000}};
+assert.equal(api.gpd33SelectDomain(24,orderQualityCoverage,{}, {},
+  {food_grocery:{confirmed_orders:10,reconciled_invoices:0}}),'food_grocery');
+assert.equal(api.gpd33SelectDomain(24,orderQualityCoverage,{}, {},
+  {food_grocery:{confirmed_orders:0,reconciled_invoices:10}}),'consumer_electronics');
 
 const requests=[];
 assert.equal(api.gpd33MarketRows('food_grocery',[{...offer,_catalogDetail:{

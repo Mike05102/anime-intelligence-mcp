@@ -49,27 +49,39 @@ export async function readGpd33EvidenceRegistry(registryFile) {
   return (await readBoundedJson(registryFile,maxRegistryBytes)).data;
 }
 
-export async function acquireGpd33Snapshot(directory, registryFile, expectedSnapshotId) {
-  if (typeof expectedSnapshotId !== 'string' || !snapshotId.test(expectedSnapshotId)) {
-    throw new Error('Expected snapshot UUID is required');
+async function readStagedEvidence(directory,trust,{roles,privateFiles=false}={}) {
+  const owner=await lstat(directory);
+  if (!owner.isDirectory() || (privateFiles && (owner.uid!==process.getuid() || (owner.mode & 0o077)))) {
+    throw new Error('Evidence path must be an approved staging directory');
   }
-  if (!(await lstat(directory)).isDirectory()) throw new Error('Evidence path must be a staging directory');
-  const trust = await readGpd33EvidenceRegistry(registryFile);
-  const issuers = Object.keys(trust?.issuers ?? {});
+  const issuers = Object.entries(trust?.issuers ?? {}).filter(([,issuer]) => !roles || roles.includes(issuer?.role))
+    .map(([name]) => name);
   if (!issuers.length || issuers.length > 64 || !issuers.every(name => issuerName.test(name))) {
     throw new Error('Invalid evidence issuer names');
   }
   const envelopes = [];
   let remainingBytes = maxSnapshotBytes;
-  // Read only files named by the independently configured trust registry.
   for (const issuer of issuers) {
     const file = join(directory,issuer + '.json');
-    const {size,data} = await readBoundedJson(file,Math.min(remainingBytes,maxEnvelopeBytes));
+    const {size,data} = await readBoundedJson(file,Math.min(remainingBytes,maxEnvelopeBytes),{privateFile:privateFiles});
     if (data?.issuer !== issuer) throw new Error('Evidence file does not match its configured issuer');
     remainingBytes -= size;
     envelopes.push(data);
   }
-  const report = reconcileSignedGpd33Evidence({schema_version:1,environment:trust.environment,envelopes},trust);
+  return {schema_version:1,environment:trust.environment,envelopes};
+}
+
+export async function readStagedGpd33OrderQualityBundle(directory,trust) {
+  return readStagedEvidence(directory,trust,{roles:['handoffs','orders'],privateFiles:true});
+}
+
+export async function acquireGpd33Snapshot(directory, registryFile, expectedSnapshotId) {
+  if (typeof expectedSnapshotId !== 'string' || !snapshotId.test(expectedSnapshotId)) {
+    throw new Error('Expected snapshot UUID is required');
+  }
+  const trust = await readGpd33EvidenceRegistry(registryFile);
+  // Read only files named by the independently configured trust registry.
+  const report = reconcileSignedGpd33Evidence(await readStagedEvidence(directory,trust),trust);
   if (report.snapshot_id !== expectedSnapshotId) throw new Error('Evidence does not match the requested snapshot');
   return report;
 }

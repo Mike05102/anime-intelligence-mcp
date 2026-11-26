@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {createHash, generateKeyPairSync, sign} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,open,readFile,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {prepareGpd33GrowthEvidence} from '../scripts/gpd33_apply_growth_evidence.mjs';
 import {exportGpd33CompletedDomainSignal} from '../scripts/gpd33_reconcile_domain_signal.mjs';
 
@@ -12,14 +16,15 @@ const contexts = {
   handoffs:'gpd33-handoffs-v1', orders:'gpd33-external-order-ledger-v1',
   fees:'gpd33-agreed-fees-v1', receipts:'gpd33-finalized-settlement-v1'
 };
-function exporter(environment) {
-  const keys = Object.fromEntries(Object.keys(contexts).map(role => [role,generateKeyPairSync('ed25519')]));
+function exporter(environment,roles=Object.keys(contexts)) {
+  const keys = Object.fromEntries(roles.map(role => [role,generateKeyPairSync('ed25519')]));
   const trust = {schema_version:1,environment,issuers:Object.fromEntries(Object.entries(keys).map(([role,key]) => [
     role,{role,merchant_ids:[merchant],networks:['solana:fixture'],
       public_key:Buffer.from(key.publicKey.export({format:'jwk'}).x,'base64url').toString('hex')}
   ]))};
   return (orders, expected = snapshot, mockNow = now, handle = exportGpd33CompletedDomainSignal) => {
-    const envelopes = Object.entries(contexts).map(([issuer,context]) => {
+    const envelopes = roles.map(issuer => {
+      const context=contexts[issuer];
       const payload = Buffer.from(JSON.stringify({context,issuer,environment,snapshot_id:snapshot,observed_at:timestamp,
         rows:orders.flatMap(order => order[issuer]).map(row => ({...row,environment}))}));
       return {issuer,payload:payload.toString('base64url'),
@@ -72,18 +77,52 @@ const signal = testSignal([...all,duplicate,older,future,noClassification,confli
   outsideTaxonomy,externalOnly,contestedTime]);
 assert.deepEqual(signal,{
   schema:'gpd33-completed-domain-signal-v1', environment:'test', snapshot_id:snapshot, observed_at:timestamp,
-  counts_by_domain:{home_living:{confirmed_orders:10,reconciled_invoices:10}}
+  counts_by_domain:{food_grocery:{confirmed_orders:1,reconciled_invoices:0},home_living:{confirmed_orders:10,reconciled_invoices:0}}
 });
-assert.deepEqual(testSignal([all[0],duplicate]).counts_by_domain,{home_living:{confirmed_orders:1,reconciled_invoices:1}});
+assert.deepEqual(testSignal([all[0],duplicate]).counts_by_domain,{home_living:{confirmed_orders:1,reconciled_invoices:0}});
 assert.match(JSON.stringify(signal),/^((?!fixture_).)*$/);
 assert.throws(() => testSignal(all,merchant), /snapshot does not match/);
 assert.throws(() => liveSignalFixture(all,snapshot,() => (timestamp+86401)*1000), /outside the accepted time window/);
 assert.equal(liveSignalFixture([],snapshot,now).environment,'live');
 
-const applyFixture=(replayed)=>liveSignalFixture([all[0]],snapshot,now,(bundle,trust,expected,options)=>
+const orderOnlyFixture = exporter('test',['handoffs','orders']);
+assert.deepEqual(orderOnlyFixture([all[0]]).counts_by_domain,{home_living:{confirmed_orders:1,reconciled_invoices:0}});
+assert.deepEqual(orderOnlyFixture([cancellation]).counts_by_domain,{});
+const conflictingInvoices = structuredClone(all[0]);
+conflictingInvoices.fees.push({...conflictingInvoices.fees[0],invoice_id:'unrelated_invoice'});
+assert.deepEqual(testSignal([conflictingInvoices]).counts_by_domain,orderOnlyFixture([all[0]]).counts_by_domain);
+
+const liveOrderOnlyFixture = exporter('live',['handoffs','orders']);
+await orderOnlyFixture([all[0]],snapshot,now,async (bundle,trust,expected) => {
+  const staging=await mkdtemp(join(tmpdir(),'gpd-order-quality-'));
+  try {
+    const trustFile=join(staging,'trust.json');
+    await writeFile(trustFile,JSON.stringify(trust),{mode:0o600});
+    for (const envelope of bundle.envelopes) {
+      await writeFile(join(staging,envelope.issuer+'.json'),JSON.stringify(envelope),{mode:0o600});
+    }
+    const command=fileURLToPath(new URL('../scripts/gpd33_apply_growth_evidence.mjs',import.meta.url));
+    const stdoutPath=join(staging,'preview.json');
+    const stdout=await open(stdoutPath,'wx',0o600);
+    let run;
+    try {
+      run=spawnSync(process.execPath,[command,'--staged',staging,trustFile,expected],
+        {env:{},stdio:['ignore',stdout.fd,'inherit'],timeout:5000});
+    } finally{
+      await stdout.close();
+    }
+    assert.equal(run.status,0,run.error?.message);
+    assert.deepEqual(JSON.parse(await readFile(stdoutPath,'utf8')),{status:'preview',environment:'test',
+      domain_counts:{home_living:{confirmed_orders:1,reconciled_invoices:0}}});
+  }finally{
+    await rm(staging,{recursive:true,force:true});
+  }
+});
+
+const applyFixture=(replayed)=>liveOrderOnlyFixture([all[0]],snapshot,now,(bundle,trust,expected,options)=>
   prepareGpd33GrowthEvidence(bundle,trust,expected,{...options,apply:true,ingest:async(payload)=>{
     assert.deepEqual(payload,{snapshot_id:snapshot,observed_at:timestamp,environment:'live',
-      domain_counts:{home_living:{confirmed_orders:1,reconciled_invoices:1}}});
+      domain_counts:{home_living:{confirmed_orders:1,reconciled_invoices:0}}});
     return {ok:true,replayed};
   }}));
 assert.equal((await applyFixture(false)).status,'applied');

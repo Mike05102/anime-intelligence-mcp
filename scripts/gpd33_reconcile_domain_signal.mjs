@@ -2,7 +2,7 @@ import {pathToFileURL} from 'node:url';
 import {reconcileGpd33Evidence} from './gpd33_reconcile.mjs';
 import {readGpd33EvidenceBundle, readGpd33EvidenceRegistry} from './gpd33_reconcile_acquire.mjs';
 import {assertFreshHttpsGpd33Evidence} from './gpd33_reconcile_https.mjs';
-import {authenticateGpd33EvidenceSnapshot} from './gpd33_reconcile_signed.mjs';
+import {authenticateGpd33OrderQualitySnapshot} from './gpd33_reconcile_signed.mjs';
 
 // The release is a single-file Worker. Tests check this allowlist against its taxonomy.
 const genericDomains = new Set([
@@ -29,7 +29,7 @@ export function exportGpd33CompletedDomainSignal(bundle,trust,expectedSnapshotId
   if (typeof expectedSnapshotId !== 'string' || !uuid.test(expectedSnapshotId)) {
     throw new Error('Expected domain-signal snapshot UUID is required');
   }
-  const {input,metadata}=authenticateGpd33EvidenceSnapshot(bundle,trust);
+  const {input,metadata}=authenticateGpd33OrderQualitySnapshot(bundle,trust);
   if (metadata.snapshot_id !== expectedSnapshotId) throw new Error('Domain-signal snapshot does not match');
   if (input.environment === 'live') assertFreshHttpsGpd33Evidence(metadata.observed_at,now);
 
@@ -42,8 +42,10 @@ export function exportGpd33CompletedDomainSignal(bundle,trust,expectedSnapshotId
       ? row.confirmed_at : null
   );
   const counts = new Map();
-  for (const result of reconcileGpd33Evidence(input).results) {
-    if (result.order !== 'confirmed' || result.brokerage_fee !== 'matched') continue;
+  // Seller invoices and transfers cannot decide which product categories GPD explores.
+  const orderEvidence = {...input,fees:[],receipts:[]};
+  for (const result of reconcileGpd33Evidence(orderEvidence).results) {
+    if (result.order !== 'confirmed') continue;
     const domains = handoffs.get(result.handoff_id);
     const times = orderTimes.get(result.handoff_id);
     if (domains?.size !== 1 || domains.has(null) || times?.size !== 1 || times.has(null)) continue;
@@ -55,7 +57,7 @@ export function exportGpd33CompletedDomainSignal(bundle,trust,expectedSnapshotId
     environment:input.environment,
     ...metadata,
     counts_by_domain:Object.fromEntries([...counts].sort(([a],[b]) => a.localeCompare(b))
-      .map(([domain,count]) => [domain,{confirmed_orders:count,reconciled_invoices:count}]))
+      .map(([domain,count]) => [domain,{confirmed_orders:count,reconciled_invoices:0}]))
   };
 }
 

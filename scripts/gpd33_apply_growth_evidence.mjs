@@ -1,6 +1,6 @@
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-import {readBoundedJson, readGpd33EvidenceRegistry} from './gpd33_reconcile_acquire.mjs';
+import {readGpd33EvidenceBundle, readGpd33EvidenceRegistry, readStagedGpd33OrderQualityBundle} from './gpd33_reconcile_acquire.mjs';
 import {exportGpd33CompletedDomainSignal} from './gpd33_reconcile_domain_signal.mjs';
 
 export async function prepareGpd33GrowthEvidence(bundle, trust, expectedSnapshotId, {
@@ -51,14 +51,16 @@ function ingestWithPsql(payload,env){
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   try{
-    const [bundleFile,trustFile,snapshot,mode]=process.argv.slice(2);
+    const args=process.argv.slice(2);
+    const staged=args[0]==='--staged';
+    const inputs=staged?args.slice(1):args;
+    const [evidencePath,trustFile,snapshot,mode]=inputs;
     const apply=mode==='--apply';
-    if(!snapshot||(mode!==undefined&&(!apply||process.env.GPD_GROWTH_APPLY!=='1'))||process.argv.length>6){
+    if(!snapshot||(mode!==undefined&&(!apply||process.env.GPD_GROWTH_APPLY!=='1'))||inputs.length>4){
       throw new Error('Invalid growth signal invocation');
     }
-    const [{data:bundle},trust]=await Promise.all([
-      readBoundedJson(bundleFile,32*1024*1024),readGpd33EvidenceRegistry(trustFile)
-    ]);
+    const trust=await readGpd33EvidenceRegistry(trustFile);
+    const bundle=staged?await readStagedGpd33OrderQualityBundle(evidencePath,trust):await readGpd33EvidenceBundle(evidencePath);
     const result=await prepareGpd33GrowthEvidence(bundle,trust,snapshot,
       {apply,ingest:payload=>ingestWithPsql(payload,process.env)});
     process.stdout.write(JSON.stringify(result)+'\n');

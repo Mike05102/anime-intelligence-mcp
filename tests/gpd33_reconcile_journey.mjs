@@ -58,11 +58,14 @@ export async function assertReconciliationFromHandoff(query, handoffId) {
     fees:[fee], receipts:state === 'confirmed' ? [receipt,receipt] : [receipt,refund]};
   const {bundle,trust,snapshot}=await sealedFixture(input,persisted.merchant_id,fee.network,query);
   const report=reconcileSignedGpd33Evidence(bundle,trust);
-  const growth=await prepareGpd33GrowthEvidence(bundle,trust,snapshot);
+  const orderIssuers={orders:trust.issuers.orders,handoffs:trust.issuers.handoffs};
+  const orderBundle={...bundle,envelopes:bundle.envelopes.filter(envelope=>Object.hasOwn(orderIssuers,envelope.issuer))};
+  const orderTrust={...trust,issuers:orderIssuers};
+  const growth=await prepareGpd33GrowthEvidence(orderBundle,orderTrust,snapshot);
   assert.equal(growth.status,'preview');
   assert.deepEqual(growth.domain_counts,state==='confirmed'
-    ?{food_grocery:{confirmed_orders:1,reconciled_invoices:1}}:{});
-  await assert.rejects(prepareGpd33GrowthEvidence(bundle,trust,snapshot,{
+    ?{food_grocery:{confirmed_orders:1,reconciled_invoices:0}}:{});
+  await assert.rejects(prepareGpd33GrowthEvidence(orderBundle,orderTrust,snapshot,{
     apply:true,ingest:async()=>assert.fail('Test evidence must never reach the ingest adapter')
   }),/Live signed evidence/);
   assert.equal(report.evidence,'signed_pinned_sources');

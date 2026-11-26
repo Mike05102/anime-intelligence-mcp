@@ -44,11 +44,13 @@ const loadRows = async authorized => {
 };
 const exported = await exportGpd33SignedHandoffEvidence(orders,trust,'handoffs',snapshot,key,{loadRows});
 assert.deepEqual(await exportGpd33SignedHandoffEvidence(orders,trust,'handoffs',snapshot,key,{loadRows}),exported);
-assert.equal(calls,2);
+const minimalTrust={...trust,issuers:{orders:trust.issuers.orders,handoffs:trust.issuers.handoffs}};
+assert.deepEqual(await exportGpd33SignedHandoffEvidence(orders,minimalTrust,'handoffs',snapshot,key,{loadRows}),exported);
+assert.equal(calls,3);
 assert.doesNotMatch(Buffer.from(exported.payload,'base64url').toString(), /private_field|fixture_orders/);
 const bundle = {...orders,envelopes:[exported,...orders.envelopes,issuerEnvelope('fees',[fee]),issuerEnvelope('receipts',[receipt])]};
 const aggregate = exportGpd33CompletedDomainSignal(bundle,trust,snapshot);
-assert.deepEqual(aggregate.counts_by_domain,{tools_hardware:{confirmed_orders:1,reconciled_invoices:1}});
+assert.deepEqual(aggregate.counts_by_domain,{tools_hardware:{confirmed_orders:1,reconciled_invoices:0}});
 assert.equal(aggregate.environment,'test');
 
 const forged = {...orders,envelopes:[{...orders.envelopes[0],signature:'a'.repeat(86)}]};
@@ -65,7 +67,7 @@ await assert.rejects(exportGpd33SignedHandoffEvidence(tooMany,trust,'handoffs',s
 const foreign = async () => ({ok:true,rows:[{...fixtureBinding,merchant_id:handoff,state:'order_reported',
   product_domain:'tools_hardware',catalog_identity:'verified_canonical'}]});
 await assert.rejects(exportGpd33SignedHandoffEvidence(orders,trust,'handoffs',snapshot,key,{loadRows:foreign}), /outside authorized/);
-assert.equal(calls,2,'Invalid bindings or keys never reach the trusted read-only loader');
+assert.equal(calls,3,'Invalid bindings or keys never reach the trusted read-only loader');
 
 const temp = await mkdtemp(join(tmpdir(),'gpd-handoff-export-'));
 try{

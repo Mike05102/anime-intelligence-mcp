@@ -4,6 +4,7 @@ import {pathToFileURL} from 'node:url';
 import {reconcileGpd33Evidence} from './gpd33_reconcile.mjs';
 
 const roles = ['handoffs', 'orders', 'fees', 'receipts'];
+const orderQualityRoles = ['handoffs', 'orders'];
 const contexts = {
   handoffs: 'gpd33-handoffs-v1',
   orders: 'gpd33-external-order-ledger-v1',
@@ -27,7 +28,7 @@ function bytes(value, max) {
   return decoded;
 }
 
-export function validateGpd33EvidenceRegistry(trust, environment) {
+function validateEvidenceRegistry(trust,environment,requiredRoles) {
   if (!trust || trust.schema_version !== 1 || trust.environment !== environment ||
     !trust.issuers || typeof trust.issuers !== 'object') {
     throw new Error('Environment trust policy is missing');
@@ -53,10 +54,14 @@ export function validateGpd33EvidenceRegistry(trust, environment) {
       throw new Error('Settlement issuer scope is missing');
     }
   }
-  if (authorities.size > 64 || !roles.every(role => [...authorities.values()].some(authority => authority.role === role))) {
+  if (authorities.size > 64 || !requiredRoles.every(role => [...authorities.values()].some(authority => authority.role === role))) {
     throw new Error('Required evidence authority is missing');
   }
   return authorities;
+}
+
+export function validateGpd33EvidenceRegistry(trust,environment) {
+  return validateEvidenceRegistry(trust,environment,roles);
 }
 
 function decodeSnapshot(envelope, issuer, authority, environment) {
@@ -109,15 +114,15 @@ function normalizeRows(rows, authority) {
  * Authenticate a complete snapshot against a registry supplied independently by the operator.
  * Returned rows contain private evidence and are for local reconciliation only.
  */
-function authenticateEvidenceSnapshot(bundle, trust, onlyRole) {
+function authenticateEvidenceSnapshot(bundle,trust,{
+  registryRoles=roles,requiredRoles=registryRoles,allowedRoles=registryRoles
+}={}) {
   if (!bundle || bundle.schema_version !== 1 || !['test','live'].includes(bundle.environment) ||
     !Array.isArray(bundle.envelopes) || !bundle.envelopes.length || bundle.envelopes.length > 64) {
     throw new Error('Invalid signed evidence bundle');
   }
-  const configured = validateGpd33EvidenceRegistry(trust,bundle.environment);
-  const authorities = onlyRole === undefined ? configured : new Map(
-    [...configured].filter(([,authority]) => authority.role === onlyRole)
-  );
+  const configured = validateEvidenceRegistry(trust,bundle.environment,registryRoles);
+  const authorities = new Map([...configured].filter(([,authority]) => allowedRoles.includes(authority.role)));
   const input = {schema_version:1,environment:bundle.environment,handoffs:[],orders:[],fees:[],receipts:[]};
   const includedIssuers = new Set();
   let metadata;
@@ -138,7 +143,7 @@ function authenticateEvidenceSnapshot(bundle, trust, onlyRole) {
 
   // Require every pinned authority so dropping an issuer's envelope cannot silently remove conflicting
   // records or refunds. A trusted source with no records must sign an explicit empty array.
-  if (includedIssuers.size !== authorities.size) {
+  if ([...authorities].some(([issuer,authority]) => requiredRoles.includes(authority.role) && !includedIssuers.has(issuer))) {
     throw new Error('Required evidence issuer is missing');
   }
   return {input,metadata};
@@ -149,8 +154,16 @@ export function authenticateGpd33EvidenceSnapshot(bundle,trust) {
 }
 
 export function authenticateGpd33OrderEvidenceSnapshot(bundle,trust) {
-  const {input,metadata} = authenticateEvidenceSnapshot(bundle,trust,'orders');
+  const {input,metadata} = authenticateEvidenceSnapshot(bundle,trust,{
+    registryRoles:orderQualityRoles,requiredRoles:['orders'],allowedRoles:['orders']
+  });
   return {environment:input.environment,rows:input.orders,metadata};
+}
+
+export function authenticateGpd33OrderQualitySnapshot(bundle,trust) {
+  return authenticateEvidenceSnapshot(bundle,trust,{
+    registryRoles:orderQualityRoles,allowedRoles:roles
+  });
 }
 
 export function reconcileSignedGpd33Evidence(bundle, trust) {

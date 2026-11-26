@@ -7008,7 +7008,7 @@ function gpd33CoverageTotals(coverage){
     new_24h:rows.reduce((sum,row)=>sum+row.new_24h,0),new_7d:rows.reduce((sum,row)=>sum+row.new_7d,0),
     attainment_percent:Math.round(canonical/target*10000)/100};
 }
-function gpd33SelectDomain(slot,coverage,efficiency={},accountSignals={},settlements={}){
+function gpd33SelectDomain(slot,coverage,efficiency={},accountSignals={},orderQuality={}){
   const domains=UNIVERSAL_GENERIC_DOMAINS;
   const baseline=domains[slot%domains.length];
   // Every first cycle of a two-cycle block serves all 24 domains.
@@ -7019,9 +7019,8 @@ function gpd33SelectDomain(slot,coverage,efficiency={},accountSignals={},settlem
     if(!data)continue;
     const buyers=Number(accountSignals[d]?.buyers)||0,sellers=Number(accountSignals[d]?.responsive_sellers)||0;
     const demand=buyers>=2?Math.min(0.25,0.025*buyers+0.025*sellers):0;
-    const confirmed=Number(settlements[d]?.confirmed_orders)||0;
-    const reconciled=Number(settlements[d]?.reconciled_invoices)||0;
-    const commerce=Math.min(0.15,0.03*Math.max(0,Math.min(confirmed,reconciled)));
+    const confirmed=Number(orderQuality[d]?.confirmed_orders)||0;
+    const commerce=Math.min(0.15,0.03*Math.max(0,confirmed));
     const score=data.remaining/UNIVERSAL_GENERIC_DOMAIN_TARGET*
       (1+Math.min(1,(efficiency[d]?.new||0)/(5+Number(efficiency[d]?.runs||0)))+demand+commerce);
     if(score>best){best=score;domain=d;}
