@@ -110,3 +110,9 @@ BnFが作成する書誌メタデータの Etalab 2.0 は、出典と最終更�
 | Best Buy Products API | 米国小売事業者が価格・可用性・仕様を含む過去と現在の製品情報を案内。現行キーが必要で、契約は原則72時間を超えるコンテンツキャッシュおよび無許可の第三者アクセスを制限する。 | GPDの永続カタログや第三者向け再提供の経路として数えない。契約と権限が適合する場合のみ、販売条件の短期表示候補。過去の商品も含むため、API上の商品数を販売中件数に変換しない。 [公式Products API](https://developer.bestbuy.com/apis) · [API利用条件](https://developer.bestbuy.com/legal) |
 
 取得が許されている公式WooCommerce文書の `GET /products/:id` 応答例1件を確認した。SKU、GBP価格、`is_purchasable`、`is_in_stock` を含むが、`global_unique_id` は空欄。これは公式の形式例であり、実店舗の在庫、実取引対応、カタログ登録件数の証拠から外す。今回確認した実店舗の商品行は0件、本番接続は0件。 [公式の単一商品応答例](https://developer.woocommerce.com/docs/apis/store-api/resources-endpoints/products#single-product-by-id)
+
+## 台湾の電鍋モデル登録データ
+
+台湾経済部能源署のデータセット145129は、電鍋の登録会社名、型番、熱効率、等級、承認日を公開する。公開ページ記載の利用料は無料で、Open Government Data License v1.0の出典表示が必要。2026-11-26 UTCに公式CSVリンクから取得したUTF-8 BOM付き74,838バイトを検証した。1,174行、重複なしの登録会社名・型番1,174組、登録会社名109件。SHA-256は `c2a6b2957f889ab7eb3c16e35e67c6ff8cb63e850aa3d6b96442e595d373e1d7`。 [公式データセットとCSV](https://data.gov.tw/en/datasets/145129) · [利用条件](https://data.gov.tw/en/license)
+
+`python3 scripts/gpd33_tw_cooker_audit.py <公式CSVの保存先>` で上限256 KiBの読み取り専用プレビューを再現できる。台湾向け家電の型番照合候補として、公開サンプル確認済み情報源に1件追加する。GTIN、販売者、価格、在庫、配送の列はない。登録会社名は既存200社と名寄せしておらず、販売業者候補や購入可能商品の件数には加算しない。
