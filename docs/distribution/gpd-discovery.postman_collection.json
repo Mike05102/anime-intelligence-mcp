@@ -1,0 +1,34 @@
+{
+  "info": {
+    "name": "Global Purchase Decision · Discovery and free search",
+    "description": "Discover GPD's public interface and try a product search without payment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": { "type": "noauth" },
+  "variable": [
+    { "key": "baseUrl", "value": "https://anime-intelligence.goodmy0312.workers.dev" }
+  ],
+  "item": [
+    {
+      "name": "Discover the agent API",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/.well-known/agent.json"
+      }
+    },
+    {
+      "name": "Try free product search",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/v1/search?query=Hatsune%20Miku"
+      }
+    },
+    {
+      "name": "Read the OpenAPI specification",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/openapi.json"
+      }
+    }
+  ]
+}

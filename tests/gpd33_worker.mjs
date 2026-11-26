@@ -181,6 +181,19 @@ const trial=await call(buyerDiscovery.free_search.url.replace(origin,''));
 assert.equal(trial.status,200);
 assert.equal(trial.headers.has('payment-required'),false);
 assert.equal(buyerDiscovery.paid_decision.payment_protocol,'x402');
+const collection=JSON.parse(await readFile(
+  new URL('../docs/distribution/gpd-discovery.postman_collection.json',import.meta.url),'utf8'));
+const collectionOrigin=collection.variable.find(variable=>variable.key==='baseUrl').value;
+assert.equal(collectionOrigin,'https://anime-intelligence.goodmy0312.workers.dev');
+assert.equal(collection.auth.type,'noauth');
+assert.deepEqual(collection.item.map(({request})=>request.url.replace('{{baseUrl}}',origin)),
+  [origin+'/.well-known/agent.json',buyerDiscovery.free_search.url,buyerDiscovery.openapi]);
+for(const {request} of collection.item){
+  assert.equal(request.method,'GET');
+  const response=await call(request.url.replace('{{baseUrl}}',''));
+  assert.equal(response.status,200);
+  assert.equal(response.headers.has('payment-required'),false);
+}
 const mockPaymentChallenge=await call(buyerDiscovery.paid_decision.url.replace(origin,''));
 const accepted=JSON.parse(Buffer.from(mockPaymentChallenge.headers.get('payment-required'),'base64')).accepts[0];
 const signedPayment=new Request(origin+'/v1/purchase-decision',{

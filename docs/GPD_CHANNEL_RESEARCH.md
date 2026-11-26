@@ -92,10 +92,10 @@ Coinbase Bazaarの公式資料を再確認した。カタログAPIはファシ�
 
 | 経路 | 無料条件・提出・自動化 | GPD掲載 |
 |---|---|---|
-| Postman API Network（既出） | Freeプランでも公開ワークスペースにコレクションを置いて発見可能にできる。同プランはチーム1名まで。対象は公開コレクション。アカウント作成と初回公開の自動化は未確認。 [公開手順](https://learning.postman.com/docs/publishing-your-api/publishing-your-docs/) · [Freeプラン](https://learning.postman.com/docs/administration/free-and-solo) | 未確認 |
+| Postman API Network（既出） | Freeプランでも公開ワークスペースにコレクションを置いて発見可能にできる。同プランはチーム1名まで。公開用コレクションを作成し、Postman v2.1スキーマと隔離Workerで認証なし・HTTP 200・決済要求なしの3リクエストを検証した。アカウント作成と初回公開の自動化は未確認。 [公開用コレクション](distribution/gpd-discovery.postman_collection.json) [公開手順](https://learning.postman.com/docs/publishing-your-api/publishing-your-docs/) · [Freeプラン](https://learning.postman.com/docs/administration/free-and-solo) | 未確認 |
 | APIs.guru OpenAPI Directory（新規） | 公開され、継続利用できるAPIの機械可読仕様をWebフォームで申請。仕様の更新処理は自動。フォーム申請の費用の明記と自動提出APIは未確認。 [投稿条件](https://github.com/APIs-guru/openapi-directory/blob/main/CONTRIBUTING.md) | 公開索引の照会は4 MBの取得上限に達したため未確認。 |
 
-累計は調査24経路、無償条件確認5件、登録準備1件、既存掲載確認10件。Postmanの無償条件は公式仕様による確認で、アカウント登録と提出は行っていない。
+累計は調査24経路、無償条件確認5件、登録準備2件、既存掲載確認10件。Postmanの無償条件は公式仕様による確認で、アカウント登録と提出は行っていない。
 
 ## 確認の順序
 

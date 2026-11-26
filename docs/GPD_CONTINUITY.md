@@ -174,3 +174,9 @@ PluginBenchで公式登録名とGPDの接続先が一致する旧版の掲載を
 既存の本番保守ワークフロー履歴では直近実行の失敗箇所が入力・接続確認だった。監視側の最後のDB容量・商品数・回収量を引き継ぎ、今回は新規実測と物理回収を行っていない。 [保守ジョブの履歴](https://github.com/Mike05102/anime-intelligence-mcp/actions/runs/45583899566)
 
 隔離PostgreSQL 17で通常テーブル化した24万商品・期限付き販売条件2,400件・保持イベント20,118件を、停止済みクラスタの圧縮物理アーカイブから復元した。アーカイブは141,447,935バイト。6表の全行ダイジェスト、索引、制約、イベント表のRLS・権限と次回採番が一致した。再実行は `GPD33_PG_MODULE=/path/to/pg/lib/index.js node scripts/gpd33_catalog_capacity.mjs /path/to/postgres/bin --demand-only --archive-restore`。これは合成データのローカル試験。本番の保持量、アーカイブ転送、物理領域と本番移行の適合性は監視計測が必要。 [容量と復元手順](GPD_CATALOG_CAPACITY.md)
+
+## 無料試用の配布準備と商品フィード
+
+掲載経路は累計24件、無償条件確認5件、登録準備2件、既存掲載10件。Postman用の無料試用コレクションを公式v2.1スキーマと隔離Workerで検証した。外部公開の承認後、公開ワークスペースへ取り込む。APIs.guruの公開索引は取得サイズ上限に達したため、掲載照合を保留した。 [掲載経路台帳](GPD_CHANNEL_RESEARCH.md)
+
+WooCommerceとPrestaShopの公式仕様を確認し、接続許諾が必要な候補として記録した。Best Buyは保持・再提供の制約から永続カタログ候補に含めない。公開サンプル確認済み情報源3件とメーカー候補200件を引き継いだ。 [商品情報源台帳](GPD_SOURCE_RESEARCH.md)
