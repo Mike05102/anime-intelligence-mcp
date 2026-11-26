@@ -1387,11 +1387,13 @@ async function saveOfficialProduct(env,connector,url,parsed){
   const invalid=invalidOfficialProductPage(connector,url,parsed);
   if(invalid)throw new Error(`Rejected non-product official page: ${invalid}`);
   const jan=cleanJan(parsed.jan_code);
-  let existing=[];
-  if(jan)existing=await loadProductsByJans(env,[jan]);
-  if(!existing.length){
-    existing=await sbOptional(env,`/products?select=*&official_url=eq.${encodeURIComponent(canonicalOfficialUrl(url))}&limit=2`)||[];
-  }
+  const officialUrl=canonicalOfficialUrl(url);
+  const quotedUrl='"'+officialUrl.replace(/\\/g,"\\\\").replace(/"/g,'\\"')+'"';
+  const identityFilter=jan
+    ? "or="+encodeURIComponent(`(jan_code.eq.${jan},official_url.eq.${quotedUrl})`)
+    : "official_url=eq."+encodeURIComponent(officialUrl);
+  const existing=await sb(env,`/products?select=*&${identityFilter}&limit=2`);
+  if(!Array.isArray(existing))throw new Error("Official product identity lookup failed");
   const now=new Date().toISOString();
   if(existing.length>1)throw new Error("Ambiguous official product identity");
   const base=existing[0]||{};

@@ -30,10 +30,16 @@ try {
   ]){
     globalThis.fetch=async (input,options)=>{
       assert.equal(options.method,'GET','Identity conflicts must reject before any database write');
-      return Response.json(new URL(input).searchParams.has('official_url')?rows:[]);
+      assert.match(new URL(input).searchParams.get('or'), /jan_code.eq.4901234567894,official_url.eq/);
+      return Response.json(rows);
     };
     await assert.rejects(refresh,error);
   }
+  globalThis.fetch=async (_input,options)=>{
+    assert.equal(options.method,'GET');
+    return Response.json({message:'database unavailable'},{status:503});
+  };
+  await assert.rejects(refresh);
 } finally {
   globalThis.fetch=originalCatalogFetch;
 }
