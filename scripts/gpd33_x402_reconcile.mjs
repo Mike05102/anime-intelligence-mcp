@@ -158,6 +158,10 @@ function indexFinalized(rows,environment) {
     if (!transactions.has(key)) transactions.set(key,new Map());
     const instructions = transactions.get(key);
     const facts = transferFacts(row,environment);
+    if (row.payer != null) {
+      if (!solanaBytes(row.payer,32)) throw new Error('Invalid Solana x402 payer');
+      facts.payer = row.payer;
+    }
     const prior = instructions.get(index);
     if (prior && JSON.stringify(prior) !== JSON.stringify(facts)) conflicts.add(key);
     instructions.set(index,facts);
@@ -167,9 +171,9 @@ function indexFinalized(rows,environment) {
 }
 
 function reconcileRows(expectedRows,finalizedRows,environment) {
-  const {expected,conflicts,excludedTestRecords,unboundRecords}=indexExpected(expectedRows,environment);
+  const {expected,conflicts,excludedTestRecords,unboundRecords}=indexExpected(expectedRows.filter(row=>row.event_type!=='x402_refund'),environment);
   const {transactions,conflicts:chainConflicts}=indexFinalized(finalizedRows,environment);
-  const totals = new Map();
+  const totals = new Map(), matched = new Map();
   const counts = {matched:0,unproved:0,conflicting:0,ambiguous:0,mismatched:0};
   for (const [key,facts] of expected) {
     if (conflicts.has(key) || chainConflicts.has(key)) {
@@ -192,12 +196,48 @@ function reconcileRows(expectedRows,finalizedRows,environment) {
     }
     counts.matched++;
     const asset = key.split('|',1)[0] + '|' + facts.mint;
+    matched.set(key,{...possible[0],asset});
     totals.set(asset,(totals.get(asset) || 0n)+BigInt(facts.amount));
+  }
+  const refunds = new Map(), refundConflicts = new Set(), refundedByPayment = new Map();
+  for (const row of expectedRows.filter(row=>row.event_type==='x402_refund')) {
+    if (environment==='live' && (row.metadata?.test_mode || row.metadata?.source_class==='admin_or_test' ||
+      row.metadata?.x402_reconciliation_v1?.traffic_class==='test')) {
+      refundConflicts.add(txKey(row,environment));
+      continue;
+    }
+    const key=txKey(row,environment);
+    const original=txKey({...row,transaction_hash:row.original_transaction_hash},environment);
+    const amount=exactAtomic(row.amount_atomic);
+    const prior=refunds.get(key);
+    if (prior && (prior.original!==original || prior.amount!==amount)) refundConflicts.add(key);
+    refunds.set(key,{original,amount});
+  }
+  for (const [key,{original,amount}] of refunds) {
+    const payment=matched.get(original);
+    if (!payment?.payer || expected.has(key) || refundConflicts.has(key) || chainConflicts.has(key)) continue;
+    const transfers=[...(transactions.get(key)?.values() || [])].filter(
+      row=>row.mint===payment.mint && row.payer===payment.payee && row.payee===payment.payer);
+    if (transfers.length!==1 || transfers[0].amount!==amount) continue;
+    const bucket=refundedByPayment.get(original) || {amount:0n,count:0};
+    bucket.amount+=BigInt(amount);
+    bucket.count++;
+    refundedByPayment.set(original,bucket);
+  }
+  const refundTotals=new Map();
+  let matchedRefunds=0;
+  for (const [key,bucket] of refundedByPayment) {
+    const payment=matched.get(key);
+    if (bucket.amount>BigInt(payment.amount)) continue;
+    matchedRefunds+=bucket.count;
+    refundTotals.set(payment.asset,(refundTotals.get(payment.asset)||0n)+bucket.amount);
   }
   return {
     scope:environment === 'test' ? 'test_only' : 'supplied_live_evidence_only',
     evidence:'independent_signed_finalized_solana',
     matched_information_fee_atomic:Object.fromEntries([...totals].sort().map(([asset,total]) => [asset,total.toString()])),
+    matched_refund_atomic:Object.fromEntries([...refundTotals].sort().map(([asset,total])=>[asset,total.toString()])),
+    refund_transactions:{matched:matchedRefunds,unresolved:refunds.size-matchedRefunds},
     transactions:counts,excluded_test_records:excludedTestRecords,unbound_expected_records:unboundRecords
   };
 }

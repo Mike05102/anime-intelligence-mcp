@@ -44,6 +44,19 @@ function createFixture(environment) {
 const test = createFixture('test');
 const live = createFixture('live');
 const report = test.run([expected,expected],[finalized,finalized]);
+const buyer='1'.repeat(31)+'3';
+const refundHash='1'.repeat(63)+'3';
+const refund={event_type:'x402_refund',payment_network,transaction_hash:refundHash,
+  original_transaction_hash:transaction_hash,amount_atomic:'30'};
+const originalWithPayer={...finalized,payer:buyer};
+const refundTransfer={...finalized,transaction_hash:refundHash,payer:payee,payee:buyer,amount_atomic:'30'};
+const paidAndRefunded=test.run([expected,refund,refund],[originalWithPayer,refundTransfer]);
+assert.deepEqual(paidAndRefunded.matched_refund_atomic,{[asset]:'30'});
+assert.deepEqual(paidAndRefunded.refund_transactions,{matched:1,unresolved:0});
+assert.equal(test.run([expected,refund],[originalWithPayer,{...refundTransfer,payer:buyer}]).refund_transactions.unresolved,1);
+const overAmount='9007199254740994';
+assert.deepEqual(test.run([expected,{...refund,amount_atomic:overAmount}],
+  [originalWithPayer,{...refundTransfer,amount_atomic:overAmount}]).matched_refund_atomic,{});
 assert.equal(report.scope,'test_only');
 assert.equal(report.evidence,'independent_signed_finalized_solana');
 assert.deepEqual(report.transactions,{matched:1,unproved:0,conflicting:0,ambiguous:0,mismatched:0});
