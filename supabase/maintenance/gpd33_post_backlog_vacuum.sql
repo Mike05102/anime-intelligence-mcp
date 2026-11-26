@@ -41,7 +41,7 @@ begin
     select count(*),md5(string_agg(md5(to_jsonb(e)::text),'' order by id))
     into paid_count,paid_digest from public.api_events e where e.id<=b.max_id
       and e.event_type in ('paid_call','payment_attempt','payment_verified','payment_retry_received',
-                           'payment_settlement_failed','payment_verify_failed','x402_failed');
+                           'payment_settlement_failed','payment_verify_failed','x402_failed','x402_refund');
     -- pg_cron sends this as a standalone command in its own session.
     child:=cron.schedule('gpd33_post_backlog_vacuum','*/5 * * * *',
       'VACUUM (ANALYZE, SKIP_LOCKED, TRUNCATE TRUE) public.api_events;');
@@ -60,7 +60,7 @@ begin
       select count(*),md5(string_agg(md5(to_jsonb(e)::text),'' order by id))
       into paid_count,paid_digest from public.api_events e where e.id<=b.max_id
         and e.event_type in ('paid_call','payment_attempt','payment_verified','payment_retry_received',
-                             'payment_settlement_failed','payment_verify_failed','x402_failed');
+                             'payment_settlement_failed','payment_verify_failed','x402_failed','x402_refund');
       update gpd33_maintenance.vacuum_checkpoint set status='complete',completed_at=now(),
         database_after=pg_database_size(current_database()),event_after=pg_total_relation_size('public.api_events'),
         last_vacuum=vacuum_at,payment_protected=(paid_count=v.payment_count and paid_digest is not distinct from v.payment_digest)

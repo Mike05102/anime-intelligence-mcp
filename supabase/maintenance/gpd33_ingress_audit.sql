@@ -3,7 +3,7 @@
 with protected_requests as materialized (
   select distinct metadata->>'request_id' as request_id from public.api_events
   where event_type in ('payment_retry_received','payment_attempt','payment_verified','paid_call',
-                       'payment_verify_failed','payment_settlement_failed','x402_failed')
+                       'payment_verify_failed','payment_settlement_failed','x402_failed','x402_refund')
     and nullif(metadata->>'request_id','') is not null
 )
 select e.event_type,count(*) as candidate_rows,

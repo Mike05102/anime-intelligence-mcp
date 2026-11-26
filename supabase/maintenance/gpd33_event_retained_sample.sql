@@ -16,5 +16,5 @@ select statement_timestamp() as observed_at,
           'metadata_bytes',coalesce(sum(pg_column_size(e.metadata)),0))
         from public.api_events e where e.event_type in (
           'paid_call','payment_attempt','payment_verified','payment_retry_received',
-          'payment_settlement_failed','payment_verify_failed','x402_failed'
+          'payment_settlement_failed','payment_verify_failed','x402_failed','x402_refund'
         )) as checkpoint_payment_categories;
