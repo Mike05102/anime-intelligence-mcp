@@ -171,8 +171,11 @@ const init=await (await post('/mcp',{jsonrpc:'2.0',id:1,method:'initialize',para
 assert.equal(init.result.protocolVersion,'2025-11-25');
 const tools=await (await post('/mcp',{jsonrpc:'2.0',id:2,method:'tools/list',params:{}})).json();
 assert.ok(tools.result.tools.length>5);
+assert.ok(!tools.result.tools.some(t=>/^(parts_|travel_|commerce_search$|universal_coverage$)/.test(t.name)));
+const paymentDiscovery=await (await call('/.well-known/x402')).json();
+assert.ok(!JSON.stringify(paymentDiscovery).includes('/v1/parts-intelligence'));
 assert.ok(tools.result.tools.some(t=>/purchase_decision/.test(t.name)));
-for(const route of ['/v1/purchase-decision','/v1/buy-wait','/v1/full-intelligence','/v1/parts-intelligence?part_number=E2E-X5ME1&manufacturer=OMRON']){
+for(const route of ['/v1/purchase-decision','/v1/buy-wait','/v1/full-intelligence']){
   const response=await call(route);
   assert.equal(response.status,402,route+' '+await response.clone().text());
   const header=response.headers.get('payment-required');
@@ -283,7 +286,12 @@ assert.match(sellerLanding,/free registration, listing and feed connection/);
 assert.match(sellerLanding,/href="\/v1\/merchant\/participation"/);
 const merchantOpenApi=await (await call('/openapi.json')).json();
 assert.equal(merchantOpenApi.paths['/v1/merchant/participation'].get.operationId,'getMerchantParticipation');
-for(const route of ['/v1/parts/status','/v1/merchant/search','/.well-known/x402','/openapi.json']){
+const unavailablePart=await call('/v1/parts-intelligence?part_number=E2E-X5ME1');
+assert.equal(unavailablePart.status,404);
+assert.equal(unavailablePart.headers.has('payment-required'),false);
+assert.equal(merchantOpenApi.paths['/v1/parts/status'],undefined);
+assert.equal((await (await post('/mcp',{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'parts_search'}})).json()).error.code,-32602);
+for(const route of ['/v1/merchant/search','/.well-known/x402','/openapi.json']){
   const response=await call(route);
   assert.ok(response.status<500,route+' '+response.status);
 }
