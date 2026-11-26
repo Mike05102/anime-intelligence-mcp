@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -49,6 +49,13 @@ try {
   assert.equal(await seedBatch(),1);
   globalThis.fetch=async ()=>Response.json({unexpected:true});
   await assert.rejects(seedBatch,/Invalid official seed insert response/);
+  globalThis.fetch=async (input,options)=>{
+    assert.equal(options.method,'GET');
+    assert.match(new URL(input).searchParams.get('select'),/^(jan_code|source_product_key)$/);
+    return Response.json({message:'unavailable'},{status:503});
+  };
+  await assert.rejects(()=>api.loadProductsByJans(env,['4901234567894'],true));
+  await assert.rejects(()=>api.loadProductsBySourceKeys(env,['fixture:1'],true));
 } finally {
   globalThis.fetch=originalCatalogFetch;
 }

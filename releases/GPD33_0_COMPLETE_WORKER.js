@@ -464,20 +464,22 @@ async function loadBackfillCandidates(env,limit=500){
   return Array.isArray(rows)?rows:[];
 }
 
-async function loadProductsByJans(env,jans=[]){
+async function loadProductsByJans(env,jans=[],strict=false){
   const clean=[...new Set(jans.map(cleanJan).filter(Boolean))];
   if(!clean.length)return [];
-  const rows=await sbOptional(env,`/products?select=*&jan_code=in.(${clean.join(",")})&limit=${clean.length*2}`);
+  const rows=await (strict?sb:sbOptional)(env,`/products?select=${strict?"jan_code":"*"}&jan_code=in.(${clean.join(",")})&limit=${clean.length*2}`);
+  if(strict&&!Array.isArray(rows))throw new Error("Invalid catalogue identity lookup response");
   return Array.isArray(rows)?rows:[];
 }
 
-async function loadProductsBySourceKeys(env,keys=[]){
+async function loadProductsBySourceKeys(env,keys=[],strict=false){
   const clean=[...new Set(keys.map(x=>String(x||"").trim()).filter(Boolean))];
   if(!clean.length)return [];
   // v3.0.11: one PostgREST IN query instead of one subrequest per key.
   // This is critical for no-JAN categories such as lottery prizes.
   const quoted=clean.map(x=>`"${x.replace(/\\/g,"\\\\").replace(/"/g,'\\"')}"`).join(",");
-  const rows=await sbOptional(env,`/products?select=*&source_product_key=in.(${encodeURIComponent(quoted)})&limit=${Math.max(2,clean.length*2)}`);
+  const rows=await (strict?sb:sbOptional)(env,`/products?select=${strict?"source_product_key":"*"}&source_product_key=in.(${encodeURIComponent(quoted)})&limit=${Math.max(2,clean.length*2)}`);
+  if(strict&&!Array.isArray(rows))throw new Error("Invalid catalogue identity lookup response");
   return Array.isArray(rows)?rows:[];
 }
 
@@ -1247,7 +1249,7 @@ async function insertOfficialSeedBatch(env,payloads){
 
 async function massDiscoverGoodSmile(env,limit=20,options={}){
   const cal=await fetchGoodSmileCalendars();
-  const existing=await loadProductsByJans(env,cal.merged.map(x=>x.jan_code));
+  const existing=await loadProductsByJans(env,cal.merged.map(x=>x.jan_code),true);
   const existingJans=new Set(existing.map(x=>cleanJan(x.jan_code)).filter(Boolean));
   const missing=cal.merged.filter(x=>!existingJans.has(x.jan_code));
   const inspect=Math.min(missing.length,Math.max(limit,limit*PIPELINE.massInspectMultiplier));
@@ -1321,7 +1323,7 @@ async function patrolOfficialMassFeeds(env,limit=PIPELINE.officialMassFeedCron,o
     const selected=deterministicWindow(all,Math.min(Math.max(1,Number(limit)||30),50),options.timeMs||Date.now(),31);report.selected=selected.length;
     if(!selected.length)return report;
     const payloads=selected.map(x=>officialFeedSeedPayload(feed,x));
-    const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key));const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
+    const existing=await loadProductsBySourceKeys(env,payloads.map(x=>x.source_product_key),true);const keys=new Set(existing.map(x=>String(x.source_product_key||"")));
     const missing=payloads.filter(x=>!keys.has(x.source_product_key));report.existing=payloads.length-missing.length;
     if(missing.length){report.inserted=await insertOfficialSeedBatch(env,missing);}
   }catch(e){report.errors.push({error:safeError(e)});}
@@ -1368,7 +1370,8 @@ async function archiveDiscoverGoodSmile(env,categoryId=6,page=1,limit=40){
   const selected=cards.slice(0,Math.max(1,Math.min(50,Number(limit)||40)));
   if(!selected.length)return {category:category.slug,category_id:category.id,page:pg,list_url:listUrl,discovered:0,selected:0,inserted:0,existing:0,exhausted:true,errors:[]};
   const urls=selected.map(x=>canonicalOfficialUrl(x.url));
-  const existingRows=await sbOptional(env,`/products?select=id,official_url&official_url=in.(${urls.map(x=>'"'+x.replace(/"/g,'')+'"').join(',')})&limit=100`)||[];
+  const existingRows=await sb(env,`/products?select=official_url&official_url=in.(${urls.map(x=>'"'+x.replace(/"/g,'')+'"').join(',')})&limit=100`);
+  if(!Array.isArray(existingRows))throw new Error("Invalid official URL lookup response");
   const existing=new Set(existingRows.map(x=>canonicalOfficialUrl(x.official_url||"")));
   const missing=selected.filter(x=>!existing.has(canonicalOfficialUrl(x.url)));
   let inserted=0;const errors=[];
