@@ -47,3 +47,39 @@ assert not check({"product_preview": preview}, status=503)
 assert not check({"product_preview": preview}, challenge=[])
 assert not check({"product_preview": {**preview, "name": "x" * 17000}})
 print("PASS unsigned deployment quote verification without network")
+
+observe = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+               and node.name == "await_deployment")
+activate_candidate = next(node for node in tree.body if isinstance(node, ast.Try)
+                          and ast.unparse(node.body[0]) == "activate(candidate)")
+activation = compile(ast.Module(body=[observe, activate_candidate], type_ignores=[]), str(source), "exec")
+
+
+def check_activation(observations):
+    writes = []
+    reads = []
+
+    def activate(version):
+        writes.append(version)
+        raise TimeoutError("fixture")
+
+    def current():
+        reads.append(None)
+        return next(observations, "previous")
+
+    scope = dict(candidate="candidate", activate=activate, current=current,
+                 time=type("Clock", (), {"sleep": staticmethod(lambda _: None)}))
+    try:
+        exec(activation, scope)
+    except SystemExit as error:
+        assert "outcome unconfirmed" in str(error)
+        confirmed = False
+    else:
+        confirmed = True
+    assert writes == ["candidate"]
+    return confirmed, len(reads)
+
+
+assert check_activation(iter(["previous", "candidate"])) == (True, 2)
+assert check_activation(iter([])) == (False, 8)
+print("PASS ambiguous activation confirms state without replaying the write")
