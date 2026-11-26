@@ -73,3 +73,15 @@
 ## ENERGY STAR 先頭ページの実測
 
 2026-11-25 UTCに、家庭用洗濯機を `pd_id` 昇順で最大40件取得した。選択した列だけの応答は9,611バイト。40行のうち38行は型式などが曖昧、2行はUPC要件を満たさず、このページでは識別合格が0件だった。前回の別の5件サンプルでは1件合格しているため、先頭ページの値を全データの合格率には使わない。同一UPCに別の認証モデルIDや登録市場がある場合も、行順に左右されないよう候補を隔離する。 [EPAの公式データ](https://data.energystar.gov/Active-Specifications/ENERGY-STAR-Certified-Residential-Clothes-Washers/bghd-e2wd/data)
+
+### BnFの追加サンプルと書誌項目の区別
+
+2026-11-25 UTCに、公式の例に使われている ISBN `9782413088882` で同じ上限の認証なしGETを1回実行した。HTTP 200、XML 7,187バイト、結果1件。ARK `cb486046398` の書誌では `010$a` のISBNと `073$a` のEANが一致し、フランス語の印刷版と確認できた。`010$d` に `22 EUR` があるが、現在の販売価格、在庫、配送には計上しない。`214$c` は出版社と印刷会社で別々に現れる。隔離用アダプターはBnFの定義どおり `214` の第2指示子 `0` を出版、`3` を製造として扱い、取得済みの応答から出版社を特定した。 `python3 scripts/gpd33_bnf_edition.py <ISBN> --read` は公式ホストへの公開GETを1回実行する。 [UNIMARC仕様](https://www.bnf.fr/sites/default/files/2023-10/UNIMARC_B.pdf) [照会した書誌](https://catalogue.bnf.fr/ark:/12148/cb486046398) · [BnFのISBNフィールド定義](https://api.bnf.fr/fr/node/2688)
+
+BnFが作成する書誌メタデータの Etalab 2.0 は、出典と最終更新時点を明示した商用再利用を許す。照会時刻や出版年と最終更新日は分けて保存する。書影、スキャン、第三者提供コンテンツは、付随する個別条件に従う。 [BnF利用条件](https://api.bnf.fr/fr/conditions-generales-dutilisation-du-site-bnf-api-et-jeux-de-donnees) · [Etalab 2.0](https://www.data.gouv.fr/pages/legal/licences/etalab-2-0)
+
+## 豪州・NZ GEMSの公開データ確認
+
+豪州の気候変動・エネルギー・環境・水省は、家庭用洗濯機、乾燥機、食洗機、冷蔵庫、テレビ、モニターなどの登録機器データを案内する。公開目録では、ブランド、型式、原産国・販売対象国、出力や効率が機器別に記載され、当該データセットの権利欄は CC BY 3.0 Australia。政府サイトの一般条件は CC BY 4.0 で、データごとの表記を優先する。国のロゴやEnergy Rating Label・Iconは一般の再利用条件の対象外。登録範囲や入手可否の欄を、個別販売業者の現在在庫や両国への配送保証に置き換えない。 [GEMSの公式配布案内](https://www.energyrating.gov.au/about-us/gems-regulator/registered-appliance-and-equipment-data) · [登録DBの範囲](https://www.energyrating.gov.au/program-tools/energy-rating-registration-database) · [公開目録のデータセットとライセンス](https://researchdata.edu.au/energy-rating-data-labelled-products/3784840) · [政府サイトの著作権条件](https://www.energyrating.gov.au/copyright)
+
+2026-11-26 UTCに、公式配布元 data.gov.au の `package_show` で `energy-rating-for-household-appliances` の目録メタデータを上限64 KiB・12秒で1回照会した。現在の実行環境ではHTTP 403、HTML 919バイトで、機械可読な目録や商品行は得られなかった。自動取得経路は未確認。公式のCSVを利用可能な経路で取得できた段階で、個別リソースのライセンス、厳密なブランド＋型式、GTIN列の有無、登録の取消と有効期間を小さな隔離サンプルで確認する。 [公式データセット](https://data.gov.au/data/dataset/energy-rating-for-household-appliances)

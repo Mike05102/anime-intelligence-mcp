@@ -42,6 +42,14 @@
 
 掲載件数は発見可能性の証拠。掲載の版、掲載ページが示すツール数・価格、実際の本番仕様は個別に照合する。買い手の登録、販売業者への引き渡し、成立・入金には、各工程の記録を使う。
 
+## Bingと参加検索エンジンへの更新通知
+
+2026-11-26調査。IndexNowは、公開URLの追加・更新・削除をBingなどの参加検索エンジンに通知する公開プロトコル。直接通知には、同じホストで専用の所有権確認テキストを外部から取得可能にし、そのホストで変更したURLを送る。正常な応答は通知の受領を示し、検索結果への掲載はBing Webmaster Toolsなどの検査で別途確認する。 [IndexNow仕様](https://www.indexnow.org/documentation?hl=en) · [Bingの設定と確認方法](https://www.bing.com/indexnow/getstarted)
+
+CloudflareのCrawler Hintsは無料プランで提供され、IndexNowに対応する。GPDが使う `workers.dev` のサブドメインで、現行アカウントからその設定を制御できるかは未確認。独自ドメインや有料契約を前提にせず、既存ホストで所有権確認テキストを公開できる場合に、直接通知の適用を確認する。 [Cloudflareの提供条件](https://developers.cloudflare.com/cache/advanced-configuration/crawler-hints/)
+
+隔離Workerでは `robots.txt` と `sitemap.xml` が両方HTTP 200。robotsは同一ホストのサイトマップを参照し、サイトマップの6 URLはすべて同一ホストで、エージェント向け案内 `/agents` を含む。本番の両URLは今回の接続経路でHTTP 403となり、検索掲載とともに未確認。通知・所有権設定は行っていない。通知が承認された場合は、実際に変更された公開案内ページに限定し、管理・認証・取引URLは対象外とする。 [GPDの検索向け公開メタデータ](../releases/GPD33_0_COMPLETE_WORKER.js)
+
 ## 確認の順序
 
 1. 外部公開・課金を伴わない範囲で、リリース候補のMCPとOpenAPI、402応答、Bazaarメタデータを検証する。
