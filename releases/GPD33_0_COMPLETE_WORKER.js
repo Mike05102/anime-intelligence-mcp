@@ -7048,6 +7048,20 @@ function gpd33SelectQuery(domain,queries,history,now,queriesSummary={}){
 function gpd33RankQuery(row){
   return row.score+universalIdentityRoleScore(row)+Math.min(3,Number(row.history_canonical_per_provider_call||0));
 }
+function gpd33ApprovedIdentityQueries(value,domain){
+  if(typeof value!=="string"||value.length>16000)return [];
+  try{
+    const rows=JSON.parse(value);
+    if(!Array.isArray(rows)||rows.length>168)return [];
+    const queries=new Set();
+    for(const row of rows){
+      if(row?.category===domain&&typeof row.gtin==="string"&&row.gtin.length===14&&gpd33StructuredGtin(row.gtin)){
+        queries.add("GTIN "+row.gtin);
+      }
+    }
+    return [...queries];
+  }catch{return [];}
+}
 async function gpd33Plan(env,job){
   const useBuyerSignals=env.GPD_BUYER_GROWTH_SIGNALS==="1";
   const useReconciledSignals=env.GPD_RECONCILED_GROWTH_SIGNALS==="1";
@@ -7077,7 +7091,8 @@ async function gpd33Plan(env,job){
   const longTail=(frontier||[]).filter(row=>row.metadata?.domain===domain)
     .flatMap(row=>Array.isArray(row.metadata?.candidates)?row.metadata.candidates.slice(0,2):[])
     .map(item=>item.query).filter(q=>typeof q==="string"&&q.length>=2&&q.length<=180);
-  let query=gpd33SelectQuery(domain,gpd33PlanQueries(phase,longTail,rotated),history,now,planning?.queries?.[domain]);
+  const identityQueries=phase===2?gpd33ApprovedIdentityQueries(env.GPD_IDENTITY_SEEDS_JSON,domain):[];
+  let query=gpd33SelectQuery(domain,gpd33PlanQueries(phase,[...identityQueries,...longTail],rotated),history,now,planning?.queries?.[domain]);
   if(phase===3){
     const stale=await sbOptional(env,"/products?select=metadata&product_type=eq."+domain+
       "&metadata->>gpd33_verified=eq.true&order=source_last_checked_at.asc.nullsfirst&limit=1");

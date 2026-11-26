@@ -55,7 +55,8 @@ def prepare_batch(washers, cooker, books):
         else:
             identities.append({"gtin": gtin, **json.loads(next(iter(records)))})
     return {"schema": "gpd-catalogue-identity-batch-v1", "scope": "identity_evidence_only",
-            "sources": sources, "identities": identities, "conflicting_gtins": quarantined}
+            "sources": sources, "identities": identities, "conflicting_gtins": quarantined,
+            "verification_seeds": [{key: item[key] for key in ("category", "gtin")} for item in identities]}
 
 
 def main():

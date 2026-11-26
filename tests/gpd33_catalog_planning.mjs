@@ -51,6 +51,7 @@ export async function testCatalogPlanning(one) {
     if(url.pathname.endsWith('/api_events') && url.searchParams.get('event_type')==='eq.paid_call') {
       return Response.json([{metadata:{query_family:'food_grocery:coffee'}}]);
     }
+    if(url.searchParams.get('event_type')==='eq.universal_catalog_frontier')return Response.json([]);
     if(url.pathname.endsWith('/products') && url.searchParams.get('product_type')==='eq.food_grocery') {
       return Response.json([{metadata:{identifiers:{gtin:'012345678905'}}}]);
     }
@@ -68,6 +69,14 @@ export async function testCatalogPlanning(one) {
       {...coordinator,slot:24});
     assert.equal(withCommerce.plan.domain,demandDomain);
     assert.equal(calls.filter(url=>url.pathname.includes('/rpc/')).length,1);
+    const seedSlot=domains.indexOf('home_appliances')+2*domains.length*((2-domains.indexOf('home_appliances')%4+4)%4);
+    const seeded=await gpd33Plan({...env,GPD_IDENTITY_SEEDS_JSON:JSON.stringify([
+      {category:'home_appliances',gtin:'00051497390297'},
+      {category:'books_media',gtin:'04901234567894'},
+      {category:'home_appliances',gtin:'00000000000001'}
+    ])},{...coordinator,slot:seedSlot});
+    assert.equal(seeded.plan.domain,'home_appliances');
+    assert.equal(seeded.plan.query,'GTIN 00051497390297');
     rpcAvailable=false;
     const fallback = await gpd33Plan(env,coordinator);
     assert.deepEqual(fallback.plan,plan);
