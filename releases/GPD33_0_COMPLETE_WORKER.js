@@ -9777,6 +9777,9 @@ async function paidApi(request,env,url,ctx=null){
   try{preflight=await preflightPaidProduct(env,url);}catch(e){deferTelemetry(ctx,logRequestStage(env,request,"identity_preflight_failed",{metadata:{response_status:500,error:safeError(e)}}));return json({service:"ANIME INTELLIGENCE",version:VERSION,error:"identity_preflight_failed",charged:false,detail:safeError(e)},500);}
   if(!preflight.ok){deferTelemetry(ctx,logRequestStage(env,request,preflight.status===409?"disambiguation_required":"product_not_found",{metadata:{response_status:preflight.status,charged:false}}));return json(preflight.body,preflight.status,{"cache-control":"no-store"});}
   const product=preflight.product;
+  if(!isAnimeLaunchProduct(product))return json({
+    service:"ANIME INTELLIGENCE",version:VERSION,error:"anime_product_evidence_required",charged:false
+  },422,{"cache-control":"no-store"});
   // v3.7.32 — once identity is resolved, the commercial path goes straight to x402.
   // KPI writes are intentionally backgrounded so a slow Supabase write cannot consume the payment opportunity.
   deferTelemetry(ctx,logRequestStage(env,request,"canonical_product_selected",{product_id:product.id,metadata:{resolution:preflight.resolution,canonical_product_id:product.id,product_type:product.product_type||null,automatic:!!preflight.selection?.automatic,selection_score:preflight.selection?.selected?.selection_score??null,affiliate_ready:preflight.selection?.selected?.affiliate_ready??registeredRakutenAffiliateOffers(product).length>0,fast_gate_v3732:true}}));
