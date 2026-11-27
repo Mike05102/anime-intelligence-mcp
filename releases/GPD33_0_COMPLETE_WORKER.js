@@ -95,7 +95,7 @@ const OFFICIAL_CONNECTORS=[
     slug:"tamashii",
     name:"TAMASHII NATIONS / BANDAI SPIRITS",
     manufacturer:"BANDAI SPIRITS",
-    listUrls:["https://tamashiiweb.com/item/"],
+    listUrls:["https://tamashiiweb.com/"],
     detailRegex:/https?:\/\/tamashiiweb\.com\/item\/\d+/i
   },
   {
@@ -1160,7 +1160,10 @@ function parseOfficial(connector,url,html){
   const kotobukiya=connector.slug==="kotobukiya" && connector.detailRegex.test(url);
   const pageTitle=htmlTitle(html);
   const titleParts=pageTitle.split("｜");
-  const title=kotobukiya?titleParts[0].trim():pageTitle;
+  const tamashii=connector.slug==="tamashii";
+  const title=kotobukiya?titleParts[0].trim():tamashii?pageTitle.split("|")[0].trim():pageTitle;
+  const franchise=tamashii?discoverySafeFranchise({canonical_name_ja:
+    [title,htmlMeta(html,"og:description")].filter(Boolean).join(" ")}):null;
   const text=stripHtml(html);
   const detailJan=kotobukiya?new URL(url).pathname.match(/\/p((?:45|49)\d{11})\/?$/)?.[1]:null;
   const shopJan=kotobukiya?html.match(/href=["']https:\/\/shop\.kotobukiya\.co\.jp\/shop\/g\/g((?:45|49)\d{11})\//i)?.[1]:null;
@@ -1173,6 +1176,7 @@ function parseOfficial(connector,url,html){
     canonical_name_ja:title,
     canonical_name_en:/\/en\//.test(url)?title:null,
     manufacturer:connector.manufacturer,
+    ...(franchise?{franchise}:{}),
     jan_code:jan,
     msrp_jpy:kotobukiya?(price?Number(price.replace(/,/g,"")):null):parsePriceJpy(html),
     original_release_date:kotobukiya?null:parseReleaseDate(html),
@@ -1420,6 +1424,7 @@ function invalidOfficialProductPage(connector,url,parsed){
   const u=canonicalOfficialUrl(url);
   const title=String(parsed?.canonical_name_ja||parsed?.canonical_name_en||"");
   if(!cleanOfficialTitle(title))return "missing_product_title";
+  if(connector?.slug==="tamashii"&&!parsed.franchise)return "missing_anime_franchise_evidence";
   if(connector?.detailRegex&&!connector.detailRegex.test(u))return "outside_connector_detail";
   if(connector?.slug==="kdcolle"&&(/\/product\/20\d{2}(?:\/\d{1,2})?$/.test(new URL(u).pathname.replace(/\/$/,""))||/\u691c\u7d22\u7d50\u679c/.test(title)))return "kdcolle_listing_or_archive";
   if(/(?:search|category|archive|products?)$/i.test(new URL(u).pathname.replace(/\/$/,"")))return "listing_or_archive";
@@ -1458,6 +1463,7 @@ async function saveOfficialProduct(env,connector,url,parsed){
     canonical_name_ja:parsed.canonical_name_ja||base.canonical_name_ja,
     canonical_name_en:parsed.canonical_name_en||base.canonical_name_en,
     manufacturer:parsed.manufacturer||base.manufacturer,
+    ...(parsed.franchise?{franchise:base.franchise||parsed.franchise}:{}),
     jan_code:jan||base.jan_code,
     msrp_jpy:parsed.msrp_jpy||base.msrp_jpy,
     original_release_date:parsed.original_release_date||base.original_release_date,
@@ -1485,7 +1491,7 @@ async function saveOfficialProduct(env,connector,url,parsed){
     if(!Array.isArray(rows)||rows.length!==1||rows[0]?.id!==base.id)throw new Error("Official product update was not confirmed");
     return {status:"updated",id:base.id};
   }
-  const rows=await sb(env,"/products?select=id",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({...patch,brand:null,series:null,franchise:null,character_names:[],model_number:null,scale:null,edition:null,limited_type:null,image_source_url:parsed.official_image_url||null,image_status:parsed.official_image_url?"found":"pending"})});
+  const rows=await sb(env,"/products?select=id",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({...patch,brand:null,series:null,character_names:[],model_number:null,scale:null,edition:null,limited_type:null,image_source_url:parsed.official_image_url||null,image_status:parsed.official_image_url?"found":"pending"})});
   if(!Array.isArray(rows)||rows.length!==1||!rows[0]?.id)throw new Error("Official product insert was not confirmed");
   return {status:"inserted",id:rows[0].id};
 }

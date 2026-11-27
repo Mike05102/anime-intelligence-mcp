@@ -118,6 +118,14 @@ assert.ok(results.checks.some(check=>check.name==='anime_catalogue_cron'&&check.
 await worker.scheduled({scheduledTime:Date.UTC(2026,10,26,0,5)},env,{
   waitUntil:()=>assert.fail('Off-cadence anime cron must not run')
 });
+const tamashii=api.OFFICIAL_CONNECTORS.find(source=>source.slug==='tamashii');
+const tamashiiUrl='https://tamashiiweb.com/item/16222/';
+const krillin=api.parseOfficial(tamashii,tamashiiUrl,
+  '<title>S.H.Figuarts クリリン | 商品一覧 | 魂ウェブ</title><meta property="og:description" content="ドラゴンボールZ">');
+assert.equal(krillin.franchise,'Dragon Ball');
+assert.equal(krillin.canonical_name_ja,'S.H.Figuarts クリリン');
+await assert.rejects(()=>api.saveOfficialProduct(env,tamashii,tamashiiUrl,{canonical_name_ja:'S.H.Figuarts つば九郎'}),
+  /missing_anime_franchise_evidence/);
 const kotobukiya=api.OFFICIAL_CONNECTORS.find(source=>source.slug==='kotobukiya');
 const officialDetail='https://www.kotobukiya.co.jp/product/detail/p4934054087358/';
 const officialPage=`<title>ティータ・ラッセル｜軌跡シリーズ｜美少女フィギュア｜フィギュア｜プラモデル</title>
