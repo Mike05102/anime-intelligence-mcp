@@ -2514,27 +2514,27 @@ function yahooIdentityAnalysis(product,item){
   return {accepted:score>=threshold&&anchorMatched,score,basis:specialist.matched.length?"specialist_name_identity":"name_identity",reason:score>=threshold?"name_identity":"score_below_threshold",anchorMatched,makerMatch,specialist};
 }
 
-async function yahooSearch(env,product,limit=30){
+async function yahooSearch(env,product,limit=30,stopOnProviderError=false){
   const attempts=[];let returned=0;
   if(product.jan_code){
     try{
-      const r=await yahooRequest(env,{jan_code:product.jan_code},Math.min(30,limit));
+      const r=await yahooRequest(env,{jan_code:product.jan_code},Math.min(30,limit),stopOnProviderError?1:3);
       returned+=r.hits.length;
       const hits=r.hits.map(item=>({item,a:yahooIdentityAnalysis(product,item)})).filter(x=>x.a.accepted).map(x=>({item:x.item,score:x.a.score,match_basis:x.a.basis,specialist_match:x.a.specialist||null}));
       attempts.push({method:"jan",query:product.jan_code,returned:r.hits.length,accepted:hits.length});
       if(hits.length)return {hits:hits.slice(0,12),returned,attempts,method:"jan",query:product.jan_code};
-    }catch(e){attempts.push({method:"jan",query:product.jan_code,error:safeError(e)});}
+    }catch(e){if(stopOnProviderError)throw e;attempts.push({method:"jan",query:product.jan_code,error:safeError(e)});}
   }
   const queries=[product.canonical_name_ja,product.canonical_name_en].filter(Boolean).map(x=>cleanOfficialTitle(x)).filter(Boolean);
   for(const q of [...new Set(queries)].slice(0,2)){
     try{
-      const r=await yahooRequest(env,{query:q},Math.min(30,limit));
+      const r=await yahooRequest(env,{query:q},Math.min(30,limit),stopOnProviderError?1:3);
       returned+=r.hits.length;
       const analyses=r.hits.map(item=>({item,a:yahooIdentityAnalysis(product,item)}));
       const hits=analyses.filter(x=>x.a.accepted).map(x=>({item:x.item,score:x.a.score,match_basis:x.a.basis,specialist_match:x.a.specialist||null}));
       attempts.push({method:"name",query:q,returned:r.hits.length,accepted:hits.length,rejected_candidates:analyses.filter(x=>!x.a.accepted).slice(0,5).map(x=>({title:x.item?.name,reason:x.a.reason,score:x.a.score}))});
       if(hits.length)return {hits:hits.slice(0,12),returned,attempts,method:"name",query:q};
-    }catch(e){attempts.push({method:"name",query:q,error:safeError(e)});}
+    }catch(e){if(stopOnProviderError)throw e;attempts.push({method:"name",query:q,error:safeError(e)});}
   }
   return {hits:[],returned,attempts,method:null,query:null};
 }
@@ -2578,7 +2578,7 @@ async function refreshYahooBatch(env,limit=2,options={}){
   const report=[];
   for(const p of selected){
     try{
-      const search=await yahooSearch(env,p,30);
+      const search=await yahooSearch(env,p,30,options.stopOnProviderError);
       const inserted=await saveYahooObservations(env,p,search.hits,history,sourceId);
       await markMarketAttempt(env,p,"yahoo_shopping",{returned:search.returned,matches:search.hits.length,inserted});
       report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),product_type:p.product_type||null,identity_quality:marketIdentityQuality(p),jan_code:p.jan_code||null,yahoo_returned:search.returned,matches:search.hits.length,inserted,queries_tried:search.attempts});
@@ -2772,14 +2772,14 @@ function ebayDetailGtins(detail){
   return unique.length===1?unique:[];
 }
 
-async function ebaySearch(env,product,limit=20){
+async function ebaySearch(env,product,limit=20,stopOnProviderError=false){
   const attempts=[];let returned=0;
   if(product.jan_code){
     try{
       const data=await ebayBrowseRequest(env,{gtin:product.jan_code,limit:Math.min(20,limit)});const items=Array.isArray(data.itemSummaries)?data.itemSummaries:[];returned+=items.length;
       attempts.push({method:"gtin",query:`GTIN:${product.jan_code}`,returned:items.length,accepted:items.length});
       if(items.length)return {hits:items.slice(0,12).map(item=>({item,score:100,match_basis:"gtin",verification:{detail_gtin_match:true}})),query:`GTIN:${product.jan_code}`,method:"gtin",ebay_returned:returned,queries_tried:attempts};
-    }catch(e){attempts.push({method:"gtin",query:`GTIN:${product.jan_code}`,error:safeError(e)});}
+    }catch(e){if(stopOnProviderError)throw e;attempts.push({method:"gtin",query:`GTIN:${product.jan_code}`,error:safeError(e)});}
   }
   let detailBudget=EBAY_DETAIL_LIMIT_PER_PRODUCT;
   for(const candidate of ebaySearchCandidates(product)){
@@ -2791,10 +2791,10 @@ async function ebaySearch(env,product,limit=20){
       if(accepted.length)return {hits:accepted.slice(0,12),query:candidate.query,method:candidate.method,ebay_returned:returned,queries_tried:attempts};
       if(detailBudget>0){
         const plausible=analyses.filter(x=>x.a.matched_identity_tokens.length>=1&&x.a.anchor_matched&&!x.a.non_figure_conflict).slice(0,detailBudget);const rescued=[];
-        for(const x of plausible){if(detailBudget<=0)break;detailBudget--;try{const detail=await ebayItemDetail(env,x.item.itemId);const jan=cleanJan(product.jan_code);const gtinMatch=jan&&ebayDetailGtins(detail).includes(jan);const structured=ebayStrongIdentityAnalysis(product,{title:ebayDetailText(detail)});if(gtinMatch||structured.accepted)rescued.push({item:x.item,score:gtinMatch?100:85,match_basis:gtinMatch?"detail_gtin":"structured_item_specifics",verification:{detail_gtin_match:!!gtinMatch,structured_identity_verified:structured.accepted,specialist_match:structured.specialist||null,variant_identity:structured.variant||null}});}catch{}}
+        for(const x of plausible){if(detailBudget<=0)break;detailBudget--;try{const detail=await ebayItemDetail(env,x.item.itemId);const jan=cleanJan(product.jan_code);const gtinMatch=jan&&ebayDetailGtins(detail).includes(jan);const structured=ebayStrongIdentityAnalysis(product,{title:ebayDetailText(detail)});if(gtinMatch||structured.accepted)rescued.push({item:x.item,score:gtinMatch?100:85,match_basis:gtinMatch?"detail_gtin":"structured_item_specifics",verification:{detail_gtin_match:!!gtinMatch,structured_identity_verified:structured.accepted,specialist_match:structured.specialist||null,variant_identity:structured.variant||null}});}catch(error){if(stopOnProviderError)throw error;}}
         if(rescued.length)return {hits:rescued,query:candidate.query,method:`${candidate.method}+detail`,ebay_returned:returned,queries_tried:attempts};
       }
-    }catch(e){attempts.push({method:candidate.method,query:candidate.query,error:safeError(e)});}
+    }catch(e){if(stopOnProviderError)throw e;attempts.push({method:candidate.method,query:candidate.query,error:safeError(e)});}
   }
   return {hits:[],query:null,method:null,ebay_returned:returned,queries_tried:attempts};
 }
@@ -2831,7 +2831,7 @@ async function saveEbayObservations(env,product,hits,recent=[],sourceId=null,fxI
 
 async function refreshEbayBatch(env,limit=1,options={}){
   if(!env.EBAY_CLIENT_ID||!env.EBAY_CLIENT_SECRET)throw new Error("eBay credentials are missing");const history=options.history??await recentEbayObservations(env);const safeLimit=Math.max(1,Math.min(PIPELINE.ebayStandalone,Number(limit)||1));const selected=await selectMarketProducts(env,history,safeLimit,options.products||null,"ebay");let sourceId=options.ebaySourceId||null;if(!sourceId){const sources=options.sources||await loadSources(env);sourceId=sourceIdBySlugOrName(sources,"ebay",["eBay"]);}const fxInfo=await resolveUsdJpy(env);const report=[];
-  for(const p of selected){try{const result=await ebaySearch(env,p,20);const inserted=await saveEbayObservations(env,p,result.hits,history,sourceId,fxInfo);await markMarketAttempt(env,p,"ebay",{returned:result.ebay_returned,matches:result.hits.length,inserted});report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),canonical_name_en:p.canonical_name_en,jan_code:p.jan_code,product_type:p.product_type||null,identity_quality:marketIdentityQuality(p),identity_guard_version:VERSION,query:result.query,search_method:result.method,ebay_returned:result.ebay_returned,matches:result.hits.length,inserted,queries_tried:result.queries_tried});}catch(e){try{await markMarketAttempt(env,p,"ebay",{error:safeError(e)});}catch{}report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),error:safeError(e)});}}
+  for(const p of selected){try{const result=await ebaySearch(env,p,20,options.stopOnProviderError);const inserted=await saveEbayObservations(env,p,result.hits,history,sourceId,fxInfo);await markMarketAttempt(env,p,"ebay",{returned:result.ebay_returned,matches:result.hits.length,inserted});report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),canonical_name_en:p.canonical_name_en,jan_code:p.jan_code,product_type:p.product_type||null,identity_quality:marketIdentityQuality(p),identity_guard_version:VERSION,query:result.query,search_method:result.method,ebay_returned:result.ebay_returned,matches:result.hits.length,inserted,queries_tried:result.queries_tried});}catch(e){try{await markMarketAttempt(env,p,"ebay",{error:safeError(e)});}catch{}report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),error:safeError(e)});}}
   return {identity_guard_version:VERSION,selected:selected.length,usd_jpy_conversion:fxInfo.rate,usd_jpy_source:fxInfo.source,products:report};
 }
 
@@ -13674,19 +13674,51 @@ async function refreshScheduledAnimeMarket(env,scheduledTime){
   const marketSource=source==="yahoo"?"yahoo_shopping":"ebay";
   const providerSlot=yahoo&&ebay?Math.floor(hour/2):hour;
   const demanded=providerSlot%4===3?await recentAnimeMarketDemand(env,scheduledTime,marketSource):null;
-  let product=demanded;
-  if(!product){
-    const candidates=await sb(env,`/products?select=*&order=id.asc&limit=32${cursor?`&id=gt.${cursor}`:""}`);
-    if(!Array.isArray(candidates))throw new Error("Invalid scheduled anime market candidate response");
-    product=candidates.find(p=>isAnimeLaunchProduct(p)&&marketEligible(p));
-    if(!product)return {ok:true,configured:true,source,selected:0,
-      candidate_cursor:candidates.length===32?candidates.at(-1).id:null};
+  const budget=animeMarketProductBudget(env.ANIME_MARKET_PRODUCTS_PER_RUN);
+  if(demanded){
+    const result=await refreshScheduledAnimeMarketProduct(env,demanded,source,marketSource);
+    return {...result,candidate_cursor:cursor,selection:"buyer_demand"};
   }
+  const candidates=await sb(env,`/products?select=*&order=id.asc&limit=32${cursor?`&id=gt.${cursor}`:""}`);
+  if(!Array.isArray(candidates))throw new Error("Invalid scheduled anime market candidate response");
+  const products=candidates.filter(p=>isAnimeLaunchProduct(p)&&marketEligible(p));
+  if(!products.length)return {ok:true,configured:true,source,selected:0,
+    candidate_cursor:candidates.length===32?candidates.at(-1).id:null};
+  return runAnimeMarketPage(products,budget,cursor,source,
+    product=>refreshScheduledAnimeMarketProduct(env,product,source,marketSource));
+}
+
+function animeMarketProductBudget(value){
+  return [1,2,4,8].includes(Number(value))?Number(value):1;
+}
+
+async function runAnimeMarketPage(products,budget,cursor,source,refresh){
+  const result={ok:true,configured:true,source,selected:0,failed:0,matched:0,
+    observations_written:0,candidate_cursor:cursor,selection:"catalogue"};
+  const deadline=Date.now()+20000;
+  for(const product of products.slice(0,budget)){
+    if(Date.now()>=deadline)break;
+    let outcome;
+    try{outcome=await refresh(product);}catch{outcome={ok:false,selected:1,failed:1};}
+    result.selected+=outcome.selected;
+    result.matched+=outcome.matched||0;
+    result.observations_written+=outcome.observations_written||0;
+    if(!outcome.ok){
+      result.ok=false;
+      result.failed=outcome.failed||1;
+      break;
+    }
+    result.candidate_cursor=product.id;
+  }
+  return result;
+}
+
+async function refreshScheduledAnimeMarketProduct(env,product,source,marketSource){
   const history=await sb(env,`/market_observations?select=*&product_id=eq.${encodeURIComponent(product.id)}&metadata->>market_source=eq.${marketSource}&order=observed_at.desc&limit=32`);
   if(!Array.isArray(history))throw new Error("Invalid scheduled anime market history response");
-  const options={products:[product],history};
+  const options={products:[product],history,stopOnProviderError:true};
   const result=source==="yahoo"?await refreshYahooBatch(env,1,options):await refreshEbayBatch(env,1,options);
-  return {...animeMarketRefreshOutcome(source,result),candidate_cursor:demanded?cursor:product.id,selection:demanded?"buyer_demand":"catalogue"};
+  return animeMarketRefreshOutcome(source,result);
 }
 
 // Limit the shared cron to anime catalogue and market refreshes.

@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome,officialCatalogueCounts,recentAnimeMarketDemand};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome,officialCatalogueCounts,recentAnimeMarketDemand,animeMarketProductBudget,runAnimeMarketPage};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -150,6 +150,25 @@ try {
 } finally {
   globalThis.fetch=originalCatalogFetch;
 }
+const simulatedProducts=Array.from({length:10},(_,index)=>({id:String(index+1)}));
+for(const budget of [1,2,4,8]){
+  let calls=0;
+  const run=await api.runAnimeMarketPage(simulatedProducts,api.animeMarketProductBudget(String(budget)),null,'yahoo',async()=>{
+    calls++;
+    return {ok:true,selected:1,matched:1,observations_written:1};
+  });
+  assert.equal(calls,budget);
+  assert.equal(run.candidate_cursor,String(budget));
+}
+assert.equal(api.animeMarketProductBudget('9'),1);
+let limitedCalls=0;
+const interrupted=await api.runAnimeMarketPage(simulatedProducts,8,null,'yahoo',async()=>{
+  if(++limitedCalls===2)throw new Error('HTTP 429');
+  return {ok:true,selected:1};
+});
+assert.equal(limitedCalls,2);
+assert.equal(interrupted.ok,false);
+assert.equal(interrupted.candidate_cursor,'1');
 const marketHour=Date.UTC(2026,10,26);
 assert.deepEqual(await api.refreshScheduledAnimeMarket({},marketHour),{ok:true,configured:false,selected:0});
 try {
