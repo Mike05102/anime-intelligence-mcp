@@ -8,7 +8,16 @@ sql() { psql -X -qAt -v ON_ERROR_STOP=1 "$@"; }
 # Ensure that a DSN accidentally pointed at another project cannot start cleanup.
 routines="$(sql -c "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='gpd33_maintenance' and p.proname in ('compact_ingress','prune_operational_events')")"
 [[ "$routines" == 2 ]] || { echo "Expected GPD maintenance routines are missing." >&2; exit 1; }
+require_release_capacity() {
+  local bytes
+  bytes="$(sql -c 'select pg_database_size(current_database())')"
+  [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes < 400000000 )) || {
+    echo 'Release withheld because database size is unavailable or at least 400 MB.' >&2
+    exit 1
+  }
+}
 case "$1" in
+  release-check) require_release_capacity ;;
   check)
     echo "TLS-verified database connection and GPD maintenance routines confirmed."
     ;;
@@ -90,8 +99,7 @@ SQL
     echo "db_bytes=$bytes" >> /private/result
     ;;
   catalog)
-    bytes="$(sql -c 'select pg_database_size(current_database())')"
-    (( bytes < 400000000 )) || { echo 'Catalog migration withheld at or above 400 MB.' >&2; exit 1; }
+    require_release_capacity
     if [[ "$(sql -c "select to_regprocedure('public.gpd33_catalog_batch(jsonb,uuid)') is not null")" != t ]]; then
       sql -c "set lock_timeout='2s'" -f supabase/migrations/20261125053000_gpd33_catalog.sql
     fi

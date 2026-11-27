@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Read-only connection check or production maintenance
+        description: Check, compact logs, or release from an already compacted database
         type: choice
-        options: [check, maintain]
+        options: [check, maintain, release]
         default: check
       disk_free_bytes:
         description: Recently verified free physical disk bytes shown in Supabase
@@ -20,7 +20,7 @@ on:
         type: string
         default: ""
       deploy_worker:
-        description: Activate v33 only after maintenance and the storage gate pass
+        description: Activate v33 in release mode after storage and recovery checks
         type: boolean
         default: false
 
@@ -55,7 +55,12 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           EGRESS_AVAILABLE_BYTES: ${{ inputs.egress_available_bytes || secrets.GPD33_EGRESS_AVAILABLE_BYTES }}
         run: |
-          if [[ "$MODE" == maintain && "$DEPLOY_WORKER" == true ]]; then
+          if [[ "$MODE" == release && "$DEPLOY_WORKER" != true ]] ||
+             [[ "$MODE" != release && "$DEPLOY_WORKER" == true ]]; then
+            echo "Worker activation requires mode=release and deploy_worker=true." >&2
+            exit 1
+          fi
+          if [[ "$MODE" == release ]]; then
             if [[ -n "$GPD33_RELEASE_SMOKE_JAN" && ! "$GPD33_RELEASE_SMOKE_JAN" =~ ^(45|49)[0-9]{11}$ ]]; then
               echo "The optional smoke JAN must be a 13-digit Japanese catalogue identifier." >&2
               exit 1
@@ -74,8 +79,11 @@ jobs:
           python3 supabase/maintenance/github_db_connection.py
           docker pull postgres:17
           bash supabase/maintenance/github_db_run.sh check
-          if [[ "$MODE" == maintain ]]; then
+          if [[ "$MODE" != check ]]; then
             python3 supabase/maintenance/github_rewrite_headroom.py >/dev/null
+            if [[ "$MODE" == release ]]; then
+              bash supabase/maintenance/github_db_run.sh release-check
+            fi
             [[ "$EGRESS_AVAILABLE_BYTES" =~ ^[1-9][0-9]{0,9}$ ]] || { echo "Supply current uncached Supabase egress remaining in egress_available_bytes or GPD33_EGRESS_AVAILABLE_BYTES."; exit 1; }
             bash supabase/maintenance/github_db_run.sh egress-check "$EGRESS_AVAILABLE_BYTES"
             [[ ${#BACKUP_PASSPHRASE} -ge 24 ]] || { echo "An independent backup passphrase of at least 24 characters is required."; exit 1; }
@@ -85,7 +93,7 @@ jobs:
             fi
           fi
       - name: Create and encrypt a database backup
-        if: inputs.mode == 'maintain'
+        if: inputs.mode == 'maintain' || inputs.mode == 'release'
         env:
           BACKUP_PASSPHRASE: ${{ secrets.GPD33_BACKUP_PASSPHRASE }}
         run: |
@@ -106,7 +114,7 @@ jobs:
           }
           rm -f "$private/application.dump" "$private/application.sha256" "$private/toc" "$private/archive.fence"
       - name: Store the encrypted backup
-        if: inputs.mode == 'maintain'
+        if: inputs.mode == 'maintain' || inputs.mode == 'release'
         uses: actions/upload-artifact@v4
         with:
           name: gpd33-encrypted-db-backup
@@ -115,18 +123,19 @@ jobs:
           compression-level: 0
           if-no-files-found: error
       - name: Download the encrypted recovery copy
-        if: inputs.mode == 'maintain'
+        if: inputs.mode == 'maintain' || inputs.mode == 'release'
         uses: actions/download-artifact@v4
         with:
           name: gpd33-encrypted-db-backup
           path: ${{ runner.temp }}/gpd33-recovery
-      - name: Verify the recovery copy and perform guarded cleanup
-        if: inputs.mode == 'maintain'
+      - name: Verify the recovery copy and compact logs only in maintenance mode
+        if: inputs.mode == 'maintain' || inputs.mode == 'release'
         env:
           BACKUP_PASSPHRASE: ${{ secrets.GPD33_BACKUP_PASSPHRASE }}
           DISK_FREE_BYTES: ${{ inputs.disk_free_bytes }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           GPD33_DATABASE_URL: ${{ secrets.GPD33_DATABASE_URL || secrets.SUPABASE_DB_URL || secrets.DATABASE_URL }}
+          MODE: ${{ inputs.mode }}
         run: |
           set -o pipefail
           private="$RUNNER_TEMP/gpd33-private"
@@ -136,10 +145,12 @@ jobs:
           (cd "$private" && sha256sum -c application.sha256)
           bash supabase/maintenance/github_restore_check.sh
           headroom="$(python3 supabase/maintenance/github_rewrite_headroom.py)"
-          bash supabase/maintenance/github_db_run.sh apply "$headroom"
+          if [[ "$MODE" == maintain ]]; then
+            bash supabase/maintenance/github_db_run.sh apply "$headroom"
+          fi
           rm -f "$private/application.dump" "$private/application.sha256"
       - name: Apply catalog schema and activate the Worker
-        if: inputs.mode == 'maintain' && inputs.deploy_worker
+        if: inputs.mode == 'release' && inputs.deploy_worker
         env:
           GPD33_RELEASE_SMOKE_JAN: ${{ inputs.smoke_jan || vars.GPD33_RELEASE_SMOKE_JAN }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
