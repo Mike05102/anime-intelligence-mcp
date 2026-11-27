@@ -101,6 +101,13 @@ try {
 assert.equal((await (await call('/.well-known/gpd')).json()).commercial_scope,'anime_collectibles');
 assert.equal((await call('/collector/health')).status,404);
 assert.equal((await call('/collector')).status,404);
+assert.equal((await call('/v1/product/resolve?query=industrial%20sensor')).status,422);
+assert.equal((await (await call('/v1/product/resolve?gtin=4901234567894')).json()).domain,'anime_collectibles');
+const outsideMcp=await (await post('/mcp',{jsonrpc:'2.0',id:43,method:'tools/call',params:{
+  name:'product_resolve',arguments:{query:'industrial sensor'}
+}})).text();
+assert.match(outsideMcp,/anime_commercial_scope_required/);
+
 const routeManifest=await (await call('/v1/system/routes')).json();
 assert.ok(routeManifest.routes.includes('/v1/purchase-decision'));
 assert.ok(routeManifest.routes.every(path=>!/^\/v1\/(?:parts|universal|commerce)\//.test(path)));

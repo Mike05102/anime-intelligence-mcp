@@ -41,7 +41,7 @@ try{
     });
     const page=await (await request('/agents',env)).text();
     assert.match(page,/href="https:\/\/gpd\.example\/\.well-known\/gpd"/);
-    assert.match(page,/href="https:\/\/gpd\.example\/v1\/parts\/search\?query=industrial/);
+    assert.doesNotMatch(page,/href="https:\/\/gpd\.example\/v1\/parts\/search\?query=industrial/);
     assert.match(page,/href="https:\/\/gpd\.example\/v1\/merchant\/directory"/);
     assert.doesNotMatch(page,/sb_publishable_test|buyerproject\.supabase\.co/);
     if(advertised)assert.match(page,/Open the discovery manifest for the registration provider/);

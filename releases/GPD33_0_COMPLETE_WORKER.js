@@ -10463,7 +10463,7 @@ function openapi(origin){
       503:{description:"Import temporarily unavailable"}}}};
   paths["/v1/merchant/offers/upsert"]={post:{operationId:"upsertMerchantOffers",summary:"Publish or update merchant offers",description:"Authenticated merchant write endpoint. Send x-merchant-key.",tags:["merchant-intelligence","merchant-feed"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Offers accepted"},400:{description:"Invalid offer"},401:{description:"Invalid merchant key"}}}};
   paths["/v1/merchant/profile/update"]={post:{operationId:"updateMerchantAgentProfile",summary:"Update merchant agent-commerce profile",description:"Authenticated merchant write endpoint. Send x-merchant-key.",tags:["merchant-intelligence","merchant-feed"],security:[{MerchantApiKey:[]}],responses:{200:{description:"Profile updated"},400:{description:"Invalid profile"},401:{description:"Invalid merchant key"}}}};
-  paths["/v1/product/resolve"]={get:{operationId:"resolveUniversalProductIdentity",summary:"Normalize universal product identity",description:"Resolve GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN signals into a stable identity key and product domain before purchase-decision execution.",tags:["universal-commerce","product-identity"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"gtin",schema:{type:"string"}},{in:"query",name:"isbn",schema:{type:"string"}},{in:"query",name:"mpn",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}}],responses:{200:{description:"Normalized product identity"}}}};
+  paths["/v1/product/resolve"]={get:{operationId:"resolveUniversalProductIdentity",summary:"Normalize anime merchandise identity",description:"Normalize an anime merchandise query or identifier before searching the catalog.",tags:["universal-commerce","product-identity"],security:[],parameters:[{in:"query",name:"query",schema:{type:"string"}},{in:"query",name:"gtin",schema:{type:"string"}},{in:"query",name:"isbn",schema:{type:"string"}},{in:"query",name:"mpn",schema:{type:"string"}},{in:"query",name:"manufacturer",schema:{type:"string"}}],responses:{200:{description:"Normalized product identity"}}}};
   paths["/v1/universal/coverage"]={get:{operationId:"getUniversalCommerceCoverage",summary:"Get autonomous commerce coverage",description:"Bounded view of recent product demand, market observations, identity keys and observed market-provider diversity across universal product domains.",tags:["universal-commerce","coverage","database-growth"],security:[],responses:{200:{description:"Coverage snapshot"}}}};
   paths["/v1/commerce/search"]={post:{operationId:"searchLargeMarketCommerce",summary:"Search universal physical-product commerce",description:"Evidence-preserving market search across all generic physical-product domains. Exact identifiers outrank fuzzy text; live evidence outranks market memory; stale observations are explicitly labeled.",tags:["commerce","shopping-intelligence","universal-commerce"],security:[],responses:{200:{description:"Commerce offers"},400:{description:"Invalid request"}}}};
   paths["/v1/travel/expedia/availability"]={post:{operationId:"searchExpediaRapidAvailability",summary:"Search Expedia Rapid lodging availability for known property IDs",description:"Secondary lodging-provider adapter using Rapid signature authentication. Requires Expedia Rapid credentials and explicit Expedia property IDs.",tags:["travel","accommodation","expedia-rapid"],security:[],responses:{200:{description:"Expedia Rapid offers"},400:{description:"Property ID required"},503:{description:"Expedia Rapid not configured"}}}};
@@ -10795,6 +10795,17 @@ function mcpMeta(){return {"io.modelcontextprotocol/serverInfo":{name:"anime-int
 function outsideAnimePublicScope(path){
   return /^\/(?:(?:parts|collector)(?:[/-]|$)|v1\/(?:parts|travel|commerce|universal)(?:[/-]|$))/.test(path);
 }
+function resolveAnimeIdentity(body,query){
+  const inferred=inferPurchaseDomain(body,query,body.mpn||"");
+  const identifiers=normalizeUniversalIdentifiers(body,query);
+  const exactJan=!body.domain&&!body.vertical&&!body.category&&inferred==="general_commerce"
+    && /^(45|49)\d{11}$/.test(identifiers.gtin||"");
+  if(inferred!=="anime_collectibles"&&!exactJan)return {ok:false,error:"anime_commercial_scope_required"};
+  const domain="anime_collectibles";
+  return {ok:true,service:PLATFORM_NAME,version:VERSION,domain,identifiers,
+    identity_key:universalIdentityKey(domain,identifiers,String(body.manufacturer||body.product?.manufacturer||""),query),
+    generated_at:new Date().toISOString()};
+}
 function outsideAnimeToolScope(name){
   return /^(?:parts_|travel_|commerce_search$|universal_coverage$)/.test(name);
 }
@@ -10875,9 +10886,8 @@ async function mcp(request,env,origin){
       return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
     }
     if(name==="product_resolve"){
-      const q=String(args.query||"").trim(),domain=inferPurchaseDomain(args,q,args.mpn||"");const identifiers=normalizeUniversalIdentifiers(args,q);
-      const data={ok:true,service:PLATFORM_NAME,version:VERSION,domain,identifiers,identity_key:universalIdentityKey(domain,identifiers,String(args.manufacturer||""),q),generated_at:new Date().toISOString()};
-      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+      const data=resolveAnimeIdentity(args,String(args.query||"").trim());
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data,...(!data.ok?{isError:true}:{})});
     }
     if(name==="universal_coverage"){
       const data=await universalCoverageSnapshot(env);return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
@@ -13798,8 +13808,11 @@ export default{
       if(url.pathname==="/v1/universal/coverage"&&request.method==="GET")return json(await universalCoverageSnapshot(env));
       if(url.pathname==="/v1/product/resolve"&&(request.method==="GET"||request.method==="POST")){
         let body={};if(request.method==="POST"){try{body=await request.json();}catch{return json({ok:false,error:"invalid_json"},400);}}else{body={query:url.searchParams.get("query")||"",gtin:url.searchParams.get("gtin")||"",isbn:url.searchParams.get("isbn")||"",mpn:url.searchParams.get("mpn")||"",manufacturer:url.searchParams.get("manufacturer")||"",domain:url.searchParams.get("domain")||""};}
-        const q=String(body.query||body.need||"").trim(),domain=inferPurchaseDomain(body,q,body.mpn||"");const ids=normalizeUniversalIdentifiers(body,q);
-        return json({ok:true,service:PLATFORM_NAME,version:VERSION,domain,identifiers:ids,identity_key:universalIdentityKey(domain,ids,String(body.manufacturer||body?.product?.manufacturer||""),q),identifier_strength:ids.gtin||ids.isbn?"exact_global_identifier":ids.mpn&&body.manufacturer?"exact_manufacturer_identifier":"query_identity",generated_at:new Date().toISOString()});
+        if(!body||typeof body!=="object"||Array.isArray(body))return json({ok:false,error:"invalid_json"},400);
+        const data=resolveAnimeIdentity(body,String(body.query||body.need||"").trim());
+        if(!data.ok)return json(data,422);
+        const ids=data.identifiers;
+        return json({...data,identifier_strength:ids.gtin||ids.isbn?"exact_global_identifier":ids.mpn&&body.manufacturer?"exact_manufacturer_identifier":"query_identity"});
       }
       if(url.pathname==="/v1/commerce/domains"&&request.method==="GET")return json(commerceDomainsResponse());
       if(url.pathname==="/v1/commerce/search"&&request.method==="POST"){
