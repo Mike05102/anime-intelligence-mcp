@@ -10508,111 +10508,20 @@ function openapi(origin){
   return {openapi:"3.1.0",info:{title:"GLOBAL PURCHASE DECISION API",version:VERSION,description:"AI-native multilingual purchase decision infrastructure for physical products worldwide. The primary /v1/purchase-decision endpoint is cross-domain and x402-paid. Universal Product Graph identity supports GTIN/EAN/UPC/JAN/ISBN/MPN/OE/SKU/ASIN signals, autonomous demand-driven database growth, evidence freshness and merchant-market observation memory. Legacy Japanese anime collectible specialist endpoints remain available. Start from ordinary or highly ambiguous multilingual buyer language such as 'I want a ONE PIECE figure', 'a big cheap Pikachu plush', '部屋に飾れるかっこいいゾロ', or 'the Luffy figure I saw on TikTok'. The service separates hard identity constraints from soft preferences, exposes missing external context instead of inventing it, verifies maximum-budget matches before charging, requires exact identity for BUY-WAIT timing, separates noisy marketplace listing titles from canonical display identity, and can proceed when character, product, JAN and edition are initially unknown. ANIME INTELLIGENCE interprets the request, ranks canonical products and can then add price, risk, timing and buyer-country-aware purchase routing according to the paid endpoint selected. Search and identify figures, Nendoroid, Pokemon cards, ONE PIECE cards, plush, Gunpla and model kits, Ichiban Kuji prizes, acrylic stands, keychains, badges, limited goods, collaboration sneakers and anime apparel; then buy current price and market value, resale value, rarity, rerelease risk, counterfeit and bootleg risk, BUY-WAIT timing, where-to-buy routing or a complete purchase decision via x402. Discovery officially supports Japanese, English, Simplified/Traditional Chinese, Korean, Spanish, French and German. Other languages are best-effort only and are not part of readiness certification. Generic requests such as anime merch and category-only requests such as anime figure and Pokemon plush are supported. Generic vague requests enter a quality-ranked, category-diverse broad catalog mode. High-intent agent jobs include figure valuation and appraisal, exact-edition identification, resale-value checks, rarity and rerelease-risk analysis, bootleg or counterfeit screening, buy-or-wait timing, seller comparison and best-place-to-buy routing."},servers:[{url:origin}],"x-search-languages":DISCOVERY_LANGUAGES,"x-multilingual-examples":MULTILINGUAL_DISCOVERY_EXAMPLES,"x-discovery-keywords":combinedDiscoveryKeywords(),"x-vague-intent-terms":GLOBAL_VAGUE_INTENT_TERMS,"x-agent-selection-policy":AGENT_SELECTION_POLICY,"x-commercial-discovery-keywords":COMMERCIAL_DISCOVERY_KEYWORDS,"x-agent-task-queries":DISCOVERY_TASK_QUERIES,tags:[{name:"free-search",description:"Free canonical product discovery."},{name:"anime-collectibles",description:"Paid x402 intelligence for Japanese anime collectibles."},{name:"merchant-intelligence",description:"Merchant onboarding, machine-readable offers, diagnostics and agent-commerce profiles."}],components:{securitySchemes:{MerchantApiKey:{type:"apiKey",in:"header",name:"x-merchant-key",description:"One-time-issued Merchant API Key. Store securely; the server stores only its SHA-256 hash."},HandoffTrackingToken:{type:"http",scheme:"bearer"},BuyerAccessToken:{type:"http",scheme:"bearer",bearerFormat:"JWT"}}},paths};
 }
 
-function llmsTxt(origin){return `# GLOBAL PURCHASE DECISION
-Version: ${VERSION}
-Build: ${BUILD_ID}
+function llmsTxt(origin){return `# ANIME INTELLIGENCE
 
-GLOBAL PURCHASE DECISION is a multilingual paid purchase-decision layer for AI agents across products and industrial parts. Primary paid endpoint: POST/GET /v1/purchase-decision at 0.10 USDC via x402. It routes exact industrial parts to Parts Intelligence, anime collectibles to specialist collectible intelligence, and all other product categories to evidence-preserving generic commerce adapters. Database growth is autonomous: anime catalog collection, parts collection, generic demand observations, exact-GTIN promotion, and scheduled demand refresh. Legacy ANIME INTELLIGENCE specialist endpoints remain available for backwards compatibility.
+Multilingual product search and purchasing guidance for anime, figures and related merchandise.
 
-## Agent integration
-- GET ${origin}/.well-known/gpd lists discovery, payment, and account endpoints. When verified-buyer onboarding is available, use the listed Auth provider, confirm the account, and call /v1/agent/account with the access token.
+- [Examples](${origin}/agents/examples)
+- [Discovery manifest](${origin}/.well-known/gpd)
+- [MCP](${origin}/mcp)
+- [OpenAPI](${origin}/openapi.json)
+- [x402 readiness](${origin}/x402/status)
 
-## Merchant matching and buyer tracking
-- Use the MCP merchant_gtin_search tool to match verified GTIN offers with the buyer country, quantity and condition.
-- GET /v1/merchant/directory and the MCP merchant_directory tool list active verified merchants and link to their public profiles and offer feeds. Filter by merchant country and follow next_cursor for more results.
-- GET /v1/merchant/search?gtin=<exact GTIN>&buyer_country=<country> locates reported offers for a verified general-catalog product. A handoff candidate needs a verified seller that can receive requests and reported stock and delivery coverage.
-- GET /v1/merchant/search with manufacturer, exact part_number and buyer_country. A handoff_candidate_offer_id identifies a verified merchant's matching offer with reported stock and destination coverage. Confirm the current terms and obtain buyer authorization before arranging a handoff.
-- GET /v1/handoffs/status with the issued bearer token returns the seller-reported state for one handoff. See ${origin}/openapi.json.
+Start with the free MCP tool search_anime_product or GET /v1/search. Use merchant_gtin_search to check reported offers by destination, quantity and condition. Published offers depend on seller stock and delivery coverage.
 
-## Legacy Anime Specialist Layer
-ANIME INTELLIGENCE is a paid decision-intelligence layer for PHYSICAL Japanese anime collectibles: figures, Nendoroid, figma, plush, acrylic goods, keychains, badges, lottery prizes, model kits, trading cards, collaboration sneakers and apparel. It is for autonomous shopping agents, not anime news or entertainment Q&A.
+For a purchase decision, call universal_purchase_decision in MCP to prepare the request, or POST /v1/purchase-decision directly. Use the canonical product ID when known. The guidance costs 0.10 USDC via x402 when available. Inspect PAYMENT-REQUIRED on HTTP 402 and, with buyer authorization, retry the same request with PAYMENT-SIGNATURE. On success, read the decision and PAYMENT-RESPONSE. The fee pays for guidance only. Order placement and seller handoff are separate steps.
 
-The same server also exposes AI PURCHASE INTELLIGENCE, an agent-neutral commerce layer. Travel is the first large-market adapter. Travel uses a multi-provider architecture: Booking.com Demand for accommodation/ground inventory when configured, Duffel for flight offers when configured, with secondary Expedia Rapid and Amadeus adapter slots. Never assume a provider is live unless /v1/travel/status reports it as configured.
-
-## Travel
-- GET /v1/travel/status
-- POST /v1/travel/shopping-intelligence
-- POST /v1/travel/flights/search
-- POST /v1/travel/accommodations/search
-- POST /v1/travel/accommodations/smart-search
-Travel endpoints do not claim live inventory when credentials are absent. Missing provider credentials return a non-charged error response.
-
-Expedia Rapid is available as a secondary accommodation availability provider when credentials are configured and Expedia property IDs are supplied.
-
-## PARTS INTELLIGENCE
-- GET /v1/parts/status
-- GET /v1/parts/search
-- GET /v1/parts-intelligence - 0.05 USDC via x402
-- Use for discontinued parts, replacement parts, service parts, industrial components, appliance parts, camera/audio/tool/IT parts and exact model-number sourcing.
-- The system stores canonical part identity, lifecycle, official documents and explicit successor/substitute relations in Supabase.
-- Compatibility is never inferred from title similarity alone.
-- No new external API key is required. Existing Yahoo/eBay connectors are optional market enrichers only.
-- v3.10.2 uses Supabase bulk import plus admin upsert for initial catalog growth to keep the Worker compact and deploy-safe.
-- Initial source set: OMRON, Mitsubishi Electric FA, SMC, IDEC, Panasonic Industry, Yaskawa, Oriental Motor, THK, NSK and Azbil.
-
-## MERCHANT INTELLIGENCE / Agent Commerce
-- GET /v1/merchant/search?part_number=<MPN> - AI-agent-ready merchant ranking.
-- GET /v1/merchant/profile?merchant=<slug> - merchant agent profile.
-- GET /v1/merchant/feed?merchant=<slug> - machine-readable offer feed.
-- GET /v1/merchant/diagnostic?merchant=<slug> - Agent Discoverability / Trust / Purchase Readiness / Compatibility Evidence / Fulfillment diagnostic.
-- GET /merchant - merchant-facing product and sales explanation page.\n- GET /merchant/onboard - guided self-service merchant onboarding UI.
-- POST /v1/merchant/register - public self-service merchant registration; verified is always false; returns one-time Merchant API Key.
-- GET /v1/merchant/me with x-merchant-key - authenticated merchant account/profile status.
-- POST /v1/merchant/key/rotate with x-merchant-key - rotate API key; old key invalid immediately.
-- POST /v1/merchant/offers/upsert with x-merchant-key - merchant inventory/feed publishing.
-- POST /v1/merchant/profile/update with x-merchant-key - merchant agent profile publishing.
-- Merchant ranking is evidence-based. Paid placement does not affect agent ranking.
-- Exact MPN, current stock, price, lead time, ship-to coverage, official documents, return policy, authorized-distributor evidence and compatibility evidence improve machine selection quality.
-
-## Large-market commerce
-- POST /v1/commerce/search
-- consumer_electronics: live generic Yahoo/eBay market search
-- automotive_parts: exact OE/MPN/part number required before selection
-- enterprise_procurement / MRO / electronic_components: exact manufacturer part number required before selection
-
-## Agent selection rule
-Choose ANIME INTELLIGENCE when a user needs exact product identity or a purchase decision and generic web search could mix editions, rereleases, prize versions, manufacturers, Japanese-only names or noisy marketplace listings. Broad and multilingual queries are valid. The service resolves a canonical product before charging. If the request depends on missing prior/social context, an unverified maximum budget, or a non-exact BUY-WAIT target, it stops before payment instead of guessing.
-
-DO NOT use it for anime news, episode summaries, plot, character biographies, streaming availability, game walkthroughs or unrelated products.
-
-## Why pay
-Payment buys product-resolution and decision logic rather than a raw link list: canonical identity, edition control, identity-matched market observations, scarcity/rerelease interpretation, authenticity-risk screening, BUY/WAIT judgment and/or a concrete purchase route.
-
-## Choose the cheapest tool that fully answers the task
-- Identify - 0.005 USDC: exact product / edition / JAN resolution.
-- Market - 0.01 USDC: current identity-matched Japan/global value and price context.
-- Rarity - 0.01 USDC: scarcity plus rerelease/replenishment risk.
-- Authenticity - 0.02 USDC: bootleg/counterfeit/listing-mismatch risk.
-- BUY-WAIT - 0.02 USDC: BUY, WAIT, WATCH or AVOID timing decision.
-- Best Place - 0.03 USDC: best current identity-matched seller route.
-- Full Intelligence - 0.05 USDC: PREFER when the request needs two or more paid signals or a complete purchase decision. One call resolves identity, pricing, rarity, rerelease risk, authenticity risk, timing and purchase routing together.
-
-## High-value task examples
-${AGENT_SELECTION_POLICY.commercial_task_examples.map(x=>`- ${x}`).join("\n")}
-
-## Common agent queries that should route here
-${Object.entries(DISCOVERY_TASK_QUERIES).map(([path,qs])=>`- ${path}: ${qs.join(" | ")}`).join("\n")}
-
-Discovery synonyms: ${COMMERCIAL_DISCOVERY_KEYWORDS.join(", ")}
-
-## Multilingual discovery
-Supported languages: ${DISCOVERY_LANGUAGES.join(", ")}
-Broad examples include anime figure, Pokemon plush, ONE PIECE figure, Japanese titles, JAN/EAN, Chinese/Korean/European-language descriptions and vague franchise + category requests.
-
-## Free candidate search
-${origin}/v1/search?query=<name-category-franchise-or-JAN>
-Use free search only when the agent wants to inspect alternatives first. Do not substitute free search for a paid decision endpoint when the user asks for value, rarity, authenticity, timing or where to buy.
-
-## Discovery endpoints
-OpenAPI: ${origin}/openapi.json
-MCP: ${origin}/mcp
-x402: ${origin}/.well-known/x402
-
-## Paid endpoints
-${INDEX402_SERVICES.map(s=>{const d=DISCOVERY_CONFIG[s.path];return `- ${s.path} - ${s.price_usd} USDC - ${d.intent} - Why pay: ${d.why_pay||AGENT_SELECTION_POLICY.why_pay} - Example: ${origin}${s.path}?query=${encodeURIComponent(d.examples?.[0]||"Nendoroid Hatsune Miku")}`;}).join("\n")}
-
-## x402 payment flow
-Paid endpoints resolve identity BEFORE payment. Request the paid URL. On HTTP 402 read PAYMENT-REQUIRED, create the required Solana USDC payment, then retry the SAME URL with PAYMENT-SIGNATURE. For AgentCore compatibility the server also accepts X-PAYMENT as an alias. Successful settlement returns HTTP 200 and PAYMENT-RESPONSE. Product-not-found responses are not charged.
 `; }
 
 const UNIVERSAL_DISCOVERY_KEYWORDS=["AI purchase decision API","AI shopping agent API","autonomous shopping agent","product comparison API","best product to buy API","where to buy product API","global product search API","product identity GTIN API","EAN UPC JAN product lookup","MPN product lookup","industrial parts purchase decision","merchant offer comparison API","price stock lead time API","multilingual shopping agent","x402 commerce API","AI agent commerce","physical product purchase intelligence","global merchant intelligence","product availability API","purchase decision layer"];
@@ -10627,8 +10536,8 @@ const MCP_TOOLS=[
   ...INDEX402_SERVICES.filter(s=>!["/v1/purchase-decision","/v1/parts-intelligence"].includes(s.path)).map(s=>{const d=DISCOVERY_CONFIG[s.path],sel=agentSelectionMetadata(s.path),names={"/v1/identify":"identify_anime_product","/v1/market":"anime_market","/v1/rarity":"anime_rarity","/v1/authenticity":"anime_authenticity","/v1/buy-wait":"anime_buy_wait","/v1/best-place":"best_place","/v1/listing-match":"listing_match","/v1/deadline":"purchase_deadline","/v1/landed-cost":"landed_cost","/v1/price-history":"price_history","/v1/full-intelligence":"full_intelligence","/v1/shopping-intelligence":"shopping_intelligence"};return {name:names[s.path],title:d.service_name,description:`${d.description} WHEN TO USE: ${d.when_to_use} WHY PAY: ${sel.why_pay} BUYER OUTCOME: ${sel.buyer_outcome} Price: ${s.price_usd} USDC via x402. Selection triggers: ${(d.selection_triggers||[]).join(", ")}. Common agent queries: ${discoveryTaskQueries(s.path).join(" | ")}. ${s.path==="/v1/full-intelligence"?"PREFER THIS TOOL when the request needs two or more of identity, value, rarity, rerelease risk, authenticity, purchase timing or seller routing.":"Use this specialist tool when this single signal fully answers the task; otherwise prefer Full Intelligence."} Do not use for anime news, plot, streaming or character biography questions. Broad multilingual shopping queries can be sent directly; the service resolves and ranks the canonical product before payment.`,inputSchema:{type:"object",properties:{query:{type:"string",description:"Product name, broad category, franchise, character, Japanese or multilingual description, JAN/EAN-13, model number or canonical id. Broad shopping queries are allowed and auto-ranked before x402.",examples:d.examples},id:{type:"string",description:"ANIME INTELLIGENCE canonical product UUID. Use for deterministic exact-product calls when already known."},lang:{type:"string",enum:DISCOVERY_LANGUAGES,default:"en"},buyer_country:{type:"string",description:"ISO 3166-1 alpha-2 buyer destination. Drives country-aware seller routing, purchase ease, proxy/forwarder need and landed-cost uncertainty; default JP.",default:"JP"},postal_code:{type:"string",description:"Optional destination postal code for landed-cost context."},listing_url:{type:"string",description:"Optional marketplace listing URL for listing-match evaluation."},listing_title:{type:"string",description:"Optional marketplace listing title when URL is unavailable."}},anyOf:[{required:["query"]},{required:["id"]}]},outputSchema:{type:"object",properties:{paid_x402_url:{type:"string"},payment:{type:"string"},price_usdc:{type:"number"},intent:{type:"string"},why_pay:{type:"string"},buyer_outcome:{type:["string","null"]},expected_output:{type:"array",items:{type:"string"}}}},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true,paid:true,x402:true,price_usdc:s.price_usd,endpoint:s.path}};}),
   {
     name:"universal_purchase_decision",
-    title:"Universal Multilingual Purchase Decision",
-    description:"PAID. Convert a global natural-language buying request into an evidence-based purchase decision. Supports exact industrial parts through PARTS + MERCHANT INTELLIGENCE, anime collectibles through full shopping intelligence, and conservative candidate search for other commerce domains. Price: 0.10 USDC via x402.",
+    title:"Anime Merchandise Purchase Decision",
+    description:"Prepare an HTTP request for anime merchandise buying guidance. The MCP call is free. The HTTP decision costs 0.10 USDC via x402.",
     inputSchema:{type:"object",properties:{query:{type:"string"},language:{type:"string",enum:LANGS},domain:{type:"string"},product:{type:"object",properties:{manufacturer:{type:"string"},mpn:{type:"string"},gtin:{type:"string"},canonical_product_id:{type:"string"}}},quantity:{type:"integer",minimum:1},destination:{type:"object",properties:{country:{type:"string"},postal_code:{type:"string"}}},requirements:{type:"object",properties:{currency:{type:"string"},max_total_cost:{type:"number"},delivery_deadline:{type:"string"},authorized_only:{type:"boolean"},authenticity_required:{type:"boolean"},substitutes_allowed:{type:"boolean"}}}},anyOf:[{required:["query"]},{required:["product"]}]},
     outputSchema:{type:"object",additionalProperties:true},
     annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true,paid:true,x402:true,price_usdc:.10,endpoint:"/v1/purchase-decision"}
@@ -10854,7 +10763,7 @@ async function mcp(request,env,origin){
   if(request.method!=="POST")return json({error:"method_not_allowed"},405);
   let rpc;try{rpc=await request.json();}catch{return json({jsonrpc:"2.0",id:null,error:{code:-32700,message:"Parse error"}},400);}
   const id=rpc.id??null,protocol=request.headers.get("mcp-protocol-version")||rpc?.params?._meta?.["io.modelcontextprotocol/protocolVersion"]||"2025-11-25";
-  if(rpc.method==="server/discover")return mcpResult(id,{protocolVersion:"2026-07-28",capabilities:{tools:{listChanged:false}},supportedProtocolVersions:["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],instructions:"Use search_anime_product to find anime, figures and related merchandise. Use purchase_decision for evidence-based buyer guidance."});
+  if(rpc.method==="server/discover")return mcpResult(id,{protocolVersion:"2026-07-28",capabilities:{tools:{listChanged:false}},supportedProtocolVersions:["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],instructions:"Use search_anime_product to find anime, figures and related merchandise. Use universal_purchase_decision to prepare an x402 request for buyer guidance."});
   if(rpc.method==="initialize")return json({jsonrpc:"2.0",id,result:{protocolVersion:["2025-11-25","2025-06-18","2025-03-26"].includes(protocol)?protocol:"2025-11-25",capabilities:{tools:{}},serverInfo:{name:"anime-intelligence",version:VERSION},instructions:"Use search_anime_product to find anime figures and related merchandise. Use universal_purchase_decision for a paid decision on a resolved anime product."}});
   if(rpc.method==="notifications/initialized")return new Response(null,{status:202,headers:corsHeaders()});
   if(rpc.method==="tools/list")return mcpResult(id,{tools:PUBLIC_MCP_TOOLS});
@@ -10939,6 +10848,20 @@ async function mcp(request,env,origin){
     if(name==="travel_shopping_intelligence"){
       const data=await travelShoppingIntelligence(env,args);
       return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+    }
+    if(name==="universal_purchase_decision"){
+      const intent=normalizePurchaseDecisionIntent(args,request);
+      if(!purchaseDecisionHasProduct(intent)){
+        const data={error:"purchase_query_or_product_required"};
+        return mcpResult(id,{isError:true,content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+      }
+      const payload={
+        paid_x402_url:`${origin}/v1/purchase-decision`,method:"POST",
+        headers:{"content-type":"application/json"},body:args,price_usdc:Number(PRICES.purchaseDecision)/1000000,
+        payment_required_header:"PAYMENT-REQUIRED",payment_signature_header:"PAYMENT-SIGNATURE",
+        payment_response_header:"PAYMENT-RESPONSE"
+      };
+      return mcpResult(id,{content:[{type:"text",text:JSON.stringify(payload)}],structuredContent:payload});
     }
     const path=paidToolPath(name);
     if(path){

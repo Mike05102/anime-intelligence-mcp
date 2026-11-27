@@ -64,6 +64,15 @@ try{
     assert.notEqual(byName.get(name)?.annotations?.paid,true);
   }
   assert.equal(byName.get(manifest.onboarding.paid_decision_mcp_tool)?.annotations?.paid,true);
+  const decision=await (await request('/mcp',{},{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({jsonrpc:'2.0',id:5,method:'tools/call',params:{name:'universal_purchase_decision',
+      arguments:{query:'Hatsune Miku Nendoroid',destination:{country:'JP'}}}})})).json();
+  assert.equal(decision.result.structuredContent.paid_x402_url,origin+'/v1/purchase-decision');
+  assert.equal(decision.result.structuredContent.method,'POST');
+  assert.deepEqual(decision.result.structuredContent.body,{query:'Hatsune Miku Nendoroid',destination:{country:'JP'}});
+  const llms=await (await request('/llms.txt')).text();
+  assert.match(llms,/universal_purchase_decision/);
+  assert.doesNotMatch(llms,/\/v1\/(?:parts|travel)/);
   const examples=await (await request('/agents/examples')).json();
   assert.equal(examples.free_product_identity.url,origin+'/v1/product/resolve?gtin=4901234567894&domain=anime_collectibles');
   assert.equal(examples.free_merchant_discovery.url,origin+'/v1/merchant/directory?limit=10');
