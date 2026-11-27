@@ -100,14 +100,30 @@ assert.deepEqual(api.animeMarketRefreshOutcome('ebay',{products:[{matches:2,inse
 const marketHour=Date.UTC(2026,10,26);
 assert.deepEqual(await api.refreshScheduledAnimeMarket({},marketHour),{ok:true,configured:false,selected:0});
 try {
+  let savedCursor=null;
+  const candidates=Array.from({length:32},(_,index)=>({
+    id:`00000000-0000-4000-8000-${String(index+1).padStart(12,'0')}`,
+    product_type:'figure',metadata:{universal_commerce:true}
+  }));
   globalThis.fetch=async (input)=>{
     const url=new URL(input);
     assert.equal(url.hostname,'db.example');
+    if(url.pathname.endsWith('/api_events')){
+      assert.equal(url.searchParams.get('metadata->>source'),'eq.yahoo');
+      return Response.json(savedCursor?[{metadata:{candidate_cursor:savedCursor}}]:[]);
+    }
     assert.equal(url.searchParams.get('limit'),'32');
-    return Response.json([{id:'old-non-anime',product_type:'figure',metadata:{universal_commerce:true}}]);
+    assert.equal(url.searchParams.get('order'),'id.asc');
+    assert.equal(url.searchParams.get('id'),savedCursor?`gt.${savedCursor}`:null);
+    return Response.json(savedCursor?[]:candidates);
   };
-  assert.deepEqual(await api.refreshScheduledAnimeMarket({...env,YAHOO_CLIENT_ID:'test'},marketHour),
-    {ok:true,configured:true,source:'yahoo',selected:0});
+  const marketEnv={...env,YAHOO_CLIENT_ID:'test'};
+  const initial=await api.refreshScheduledAnimeMarket(marketEnv,marketHour);
+  assert.equal(initial.selected,0);
+  assert.equal(initial.candidate_cursor,candidates.at(-1).id);
+  savedCursor=initial.candidate_cursor;
+  assert.deepEqual(await api.refreshScheduledAnimeMarket(marketEnv,marketHour+3600000),
+    {ok:true,configured:true,source:'yahoo',selected:0,candidate_cursor:null});
 } finally {
   globalThis.fetch=originalCatalogFetch;
 }

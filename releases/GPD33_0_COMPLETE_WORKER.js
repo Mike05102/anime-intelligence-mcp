@@ -13690,18 +13690,21 @@ async function refreshScheduledAnimeMarket(env,scheduledTime){
   const ebay=Boolean(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET);
   if(!yahoo&&!ebay)return {ok:true,configured:false,selected:0};
   const source=yahoo&&(!ebay||Math.floor(scheduledTime/3600000)%2===0)?"yahoo":"ebay";
-  const candidates=await sb(env,"/products?select=*&order=source_last_checked_at.asc.nullsfirst,id.asc&limit=32");
+  const checkpoints=await sb(env,`/api_events?select=metadata&event_type=eq.scheduled_growth_run&metadata->>task=eq.market&metadata->>source=eq.${source}&order=occurred_at.desc,id.desc&limit=1`);
+  if(!Array.isArray(checkpoints))throw new Error("Invalid scheduled anime market checkpoint response");
+  const prior=checkpoints[0]?.metadata?.candidate_cursor;
+  const cursor=typeof prior==="string"&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(prior)?prior:null;
+  const candidates=await sb(env,`/products?select=*&order=id.asc&limit=32${cursor?`&id=gt.${cursor}`:""}`);
   if(!Array.isArray(candidates))throw new Error("Invalid scheduled anime market candidate response");
   const marketSource=source==="yahoo"?"yahoo_shopping":"ebay";
-  const attemptTime=product=>Date.parse(product.metadata?.market_attempts?.[marketSource]?.at)||0;
-  const [product]=candidates.filter(p=>isAnimeLaunchProduct(p)&&marketEligible(p))
-    .sort((a,b)=>attemptTime(a)-attemptTime(b));
-  if(!product)return {ok:true,configured:true,source,selected:0};
+  const product=candidates.find(p=>isAnimeLaunchProduct(p)&&marketEligible(p));
+  if(!product)return {ok:true,configured:true,source,selected:0,
+    candidate_cursor:candidates.length===32?candidates.at(-1).id:null};
   const history=await sb(env,`/market_observations?select=*&product_id=eq.${encodeURIComponent(product.id)}&metadata->>market_source=eq.${marketSource}&order=observed_at.desc&limit=32`);
   if(!Array.isArray(history))throw new Error("Invalid scheduled anime market history response");
   const options={products:[product],history};
   const result=source==="yahoo"?await refreshYahooBatch(env,1,options):await refreshEbayBatch(env,1,options);
-  return animeMarketRefreshOutcome(source,result);
+  return {...animeMarketRefreshOutcome(source,result),candidate_cursor:product.id};
 }
 
 // Limit the shared cron to anime catalogue and market refreshes.
@@ -14065,6 +14068,7 @@ export default{
           task,ok:result.ok,scheduled_time:dt.toISOString(),
           ...(task==="market"&&result.configured!==undefined?{
             configured:result.configured,source:result.source||null,selected:result.selected,
+            candidate_cursor:result.candidate_cursor??null,
             matched:result.matched||0,observations_written:result.observations_written||0
           }:{}),
           ...(!result.ok?{failure_count:result.failed||result.failure_count||1}:{})
