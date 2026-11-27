@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "Global Purchase Decision · Discovery and free search",
-    "description": "Discover GPD's public interface and try a product search without payment.",
+    "name": "ANIME INTELLIGENCE · Free anime merchandise search",
+    "description": "Try free anime merchandise search, connect an MCP client, and find the separate buyer x402 purchase-decision instructions.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": { "type": "noauth" },
@@ -21,6 +21,13 @@
       "request": {
         "method": "GET",
         "url": "{{baseUrl}}/v1/search?query=Hatsune%20Miku"
+      }
+    },
+    {
+      "name": "Read MCP connection and buyer x402 examples",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/agents/examples"
       }
     },
     {

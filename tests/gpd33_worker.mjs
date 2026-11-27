@@ -456,7 +456,7 @@ const collectionOrigin=collection.variable.find(variable=>variable.key==='baseUr
 assert.equal(collectionOrigin,'https://anime-intelligence.goodmy0312.workers.dev');
 assert.equal(collection.auth.type,'noauth');
 assert.deepEqual(collection.item.map(({request})=>request.url.replace('{{baseUrl}}',origin)),
-  [origin+'/.well-known/agent.json',buyerDiscovery.free_search.url,buyerDiscovery.openapi]);
+  [origin+'/.well-known/agent.json',buyerDiscovery.free_search.url,origin+'/agents/examples',buyerDiscovery.openapi]);
 for(const {request} of collection.item){
   assert.equal(request.method,'GET');
   const response=await call(request.url.replace('{{baseUrl}}',''));
