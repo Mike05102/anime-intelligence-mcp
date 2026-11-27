@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -40,6 +40,16 @@ try {
     return Response.json({message:'database unavailable'},{status:503});
   };
   await assert.rejects(refresh);
+  globalThis.fetch=async (input,options)=>{
+    assert.equal(new URL(input).pathname,'/rest/v1/market_observations');
+    const [observation]=JSON.parse(options.body);
+    assert.equal(observation.in_stock,null);
+    assert.equal(observation.stock_text,'unknown');
+    return new Response(null,{status:201});
+  };
+  assert.equal(await api.saveYahooObservations(env,{id:'figure'},[{item:{code:'listing',url:'https://shop.example/figure',price:100}}],
+    [{product_id:'figure',external_listing_id:'yahoo:listing',price_jpy:100,in_stock:true}], 'source'),1);
+
   const seedBatch=()=>api.insertOfficialSeedBatch(env,[{source_product_key:'fixture:1'},{source_product_key:'fixture:2'}]);
   globalThis.fetch=async (input,options)=>{
     assert.equal(new URL(input).searchParams.get('select'),'id');
