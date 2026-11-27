@@ -340,6 +340,27 @@ export async function saveGpd33X402WindowReport(report,directory) {
   }
 }
 
+export async function recordGpd33X402Window(report,directory) {
+  const status=await saveGpd33X402WindowReport(report,directory);
+  if(status!=='reported'||report.scope!=='supplied_live_evidence_only')return {status};
+  const asset=solanaMainnet+'|'+usdcMint;
+  const receipts=report.transactions.matched;
+  const refunds=report.refund_transactions.matched;
+  if(!receipts&&!refunds)return {status};
+  const usdc=atomic=>{
+    const units=BigInt(atomic??0);
+    return (units/1000000n).toString()+'.'+(units%1000000n).toString().padStart(6,'0');
+  };
+  return {status,verified_window_activity:{
+    observed_at:new Date(report.observation_window.last_observed_at*1000).toISOString(),
+    evidence:report.evidence,receipts,refunds,
+    gross_usdc:usdc(report.matched_information_fee_atomic[asset]),
+    refunded_usdc:usdc(report.matched_refund_atomic[asset]),
+    net_usdc:report.net_matched_information_fee_atomic===null?null:
+      usdc(report.net_matched_information_fee_atomic[asset])
+  }};
+}
+
 async function * evidenceFiles(paths) {
   for (const file of paths) yield (await readBoundedJson(file,12*1024*1024,{privateFile:true})).data;
 }
@@ -357,7 +378,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const {data:trust}=await readBoundedJson(trustFile,256*1024,{privateFile:true});
       const windowReport=await reconcileSignedGpd33X402Window(evidenceFiles(bundleFiles),trust,
         {startInclusive:Number(start),endExclusive:Number(end)});
-      report={status:await saveGpd33X402WindowReport(windowReport,outputDirectory)};
+      report=await recordGpd33X402Window(windowReport,outputDirectory);
     } else {
       const [bundleFile,trustFile,snapshot]=args;
       if (args.length !== 3) throw new Error('Expected bundle, pinned policy and snapshot');

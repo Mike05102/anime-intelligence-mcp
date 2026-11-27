@@ -3,7 +3,7 @@ import {generateKeyPairSync,sign} from 'node:crypto';
 import {chmod,mkdtemp,readdir,readFile,rm,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {reconcileSignedGpd33X402Evidence,reconcileSignedGpd33X402Window,saveGpd33X402WindowReport} from '../scripts/gpd33_x402_reconcile.mjs';
+import {reconcileSignedGpd33X402Evidence,reconcileSignedGpd33X402Window,recordGpd33X402Window,saveGpd33X402WindowReport} from '../scripts/gpd33_x402_reconcile.mjs';
 
 const snapshot = '00000000-0000-4000-8000-000000000010';
 const observed_at = 1795656000;
@@ -155,7 +155,15 @@ await assert.rejects(reconcileSignedGpd33X402Window([],test.trust,requested), /A
 assert.throws(() => test.run([expected],[{...finalized,amount_atomic:'-1'}]), /token amount/);
 const reportDirectory=await mkdtemp(join(tmpdir(),'gpd-x402-window-'));
 try {
-  assert.equal(await saveGpd33X402WindowReport(windowReport,reportDirectory),'reported');
+  assert.deepEqual(await recordGpd33X402Window(windowReport,reportDirectory),{status:'reported'});
+  const liveDirectory=await mkdtemp(join(reportDirectory,'live-'));
+  const liveWindow=await reconcileSignedGpd33X402Window(
+    [live.evidence([expected],[finalized])],live.trust,requested);
+  const notice=await recordGpd33X402Window(liveWindow,liveDirectory);
+  assert.equal(notice.verified_window_activity.gross_usdc,'9007199254.740993');
+  assert.equal(notice.verified_window_activity.receipts,1);
+  assert.deepEqual(await recordGpd33X402Window(liveWindow,liveDirectory),{status:'already_reported'});
+  await rm(liveDirectory,{recursive:true,force:true});
   assert.equal(await saveGpd33X402WindowReport(windowReport,reportDirectory),'already_reported');
   const name='x402-'+observed_at+'-'+(observed_at+61)+'.json';
   const path=join(reportDirectory,name);
