@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -124,6 +124,13 @@ try {
 }
 assert.equal((await (await call('/.well-known/gpd')).json()).commercial_scope,'anime_collectibles');
 assert.equal((await call('/collector/health')).status,404);
+assert.equal((await (await call('/')).json()).revenue_model,'buyer_x402');
+assert.equal((await call('/r/rakuten?u=legacy')).status,404);
+assert.equal((await call('/shop/affiliate-click',{method:'POST'})).status,404);
+const direct='https://item.rakuten.co.jp/shop/figure/';
+const affiliate='https://hb.afl.rakuten.co.jp/hgc/legacy';
+assert.equal(api.normalizeRakutenLiveOffer({itemPrice:100,itemUrl:direct,affiliateUrl:affiliate},{},{}).affiliate_url,direct);
+assert.equal(api.normalizeRakutenLiveOffer({itemPrice:100,affiliateUrl:affiliate},{},{}),null);
 assert.equal((await call('/collector')).status,404);
 assert.equal((await call('/v1/product/resolve?query=industrial%20sensor')).status,422);
 assert.equal((await (await call('/v1/product/resolve?gtin=4901234567894')).json()).domain,'anime_collectibles');
