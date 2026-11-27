@@ -2358,11 +2358,12 @@ async function lightweightStructuredFallback(env,hints,query,limit=10){
   return [];
 }
 
-async function findProducts(env,q="",limit=10,eligible=()=>true){
+async function findProducts(env,q="",limit=10,eligible=()=>true,requireCatalogue=false){
   const query=String(q||"").trim();
   if(!query)return [];
+  const read=requireCatalogue?sb:sbOptional;
   const jan=cleanJan(query);
-  if(jan){const exact=(await loadProductsByJans(env,[jan])).filter(eligible);if(exact.length)return exact.slice(0,limit);}
+  if(jan){const exact=(await loadProductsByJans(env,[jan],requireCatalogue)).filter(eligible);if(exact.length)return exact.slice(0,limit);}
   const hints=multilingualQueryHints(query),groups=[];
   const dbTypes=[...new Set(hints.product_types.flatMap(t=>PRODUCT_TYPE_SEARCH_EQUIVALENTS[t]||[t]))];
   const semanticTerms=[...new Set([...hints.franchise_aliases,...(hints.character_aliases||[]),...hints.residual_terms].map(safeSearchTerm).filter(Boolean))].slice(0,6);
@@ -2380,7 +2381,7 @@ async function findProducts(env,q="",limit=10,eligible=()=>true){
       path+=`&or=(${encodeURIComponent(clauses.join(","))})`;
     }
     path+=`&limit=${Math.max(16,Math.min(32,limit*3))}`;
-    groups.push(await sbOptional(env,path));
+    groups.push(await read(env,path));
   }
 
   // Raw text fallback remains for exact names, model numbers and queries that could not be semantically normalized.
@@ -2388,7 +2389,7 @@ async function findProducts(env,q="",limit=10,eligible=()=>true){
     const escaped=safeSearchTerm(query);
     if(escaped){
       const directOr=["canonical_name_ja","canonical_name_en","franchise","manufacturer","brand","series","model_number"].map(k=>`${k}.ilike.*${escaped}*`).join(",");
-      groups.push(await sbOptional(env,`/products?select=*&or=(${encodeURIComponent(directOr)})&limit=${Math.max(10,Math.min(30,limit*3))}`));
+      groups.push(await read(env,`/products?select=*&or=(${encodeURIComponent(directOr)})&limit=${Math.max(10,Math.min(30,limit*3))}`));
     }
   }
 
@@ -9985,7 +9986,10 @@ function isAnimeLaunchProduct(product){
 }
 
 async function freeSearch(request,env,url){
-  const q=url.searchParams.get("query")||"",lang=detectSearchLanguage(q,url.searchParams.get("lang")||"",request?.headers?.get("accept-language")||""),hints=multilingualQueryHints(q),rows=await findProducts(env,q,10,isAnimeLaunchProduct),shoppingIntent=naturalShoppingIntent(q,url,env);
+  const q=url.searchParams.get("query")||"",lang=detectSearchLanguage(q,url.searchParams.get("lang")||"",request?.headers?.get("accept-language")||""),hints=multilingualQueryHints(q),shoppingIntent=naturalShoppingIntent(q,url,env);
+  let rows;
+  try{rows=await findProducts(env,q,10,isAnimeLaunchProduct,true);}
+  catch{return {ok:false,service:"ANIME INTELLIGENCE",version:VERSION,error:"catalogue_unavailable",retryable:true};}
   const searchMode=hints.generic_intent&&!hints.product_types.length&&!hints.franchises.length&&!hints.residual_terms.length?"broad_catalog":hints.ambiguous_category_search?"category_only":"targeted",ranked=rankPaidCandidates(q,rows,shoppingIntent),recommended=ranked[0]||null,recommendedPaid=naturalPaidRoute(shoppingIntent,q);
   await logRequestStage(env,request,"api_call",{metadata:{route_type:"free",result_count:rows.length,response_status:200,detected_language:lang,ambiguous_category_search:hints.ambiguous_category_search,generic_intent:hints.generic_intent,search_mode:searchMode,product_types:hints.product_types,franchises:hints.franchises,recommended_product_id:recommended?.product?.id||null,recommended_paid_endpoint:recommendedPaid,buyer_country:shoppingIntent.buyer_country,budget_jpy:shoppingIntent.budget?.jpy_equivalent||null}});
   return {service:"ANIME INTELLIGENCE",version:VERSION,language:lang,query:q,shopping_intent:shoppingIntent,search_interpretation:{product_types:hints.product_types,franchises:hints.franchises,residual_terms:hints.residual_terms,ambiguous_category_search:hints.ambiguous_category_search,generic_intent:hints.generic_intent,search_mode:searchMode},count:rows.length,recommendation_confidence:recommendationConfidenceFromRanked(ranked,shoppingIntent),recommended_product:recommended?paidRankedView(recommended,shoppingIntent):null,recommendations:ranked.slice(0,5).map(x=>paidRankedView(x,shoppingIntent)),recommended_paid_endpoint:{endpoint:recommendedPaid,price_usdc:endpointPriceUsd(recommendedPaid),reason:"Cheapest paid endpoint inferred to answer the original natural-language shopping request."},recommendation_policy:"Natural shopping intent first: franchise/category relevance, explicit budget fit, buyer use case, popularity/demand when available, release recency, identity quality, product completeness and purchase-route readiness. Affiliate readiness may improve executability but cannot override semantic relevance.",paid_next_steps:[{task:"identify exact product or edition",endpoint:"/v1/identify",price_usdc:.005},{task:"current market value or price comparison",endpoint:"/v1/market",price_usdc:.01},{task:"rarity and rerelease risk",endpoint:"/v1/rarity",price_usdc:.01},{task:"counterfeit or bootleg risk",endpoint:"/v1/authenticity",price_usdc:.02},{task:"BUY WAIT WATCH AVOID timing",endpoint:"/v1/buy-wait",price_usdc:.02},{task:"best current purchase route",endpoint:"/v1/best-place",price_usdc:.03},{task:"verify seller listing matches exact edition",endpoint:"/v1/listing-match",price_usdc:.01},{task:"preorder lottery or sales deadline",endpoint:"/v1/deadline",price_usdc:.01},{task:"destination-aware landed cost including Japan buyer",endpoint:"/v1/landed-cost",price_usdc:.02},{task:"7/30/90/180-day asking-price history",endpoint:"/v1/price-history",price_usdc:.02},{task:"complete multi-signal purchase decision",endpoint:"/v1/full-intelligence",price_usdc:.05}],agent_selection_reason:"Use ANIME INTELLIGENCE when a physical anime-merch request is vague, multilingual, identity-sensitive or purchase-oriented. It turns ordinary language into canonical candidates plus structured confidence before paid price/risk/routing intelligence.",context_requirements:shoppingIntent.context_requirements||[],agent_routing_note:"If the user already asked for value, rarity, authenticity, timing, seller routing or a complete buying decision, call the matching paid endpoint directly; free search is only optional candidate discovery.",results:ranked.map(paidRankedView)};
@@ -10772,7 +10776,7 @@ async function mcp(request,env,origin){
     if(outsideAnimeToolScope(name))return json({jsonrpc:"2.0",id,error:{code:-32602,message:"Tool outside the anime catalogue scope"}});
     if(name==="search_anime_product"){
       const u=new URL(`${origin}/v1/search`);u.searchParams.set("query",args.query||"");if(args.lang)u.searchParams.set("lang",args.lang);
-      const data=await freeSearch(request,env,u);return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
+      const data=await freeSearch(request,env,u);return mcpResult(id,{...(data.ok===false?{isError:true}:{}),content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
     }
     if(name==="record_purchase_intent"){
       const data=await recordPurchaseIntent(env,args,"mcp");return mcpResult(id,{content:[{type:"text",text:JSON.stringify(data)}],structuredContent:data});
@@ -13831,7 +13835,7 @@ export default{
       if(url.pathname==="/x402/status"){try{const support=await facilitatorSupport(env),mainnet=findSolanaMainnetKind(support);return json({ok:!!mainnet&&!!env.X402_WALLET_ADDRESS,version:VERSION,facilitator:facilitatorUrl(env),production_ready:!!mainnet&&!!env.X402_WALLET_ADDRESS,solana_mainnet_exact_v2:!!mainnet,network:SOLANA_MAINNET,asset:"USDC",usdc_mint:SOLANA_USDC,wallet_configured:!!env.X402_WALLET_ADDRESS,payment_enabled:!!mainnet&&!!env.X402_WALLET_ADDRESS});}catch(e){return json({ok:false,version:VERSION,facilitator:facilitatorUrl(env),production_ready:false,payment_enabled:false,wallet_configured:!!env.X402_WALLET_ADDRESS,error:safeError(e)},503);}}
       if(url.pathname==="/x402/solana-rpc")return x402SolanaRpcBridge(request);
       if(url.pathname==="/mcp")return mcp(request,env,origin);
-      if(url.pathname==="/v1/search")return json(await freeSearch(request,env,url));
+      if(url.pathname==="/v1/search"){const result=await freeSearch(request,env,url);return json(result,result.ok===false?503:200,{"cache-control":"no-store"});}
       if(url.pathname==="/parts"&&request.method==="GET")return partsSalesPage(origin);
       if(url.pathname==="/v1/parts/coverage"&&request.method==="GET")return json(await partsCoverageApi(env),200,{"cache-control":"public, max-age=300"});
       if(url.pathname==="/v1/parts/status"&&request.method==="GET")return json(await partsIngestStatus(env));

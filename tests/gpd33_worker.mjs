@@ -19,6 +19,18 @@ const call=(path,init)=>worker.fetch(new Request(origin+path,init),env,ctx);
 const post=(path,body)=>call(path,{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify(body)});
 const originalCatalogFetch=globalThis.fetch;
 try {
+  globalThis.fetch=async()=>Response.json({message:'provider restricted'},{status:402});
+  const unavailable=await call('/v1/search?query=Hatsune%20Miku');
+  assert.equal(unavailable.status,503);
+  assert.equal((await unavailable.json()).error,'catalogue_unavailable');
+  const tool=await (await post('/mcp',{jsonrpc:'2.0',id:91,method:'tools/call',
+    params:{name:'search_anime_product',arguments:{query:'Hatsune Miku'}}})).json();
+  assert.equal(tool.result.isError,true);
+} finally {
+  globalThis.fetch=originalCatalogFetch;
+}
+
+try {
   const checkedUrl='https://www.goodsmile.com/ja/product/12345';
   const parsed={jan_code:'4901234567894',canonical_name_ja:'Hatsune Miku Nendoroid'};
   const refresh=()=>api.saveOfficialProduct(env,{slug:'goodsmile'},checkedUrl,parsed);
