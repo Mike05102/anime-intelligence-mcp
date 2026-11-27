@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -67,7 +67,48 @@ assert.ok(results.checks.some(check=>check.name==='anime_catalogue_cron'&&check.
 await worker.scheduled({scheduledTime:Date.UTC(2026,10,26,0,5)},env,{
   waitUntil:()=>assert.fail('Off-cadence anime cron must not run')
 });
+const kotobukiya=api.OFFICIAL_CONNECTORS.find(source=>source.slug==='kotobukiya');
+const officialDetail='https://www.kotobukiya.co.jp/product/detail/p4934054087358/';
+const officialPage=`<title>ティータ・ラッセル｜軌跡シリーズ｜美少女フィギュア｜フィギュア｜プラモデル</title>
+<p>価格 12,000円、予約受付中</p><dl><dt>発売月</dt><dd>2027年6月</dd></dl>
+<span class="detailHeader_price detailHeader_price-taxIn">23,100<small>円（税込）</small></span>
+<a href="https://shop.kotobukiya.co.jp/shop/g/g4934054087358/">購入</a>`;
+const officialProduct=api.parseOfficial(kotobukiya,officialDetail,officialPage);
+assert.equal(officialProduct.canonical_name_ja,'ティータ・ラッセル');
+assert.equal(officialProduct.product_type,'figure');
+assert.equal(officialProduct.jan_code,'4934054087358');
+assert.equal(officialProduct.msrp_jpy,23100);
+assert.equal(officialProduct.metadata.official_release_month,'2027-06');
+assert.equal(officialProduct.original_release_date,null);
+assert.equal(officialProduct.product_status,undefined);
+assert.equal(api.parseOfficial(kotobukiya,officialDetail,officialPage.replace('g4934054087358/','g4934054087365/')).jan_code,null);
+const visitedLists=[];
+try {
+  globalThis.fetch=async (input)=>{
+    visitedLists.push(String(input));
+    return new Response('<html></html>');
+  };
+  const hour=Date.UTC(2026,10,26);
+  const options={scheduled:true};
+  await api.refreshOfficialBatch(env,1,{...options,timeMs:hour+10*60000});
+  const firstList=visitedLists[0];
+  visitedLists.length=0;
+  await api.refreshOfficialBatch(env,1,{...options,timeMs:hour+20*60000});
+  assert.notEqual(visitedLists[0],firstList,'Official cron slots should start at different sources');
+} finally {
+  globalThis.fetch=originalCatalogFetch;
+}
 assert.equal((await (await call('/.well-known/gpd')).json()).commercial_scope,'anime_collectibles');
+assert.equal((await call('/collector/health')).status,404);
+assert.equal((await call('/collector')).status,404);
+const routeManifest=await (await call('/v1/system/routes')).json();
+assert.ok(routeManifest.routes.includes('/v1/purchase-decision'));
+assert.ok(routeManifest.routes.every(path=>!/^\/v1\/(?:parts|universal|commerce)\//.test(path)));
+assert.deepEqual((await (await call('/v1/status')).json()).domains.specialized,['anime_collectibles']);
+const buyerGuide=await (await call('/agents')).text();
+assert.ok(buyerGuide.includes('Hatsune Miku Nendoroid'));
+assert.doesNotMatch(buyerGuide,/industrial parts|\/v1\/parts\//);
+
 assert.equal(results.embedded_parts_collector.checks,61);
 
 assert.equal(api.normalizeUniversalIdentifiers({isbn:'0-306-40615-2'}).gtin,'9780306406157');
