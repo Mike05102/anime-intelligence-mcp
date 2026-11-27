@@ -13675,6 +13675,16 @@ async function embeddedCollectorFetch(request,env,ctx){
   return EMBEDDED_PARTS_COLLECTOR.fetch(req,env,ctx);
 }
 
+function animeMarketRefreshOutcome(source,result){
+  const report=source==="yahoo"?result:result.products;
+  const selected=report.length;
+  const failed=report.filter(row=>row.error||
+    (!row.matches&&(!row.queries_tried?.length||row.queries_tried.some(attempt=>attempt.error)))).length;
+  return {ok:failed===0,configured:true,source,selected,failed,
+    matched:report.filter(row=>row.matches>0).length,
+    observations_written:report.reduce((sum,row)=>sum+(row.inserted||0),0)};
+}
+
 async function refreshScheduledAnimeMarket(env,scheduledTime){
   const yahoo=Boolean(env.YAHOO_CLIENT_ID);
   const ebay=Boolean(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET);
@@ -13691,7 +13701,7 @@ async function refreshScheduledAnimeMarket(env,scheduledTime){
   if(!Array.isArray(history))throw new Error("Invalid scheduled anime market history response");
   const options={products:[product],history};
   const result=source==="yahoo"?await refreshYahooBatch(env,1,options):await refreshEbayBatch(env,1,options);
-  return {ok:nestedFailures(result)===0,source,result};
+  return animeMarketRefreshOutcome(source,result);
 }
 
 // Limit the shared cron to anime catalogue and market refreshes.
@@ -14050,10 +14060,14 @@ export default{
         result={ok:false,error:safeError(error)};
       }
       // Failures stay in the audit trail. Report successful activity once per hour.
-      if(!result.ok||dt.getUTCMinutes()===50){
+      if(!result.ok||task==="market"){
         await logEvent(env,"scheduled_growth_run",{endpoint:"scheduled",metadata:{
           task,ok:result.ok,scheduled_time:dt.toISOString(),
-          ...(!result.ok?{failure_count:result.failure_count||1}:{})
+          ...(task==="market"&&result.configured!==undefined?{
+            configured:result.configured,source:result.source||null,selected:result.selected,
+            matched:result.matched||0,observations_written:result.observations_written||0
+          }:{}),
+          ...(!result.ok?{failure_count:result.failed||result.failure_count||1}:{})
         }});
       }
       if(dt.getUTCMinutes()===50){
