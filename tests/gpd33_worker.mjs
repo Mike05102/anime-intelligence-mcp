@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome,officialCatalogueCounts};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome,officialCatalogueCounts,recentAnimeMarketDemand};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -132,6 +132,24 @@ assert.deepEqual(api.officialCatalogueCounts('official',{result:[
 ]}),{checked:4,inserted:1,updated:1,unchanged:1});
 assert.deepEqual(api.officialCatalogueCounts('mass',{result:{selected:2,inserted:1,already_in_database:4}}),
   {selected:2,inserted:1,already_in_database:4});
+try {
+  const a='00000000-0000-4000-8000-000000000001';
+  const b='00000000-0000-4000-8000-000000000002';
+  const now=Date.UTC(2026,10,26);
+  globalThis.fetch=async input=>{
+    const url=new URL(input);
+    assert.equal(url.searchParams.get('limit'),'12');
+    if(url.pathname.endsWith('/api_events'))return Response.json([{product_id:a},{product_id:a},{product_id:b}]);
+    assert.equal(url.searchParams.get('id'),`in.(${a},${b})`);
+    const figure={canonical_name_ja:'Hatsune Miku Nendoroid',product_type:'nendoroid',
+      jan_code:'4901234567894',manufacturer:'Good Smile Company',official_url:'https://www.goodsmile.com/ja/product/12345'};
+    return Response.json([{...figure,id:a,metadata:{market_attempts:{yahoo_shopping:{at:new Date(now).toISOString()}}}},
+      {...figure,id:b}]);
+  };
+  assert.equal((await api.recentAnimeMarketDemand(env,now,'yahoo_shopping'))?.id,b);
+} finally {
+  globalThis.fetch=originalCatalogFetch;
+}
 const marketHour=Date.UTC(2026,10,26);
 assert.deepEqual(await api.refreshScheduledAnimeMarket({},marketHour),{ok:true,configured:false,selected:0});
 try {

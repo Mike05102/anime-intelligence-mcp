@@ -13723,26 +13723,47 @@ function animeMarketRefreshOutcome(source,result){
     observations_written:report.reduce((sum,row)=>sum+(row.inserted||0),0)};
 }
 
+async function recentAnimeMarketDemand(env,scheduledTime,marketSource){
+  const since=new Date(scheduledTime-86400000).toISOString();
+  const events=await sbOptional(env,`/api_events?select=product_id&event_type=eq.canonical_product_selected&product_id=not.is.null&occurred_at=gte.${since}&order=occurred_at.desc&limit=12`);
+  const ids=[...new Set((Array.isArray(events)?events:[]).map(event=>event.product_id)
+    .filter(id=>typeof id==="string"&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)))];
+  if(!ids.length)return null;
+  const products=await sbOptional(env,`/products?select=*&id=in.(${ids.join(",")})&limit=12`);
+  if(!Array.isArray(products))return null;
+  return ids.map(id=>products.find(product=>product.id===id)).find(product=>{
+    if(!product||!isAnimeLaunchProduct(product)||!marketEligible(product))return false;
+    const attemptedAt=Date.parse(product.metadata?.market_attempts?.[marketSource]?.at);
+    return !Number.isFinite(attemptedAt)||scheduledTime-attemptedAt>=86400000;
+  })||null;
+}
+
 async function refreshScheduledAnimeMarket(env,scheduledTime){
   const yahoo=Boolean(env.YAHOO_CLIENT_ID);
   const ebay=Boolean(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET);
   if(!yahoo&&!ebay)return {ok:true,configured:false,selected:0};
-  const source=yahoo&&(!ebay||Math.floor(scheduledTime/3600000)%2===0)?"yahoo":"ebay";
+  const hour=Math.floor(scheduledTime/3600000);
+  const source=yahoo&&(!ebay||hour%2===0)?"yahoo":"ebay";
   const checkpoints=await sb(env,`/api_events?select=metadata&event_type=eq.scheduled_growth_run&metadata->>task=eq.market&metadata->>source=eq.${source}&order=occurred_at.desc,id.desc&limit=1`);
   if(!Array.isArray(checkpoints))throw new Error("Invalid scheduled anime market checkpoint response");
   const prior=checkpoints[0]?.metadata?.candidate_cursor;
   const cursor=typeof prior==="string"&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(prior)?prior:null;
-  const candidates=await sb(env,`/products?select=*&order=id.asc&limit=32${cursor?`&id=gt.${cursor}`:""}`);
-  if(!Array.isArray(candidates))throw new Error("Invalid scheduled anime market candidate response");
   const marketSource=source==="yahoo"?"yahoo_shopping":"ebay";
-  const product=candidates.find(p=>isAnimeLaunchProduct(p)&&marketEligible(p));
-  if(!product)return {ok:true,configured:true,source,selected:0,
-    candidate_cursor:candidates.length===32?candidates.at(-1).id:null};
+  const providerSlot=yahoo&&ebay?Math.floor(hour/2):hour;
+  const demanded=providerSlot%4===3?await recentAnimeMarketDemand(env,scheduledTime,marketSource):null;
+  let product=demanded;
+  if(!product){
+    const candidates=await sb(env,`/products?select=*&order=id.asc&limit=32${cursor?`&id=gt.${cursor}`:""}`);
+    if(!Array.isArray(candidates))throw new Error("Invalid scheduled anime market candidate response");
+    product=candidates.find(p=>isAnimeLaunchProduct(p)&&marketEligible(p));
+    if(!product)return {ok:true,configured:true,source,selected:0,
+      candidate_cursor:candidates.length===32?candidates.at(-1).id:null};
+  }
   const history=await sb(env,`/market_observations?select=*&product_id=eq.${encodeURIComponent(product.id)}&metadata->>market_source=eq.${marketSource}&order=observed_at.desc&limit=32`);
   if(!Array.isArray(history))throw new Error("Invalid scheduled anime market history response");
   const options={products:[product],history};
   const result=source==="yahoo"?await refreshYahooBatch(env,1,options):await refreshEbayBatch(env,1,options);
-  return {...animeMarketRefreshOutcome(source,result),candidate_cursor:product.id};
+  return {...animeMarketRefreshOutcome(source,result),candidate_cursor:demanded?cursor:product.id,selection:demanded?"buyer_demand":"catalogue"};
 }
 
 // Limit the shared cron to anime catalogue and market refreshes.
@@ -14107,7 +14128,7 @@ export default{
           task,ok:result.ok,scheduled_time:dt.toISOString(),...catalogueCounts,
           ...(task==="market"&&result.configured!==undefined?{
             configured:result.configured,source:result.source||null,selected:result.selected,
-            candidate_cursor:result.candidate_cursor??null,
+            candidate_cursor:result.candidate_cursor??null,selection:result.selection||null,
             matched:result.matched||0,observations_written:result.observations_written||0
           }:{}),
           ...(!result.ok?{failure_count:result.failed||result.failure_count||1}:{})
