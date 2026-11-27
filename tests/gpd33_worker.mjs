@@ -37,12 +37,22 @@ try {
   }
   let current={id:'official',jan_code:parsed.jan_code};
   let writes=0;
+  globalThis.fetch=async()=>assert.fail('A missing product title must reject before lookup');
+  await assert.rejects(()=>api.saveOfficialProduct(env,{slug:'goodsmile'},checkedUrl,{}),/missing_product_title/);
+  globalThis.fetch=async (_input,options)=>Response.json(options.method==='GET'?[{...current,source_last_checked_at:null}]:[]);
+  await assert.rejects(refresh,/update was not confirmed/);
+  globalThis.fetch=async (input,options)=>{
+    if(options.method==='POST')assert.equal(new URL(input).searchParams.get('select'),'id');
+    return Response.json([]);
+  };
+  await assert.rejects(refresh,/insert was not confirmed/);
+
   globalThis.fetch=async (_input,options)=>{
     if(options.method==='GET')return Response.json([current]);
     assert.equal(options.method,'PATCH');
     current={...current,...JSON.parse(options.body)};
     writes++;
-    return new Response(null,{status:204});
+    return Response.json([{id:current.id}]);
   };
   assert.equal((await refresh()).status,'updated');
   assert.equal((await refresh()).status,'unchanged');

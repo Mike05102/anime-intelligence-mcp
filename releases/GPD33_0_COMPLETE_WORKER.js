@@ -1419,6 +1419,8 @@ async function archiveDiscoverGoodSmile(env,categoryId=6,page=1,limit=40){
 function invalidOfficialProductPage(connector,url,parsed){
   const u=canonicalOfficialUrl(url);
   const title=String(parsed?.canonical_name_ja||parsed?.canonical_name_en||"");
+  if(!cleanOfficialTitle(title))return "missing_product_title";
+  if(connector?.detailRegex&&!connector.detailRegex.test(u))return "outside_connector_detail";
   if(connector?.slug==="kdcolle"&&(/\/product\/20\d{2}(?:\/\d{1,2})?$/.test(new URL(u).pathname.replace(/\/$/,""))||/\u691c\u7d22\u7d50\u679c/.test(title)))return "kdcolle_listing_or_archive";
   if(/(?:search|category|archive|products?)$/i.test(new URL(u).pathname.replace(/\/$/,"")))return "listing_or_archive";
   return null;
@@ -1479,11 +1481,13 @@ async function saveOfficialProduct(env,connector,url,parsed){
     if(checkedAge>=0&&checkedAge<86400000&&unchanged&&unchangedMetadata&&sameProvenance){
       return {status:"unchanged",id:base.id};
     }
-    await sb(env,`/products?id=eq.${encodeURIComponent(base.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify(patch)});
+    const rows=await sb(env,`/products?id=eq.${encodeURIComponent(base.id)}&select=id`,{method:"PATCH",headers:{Prefer:"return=representation"},body:JSON.stringify(patch)});
+    if(!Array.isArray(rows)||rows.length!==1||rows[0]?.id!==base.id)throw new Error("Official product update was not confirmed");
     return {status:"updated",id:base.id};
   }
-  const rows=await sb(env,"/products",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({...patch,brand:null,series:null,franchise:null,character_names:[],model_number:null,scale:null,edition:null,limited_type:null,image_source_url:parsed.official_image_url||null,image_status:parsed.official_image_url?"found":"pending"})});
-  return {status:"inserted",id:rows?.[0]?.id||null};
+  const rows=await sb(env,"/products?select=id",{method:"POST",headers:{Prefer:"return=representation"},body:JSON.stringify({...patch,brand:null,series:null,franchise:null,character_names:[],model_number:null,scale:null,edition:null,limited_type:null,image_source_url:parsed.official_image_url||null,image_status:parsed.official_image_url?"found":"pending"})});
+  if(!Array.isArray(rows)||rows.length!==1||!rows[0]?.id)throw new Error("Official product insert was not confirmed");
+  return {status:"inserted",id:rows[0].id};
 }
 
 async function refreshOfficialBatch(env,limit=2,options={}){
