@@ -122,6 +122,16 @@ const tamashii=api.OFFICIAL_CONNECTORS.find(source=>source.slug==='tamashii');
 const tamashiiUrl='https://tamashiiweb.com/item/16222/';
 const krillin=api.parseOfficial(tamashii,tamashiiUrl,
   '<title>S.H.Figuarts クリリン | 商品一覧 | 魂ウェブ</title><meta property="og:description" content="ドラゴンボールZ">');
+const tamashiiFacts=api.parseOfficial(tamashii,tamashiiUrl,
+  '<title>クリリン | 魂ウェブ</title><p>価格 99,999円</p><dl class="productInfoList">'+
+  '<dt>メーカー希望小売価格</dt><dd class="_price"><em>&yen;7,150</em></dd>'+
+  '<dt>予約期間</dt><dd><time datetime="2026-12-01">12月1日</time></dd>'+
+  '<dt>発売月</dt><dd><time datetime="2027-08">8月</time></dd></dl>');
+assert.equal(tamashiiFacts.msrp_jpy,7150);
+assert.equal(tamashiiFacts.metadata.official_release_month,'2027-08');
+assert.equal(tamashiiFacts.metadata.official_reservation_start,'2026-12-01');
+assert.equal(tamashiiFacts.original_release_date,null);
+assert.equal(tamashiiFacts.product_status,undefined);
 assert.equal(krillin.franchise,'Dragon Ball');
 assert.equal(krillin.canonical_name_ja,'S.H.Figuarts クリリン');
 await assert.rejects(()=>api.saveOfficialProduct(env,tamashii,tamashiiUrl,{canonical_name_ja:'S.H.Figuarts つば九郎'}),

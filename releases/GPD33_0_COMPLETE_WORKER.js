@@ -1164,13 +1164,17 @@ function parseOfficial(connector,url,html){
   const title=kotobukiya?titleParts[0].trim():tamashii?pageTitle.split("|")[0].trim():pageTitle;
   const franchise=tamashii?discoverySafeFranchise({canonical_name_ja:
     [title,htmlMeta(html,"og:description")].filter(Boolean).join(" ")}):null;
+  const info=tamashii?html.match(/<dl class=["']productInfoList["'][^>]*>([\s\S]*?)<\/dl>/i)?.[1]||"":"";
+  const tamashiiPrice=info.match(/<dd class=["']_price["'][^>]*>\s*<em>\s*(?:&yen;|[¥￥])([\d,]+)/i)?.[1];
+  const tamashiiRelease=info.match(/<dt>\s*発売(?:月|日)\s*<\/dt>\s*<dd[^>]*>\s*<time datetime=["'](20\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?)["']/i)?.[1];
+  const reservation=info.match(/<dt>\s*予約期間\s*<\/dt>\s*<dd[^>]*>\s*<time datetime=["'](20\d{2}-\d{2}-\d{2})["']/i)?.[1];
   const text=stripHtml(html);
   const detailJan=kotobukiya?new URL(url).pathname.match(/\/p((?:45|49)\d{11})\/?$/)?.[1]:null;
   const shopJan=kotobukiya?html.match(/href=["']https:\/\/shop\.kotobukiya\.co\.jp\/shop\/g\/g((?:45|49)\d{11})\//i)?.[1]:null;
-  const jan=kotobukiya?(detailJan && detailJan===shopJan && validGtin(detailJan)?detailJan:null):parseJanFromText(text);
+  const jan=kotobukiya?(detailJan && detailJan===shopJan && validGtin(detailJan)?detailJan:null):parseJanFromText(tamashii?stripHtml(info):text);
   const price=kotobukiya?html.match(/class=["'][^"']*\bdetailHeader_price-taxIn["']>\s*([\d,]+)/i)?.[1]:null;
   const release=kotobukiya?html.match(/<dt>発売月<\/dt>\s*<dd>\s*(20\d{2})年(1[0-2]|[1-9])月\s*<\/dd>/)?.slice(1):null;
-  const releaseMonth=release?`${release[0]}-${release[1].padStart(2,"0")}`:null;
+  const releaseMonth=tamashiiRelease?.slice(0,7)||(release?`${release[0]}-${release[1].padStart(2,"0")}`:null);
   const classification=classifyProduct(kotobukiya?titleParts.slice(0,4).join(" "):title);
   return {
     canonical_name_ja:title,
@@ -1178,14 +1182,14 @@ function parseOfficial(connector,url,html){
     manufacturer:connector.manufacturer,
     ...(franchise?{franchise}:{}),
     jan_code:jan,
-    msrp_jpy:kotobukiya?(price?Number(price.replace(/,/g,"")):null):parsePriceJpy(html),
-    original_release_date:kotobukiya?null:parseReleaseDate(html),
+    msrp_jpy:kotobukiya?(price?Number(price.replace(/,/g,"")):null):tamashii?(tamashiiPrice?Number(tamashiiPrice.replace(/,/g,"")):null):parsePriceJpy(html),
+    original_release_date:kotobukiya?null:tamashii?(tamashiiRelease?.length===10?tamashiiRelease:null):parseReleaseDate(html),
     official_url:canonicalOfficialUrl(url),
     official_image_url:htmlMeta(html,"og:image"),
     source_product_key:sourceKeyFromOfficial(connector,url,jan),
     product_type:classification.type,
-    product_status:kotobukiya?undefined:/\u4e88\u7d04|pre-?order/i.test(text)?"preorder":"active",
-    metadata:{...(releaseMonth?{official_release_month:releaseMonth}:{}),...(!kotobukiya?{rerelease:detectRerelease(text)}:{}),classification:{...classification,version:VERSION}}
+    product_status:kotobukiya||tamashii?undefined:/\u4e88\u7d04|pre-?order/i.test(text)?"preorder":"active",
+    metadata:{...(releaseMonth?{official_release_month:releaseMonth}:{}),...(reservation?{official_reservation_start:reservation}:{}),...(!kotobukiya&&!tamashii?{rerelease:detectRerelease(text)}:{}),classification:{...classification,version:VERSION}}
   };
 }
 
