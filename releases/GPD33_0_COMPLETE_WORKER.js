@@ -1424,6 +1424,15 @@ function invalidOfficialProductPage(connector,url,parsed){
   return null;
 }
 
+function sameOfficialValue(left,right){
+  if(left===right)return true;
+  if(left===null||right===null||typeof left!=="object"||typeof right!=="object"||
+    Array.isArray(left)!==Array.isArray(right))return false;
+  const keys=Object.keys(left);
+  return keys.length===Object.keys(right).length&&keys.every(key=>
+    Object.hasOwn(right,key)&&sameOfficialValue(left[key],right[key]));
+}
+
 async function saveOfficialProduct(env,connector,url,parsed){
   const invalid=invalidOfficialProductPage(connector,url,parsed);
   if(invalid)throw new Error(`Rejected non-product official page: ${invalid}`);
@@ -1460,6 +1469,16 @@ async function saveOfficialProduct(env,connector,url,parsed){
     metadata
   };
   if(base.id){
+    const checkedAge=Date.parse(now)-Date.parse(base.source_last_checked_at);
+    const unchanged=Object.entries(patch).every(([key,value])=>
+      key==="metadata"||key==="source_last_checked_at"||sameOfficialValue(value,base[key]));
+    const unchangedMetadata=Object.entries(metadata).every(([key,value])=>
+      key==="field_provenance"||sameOfficialValue(value,base.metadata?.[key]));
+    const sameProvenance=base.metadata?.field_provenance?.official_url?.source===connector.slug&&
+      (!jan||base.metadata?.field_provenance?.jan_code?.source===connector.slug);
+    if(checkedAge>=0&&checkedAge<86400000&&unchanged&&unchangedMetadata&&sameProvenance){
+      return {status:"unchanged",id:base.id};
+    }
     await sb(env,`/products?id=eq.${encodeURIComponent(base.id)}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify(patch)});
     return {status:"updated",id:base.id};
   }

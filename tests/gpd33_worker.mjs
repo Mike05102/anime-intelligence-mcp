@@ -35,6 +35,25 @@ try {
     };
     await assert.rejects(refresh,error);
   }
+  let current={id:'official',jan_code:parsed.jan_code};
+  let writes=0;
+  globalThis.fetch=async (_input,options)=>{
+    if(options.method==='GET')return Response.json([current]);
+    assert.equal(options.method,'PATCH');
+    current={...current,...JSON.parse(options.body)};
+    writes++;
+    return new Response(null,{status:204});
+  };
+  assert.equal((await refresh()).status,'updated');
+  assert.equal((await refresh()).status,'unchanged');
+  assert.equal(writes,1);
+  const changed=await api.saveOfficialProduct(env,{slug:'goodsmile'},checkedUrl,{...parsed,msrp_jpy:7000});
+  assert.equal(changed.status,'updated');
+  assert.equal(current.msrp_jpy,7000);
+  current.source_last_checked_at='2026-01-01T00:00:00Z';
+  assert.equal((await refresh()).status,'updated');
+  assert.equal(writes,3);
+
   globalThis.fetch=async (_input,options)=>{
     assert.equal(options.method,'GET');
     return Response.json({message:'database unavailable'},{status:503});
