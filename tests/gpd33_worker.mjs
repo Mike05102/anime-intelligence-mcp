@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -82,6 +82,20 @@ assert.equal(officialProduct.metadata.official_release_month,'2027-06');
 assert.equal(officialProduct.original_release_date,null);
 assert.equal(officialProduct.product_status,undefined);
 assert.equal(api.parseOfficial(kotobukiya,officialDetail,officialPage.replace('g4934054087358/','g4934054087365/')).jan_code,null);
+const marketHour=Date.UTC(2026,10,26);
+assert.deepEqual(await api.refreshScheduledAnimeMarket({},marketHour),{ok:true,configured:false,selected:0});
+try {
+  globalThis.fetch=async (input)=>{
+    const url=new URL(input);
+    assert.equal(url.hostname,'db.example');
+    assert.equal(url.searchParams.get('limit'),'32');
+    return Response.json([{id:'old-non-anime',product_type:'figure',metadata:{universal_commerce:true}}]);
+  };
+  assert.deepEqual(await api.refreshScheduledAnimeMarket({...env,YAHOO_CLIENT_ID:'test'},marketHour),
+    {ok:true,configured:true,source:'yahoo',selected:0});
+} finally {
+  globalThis.fetch=originalCatalogFetch;
+}
 const visitedLists=[];
 try {
   globalThis.fetch=async (input)=>{

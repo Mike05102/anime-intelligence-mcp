@@ -2539,7 +2539,7 @@ async function saveYahooObservations(env,product,hits,recent=[],sourceId=null){
       metadata:{market_source:"yahoo_shopping",price_type:"asking",asking_price_jpy:Math.round(price),total_price_jpy:Math.round(price),sold_transaction:false,match_score:hit.score,match_basis:hit.match_basis,specialist_match:hit.specialist_match||null,identity_guard_version:VERSION,canonical_jan:product.jan_code||null,image_url:item.exImage?.url||item.image?.medium||null}
     };
     const old=prev.get(row.external_listing_id);
-    if(!old||Number(old.price_jpy)!==row.price_jpy)rows.push(row);
+    if(!old||Number(old.price_jpy)!==row.price_jpy||hoursSince(old.observed_at)>=24)rows.push(row);
   }
   if(rows.length)await sb(env,"/market_observations",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify(rows)});
   return rows.length;
@@ -2547,7 +2547,7 @@ async function saveYahooObservations(env,product,hits,recent=[],sourceId=null){
 
 async function refreshYahooBatch(env,limit=2,options={}){
   if(!env.YAHOO_CLIENT_ID)throw new Error("YAHOO_CLIENT_ID is missing");
-  const history=await recentYahooObservations(env);
+  const history=options.history??await recentYahooObservations(env);
   const safeLimit=Math.max(1,Math.min(PIPELINE.yahooStandalone,Number(limit)||1));
   const selected=await selectMarketProducts(env,history,safeLimit,options.products||null,"yahoo_shopping");
   const sourceId=options.yahooSourceId||(await ensureYahooSource(env)).source_id;
@@ -2799,13 +2799,13 @@ async function saveEbayObservations(env,product,hits,recent=[],sourceId=null,fxI
     const exact=["gtin","detail_gtin"].includes(hit.match_basis);if(!exact&&!['structured_item_specifics','strict_product_identity'].includes(hit.match_basis))continue;
     const shipping=ebayShipping(item),currency=String(item.price.currency),convertedPrice=originalToJpy(item.price.value,currency,fxInfo.rate),convertedShipping=shipping.currency?originalToJpy(shipping.value,shipping.currency,fxInfo.rate):null;if(convertedPrice==null)continue;
     const row={product_id:product.id,source_id:sid,external_listing_id:`ebay:${item.itemId}`,seller_name:null,listing_title:item.title||product.canonical_name_ja,listing_url:purchaseUrl,item_condition:String(item.condition||"").trim().toLowerCase()||null,price_jpy:convertedPrice,shipping_jpy:convertedShipping,price_original:Number(item.price.value),currency,shipping_original:shipping.value,in_stock:true,stock_text:"available",observed_at:now,metadata:{market_source:"ebay",marketplace:EBAY_MARKETPLACE,price_type:"asking",asking_price_jpy:convertedPrice,shipping_jpy:convertedShipping,total_price_jpy:convertedPrice+(convertedShipping||0),sold_transaction:false,match_score:hit.score,match_basis:hit.match_basis,identity_guard_version:VERSION,detail_verified:!!hit.verification,detail_gtin_match:hit.verification?.detail_gtin_match||false,structured_identity_verified:hit.verification?.structured_identity_verified||false,specialist_match:hit.verification?.specialist_match||null,canonical_jan:product.jan_code||null,canonical_name_en:product.canonical_name_en||null,image_url:item.image?.imageUrl||null,fx_rate_usdjpy:currency==="USD"?fxInfo.rate:null,fx_source:currency==="USD"?fxInfo.source:"native_jpy",jpy_conversion:currency==="JPY"?"native":"fx_reference",privacy_mode:"seller_identifier_not_stored",affiliate:!!item.itemAffiliateWebUrl,affiliate_source:item.itemAffiliateWebUrl?"ebay_partner_network":null,affiliate_campaign_configured:ebayEpnConfigured(env)}};
-    const old=prev.get(row.external_listing_id);if(!old||Number(old.price_original)!==row.price_original||String(old.currency||"")!==currency||Number(old.shipping_original??-1)!==Number(row.shipping_original??-1))rows.push(row);
+    const old=prev.get(row.external_listing_id);if(!old||Number(old.price_original)!==row.price_original||String(old.currency||"")!==currency||Number(old.shipping_original??-1)!==Number(row.shipping_original??-1)||hoursSince(old.observed_at)>=24)rows.push(row);
   }
   if(rows.length)await sb(env,"/market_observations",{method:"POST",headers:{Prefer:"return=minimal"},body:JSON.stringify(rows)});return rows.length;
 }
 
 async function refreshEbayBatch(env,limit=1,options={}){
-  if(!env.EBAY_CLIENT_ID||!env.EBAY_CLIENT_SECRET)throw new Error("eBay credentials are missing");const history=await recentEbayObservations(env);const safeLimit=Math.max(1,Math.min(PIPELINE.ebayStandalone,Number(limit)||1));const selected=await selectMarketProducts(env,history,safeLimit,options.products||null,"ebay");let sourceId=options.ebaySourceId||null;if(!sourceId){const sources=options.sources||await loadSources(env);sourceId=sourceIdBySlugOrName(sources,"ebay",["eBay"]);}const fxInfo=await resolveUsdJpy(env);const report=[];
+  if(!env.EBAY_CLIENT_ID||!env.EBAY_CLIENT_SECRET)throw new Error("eBay credentials are missing");const history=options.history??await recentEbayObservations(env);const safeLimit=Math.max(1,Math.min(PIPELINE.ebayStandalone,Number(limit)||1));const selected=await selectMarketProducts(env,history,safeLimit,options.products||null,"ebay");let sourceId=options.ebaySourceId||null;if(!sourceId){const sources=options.sources||await loadSources(env);sourceId=sourceIdBySlugOrName(sources,"ebay",["eBay"]);}const fxInfo=await resolveUsdJpy(env);const report=[];
   for(const p of selected){try{const result=await ebaySearch(env,p,20);const inserted=await saveEbayObservations(env,p,result.hits,history,sourceId,fxInfo);await markMarketAttempt(env,p,"ebay",{returned:result.ebay_returned,matches:result.hits.length,inserted});report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),canonical_name_en:p.canonical_name_en,jan_code:p.jan_code,product_type:p.product_type||null,identity_quality:marketIdentityQuality(p),identity_guard_version:VERSION,query:result.query,search_method:result.method,ebay_returned:result.ebay_returned,matches:result.hits.length,inserted,queries_tried:result.queries_tried});}catch(e){try{await markMarketAttempt(env,p,"ebay",{error:safeError(e)});}catch{}report.push({id:p.id,product:cleanOfficialTitle(p.canonical_name_ja),error:safeError(e)});}}
   return {identity_guard_version:VERSION,selected:selected.length,usd_jpy_conversion:fxInfo.rate,usd_jpy_source:fxInfo.source,products:report};
 }
@@ -7319,7 +7319,7 @@ function universalSelftest(){
   add("admin_kpi_unwrap_enabled",adminPage({}).includes("k=k&&k.kpi?k.kpi:k"));
   add("external_revenue_only_admin",adminPage({}).includes("recent_history_external_revenue_usdc")&&!adminPage({}).includes("external_revenue_usdc','recent_history_external_revenue_usdc','revenue_usdc"));
   const testDay=Date.UTC(2026,9,27,12,0,0);
-  add("anime_catalogue_cron",["mass","official","official","mass","official","official"]
+  add("anime_catalogue_cron",["mass","official","official","market","official","official"]
     .every((stage,i)=>scheduledTaskForTime(testDay+i*600000)===stage));
   add("anime_catalogue_off_cadence_idle",scheduledTaskForTime(testDay+300000)===null);
   add("merchant_backlog_due_only",universalMerchantDueBacklog.toString().includes("next_attempt_at=lte"));
@@ -13662,8 +13662,27 @@ async function embeddedCollectorFetch(request,env,ctx){
   return EMBEDDED_PARTS_COLLECTOR.fetch(req,env,ctx);
 }
 
-// Only run the official anime catalogue on the six hourly cron slots.
-const ANIME_SCHEDULE=["mass","official","official","mass","official","official"];
+async function refreshScheduledAnimeMarket(env,scheduledTime){
+  const yahoo=Boolean(env.YAHOO_CLIENT_ID);
+  const ebay=Boolean(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET);
+  if(!yahoo&&!ebay)return {ok:true,configured:false,selected:0};
+  const source=yahoo&&(!ebay||Math.floor(scheduledTime/3600000)%2===0)?"yahoo":"ebay";
+  const candidates=await sb(env,"/products?select=*&order=source_last_checked_at.asc.nullsfirst,id.asc&limit=32");
+  if(!Array.isArray(candidates))throw new Error("Invalid scheduled anime market candidate response");
+  const marketSource=source==="yahoo"?"yahoo_shopping":"ebay";
+  const attemptTime=product=>Date.parse(product.metadata?.market_attempts?.[marketSource]?.at)||0;
+  const [product]=candidates.filter(p=>isAnimeLaunchProduct(p)&&marketEligible(p))
+    .sort((a,b)=>attemptTime(a)-attemptTime(b));
+  if(!product)return {ok:true,configured:true,source,selected:0};
+  const history=await sb(env,`/market_observations?select=*&product_id=eq.${encodeURIComponent(product.id)}&metadata->>market_source=eq.${marketSource}&order=observed_at.desc&limit=32`);
+  if(!Array.isArray(history))throw new Error("Invalid scheduled anime market history response");
+  const options={products:[product],history};
+  const result=source==="yahoo"?await refreshYahooBatch(env,1,options):await refreshEbayBatch(env,1,options);
+  return {ok:nestedFailures(result)===0,source,result};
+}
+
+// Limit the shared cron to anime catalogue and market refreshes.
+const ANIME_SCHEDULE=["mass","official","official","market","official","official"];
 function scheduledTaskForTime(timeMs){
   const minute=new Date(Number(timeMs)).getUTCMinutes();
   return minute%10===0?ANIME_SCHEDULE[minute/10]:null;
@@ -14007,7 +14026,9 @@ export default{
     ctx.waitUntil((async()=>{
       let result;
       try{
-        result=await runRotationStage(env,task,"cron",{timeMs:scheduledTime});
+        result=task==="market"
+          ?await refreshScheduledAnimeMarket(env,scheduledTime)
+          :await runRotationStage(env,task,"cron",{timeMs:scheduledTime});
       }catch(error){
         result={ok:false,error:safeError(error)};
       }
