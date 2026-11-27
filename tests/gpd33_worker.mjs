@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome,officialCatalogueCounts,recentAnimeMarketDemand,animeMarketProductBudget,runAnimeMarketPage};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome,officialCatalogueCounts,recentAnimeMarketDemand,animeMarketProductBudget,runAnimeMarketPage,backfillMegaHousePrice};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -229,6 +229,18 @@ try {
 } finally {
   globalThis.fetch=originalCatalogFetch;
 }
+try {
+  globalThis.fetch=async input=>{
+    const url=new URL(input);
+    assert.equal(url.hostname,'db.example');
+    assert.equal(url.searchParams.get('limit'),'1');
+    assert.equal(url.searchParams.get('msrp_jpy'),'is.null');
+    return Response.json([{id:'legacy',official_url:'https://unrelated.example/products/item/6193/'}]);
+  };
+  assert.equal((await api.backfillMegaHousePrice(env,marketHour)).error,'invalid_megahouse_detail_url');
+} finally {
+  globalThis.fetch=originalCatalogFetch;
+}
 const visitedLists=[];
 try {
   globalThis.fetch=async (input)=>{
@@ -240,7 +252,7 @@ try {
   await api.refreshOfficialBatch(env,1,{...options,timeMs:hour+10*60000});
   const firstList=visitedLists[0];
   visitedLists.length=0;
-  await api.refreshOfficialBatch(env,1,{...options,timeMs:hour+20*60000});
+  await api.refreshOfficialBatch(env,1,{...options,timeMs:hour+40*60000});
   assert.notEqual(visitedLists[0],firstList,'Official cron slots should start at different sources');
 } finally {
   globalThis.fetch=originalCatalogFetch;

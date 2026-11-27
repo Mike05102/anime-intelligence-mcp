@@ -1447,20 +1447,24 @@ function sameOfficialValue(left,right){
     Object.hasOwn(right,key)&&sameOfficialValue(left[key],right[key]));
 }
 
-async function saveOfficialProduct(env,connector,url,parsed){
+async function saveOfficialProduct(env,connector,url,parsed,existingId=null){
   const invalid=invalidOfficialProductPage(connector,url,parsed);
   if(invalid)throw new Error(`Rejected non-product official page: ${invalid}`);
   const jan=cleanJan(parsed.jan_code);
   const officialUrl=canonicalOfficialUrl(url);
   const quotedUrl='"'+officialUrl.replace(/\\/g,"\\\\").replace(/"/g,'\\"')+'"';
-  const identityFilter=jan
-    ? "or="+encodeURIComponent(`(jan_code.eq.${jan},official_url.eq.${quotedUrl})`)
-    : "official_url=eq."+encodeURIComponent(officialUrl);
+  const identityClauses=[`official_url.eq.${quotedUrl}`];
+  if(jan)identityClauses.unshift(`jan_code.eq.${jan}`);
+  if(existingId)identityClauses.push(`id.eq.${existingId}`);
+  const identityFilter=identityClauses.length>1
+    ?"or="+encodeURIComponent(`(${identityClauses.join(",")})`)
+    :"official_url=eq."+encodeURIComponent(officialUrl);
   const existing=await sb(env,`/products?select=*&${identityFilter}&limit=2`);
   if(!Array.isArray(existing))throw new Error("Official product identity lookup failed");
   const now=new Date().toISOString();
   if(existing.length>1)throw new Error("Ambiguous official product identity");
   const base=existing[0]||{};
+  if(existingId&&base.id!==existingId)throw new Error("Official backfill identity changed");
   if(base.metadata?.universal_commerce)throw new Error("Official product collides with legacy commerce data");
   if(base.jan_code&&jan&&cleanJan(base.jan_code)!==jan)throw new Error("JAN/name conflict guard");
   const merged={...base,...parsed};
@@ -1503,13 +1507,38 @@ async function saveOfficialProduct(env,connector,url,parsed){
   return {status:"inserted",id:rows[0].id};
 }
 
+async function backfillMegaHousePrice(env,timeMs){
+  const cutoff=new Date(timeMs-86400000).toISOString();
+  const rows=await sb(env,`/products?select=id,official_url&metadata->>official_connector=eq.megahouse&product_type=in.(figure,scale_figure,nendoroid,figma)&msrp_jpy=is.null&or=(source_last_checked_at.is.null,source_last_checked_at.lt.${cutoff})&order=source_last_checked_at.asc.nullsfirst,id.asc&limit=1`);
+  if(!Array.isArray(rows))throw new Error("Invalid MegaHouse backfill candidate response");
+  const row=rows[0];
+  if(!row)return null;
+  const connector=OFFICIAL_CONNECTORS.find(source=>source.slug==="megahouse");
+  const url=URL.canParse(row.official_url)?new URL(row.official_url):null;
+  if(url?.origin!=="https://www.megahobby.jp"||!/^\/products\/item\/\d+\/?$/.test(url.pathname)){
+    return {connector:connector.slug,url:row.official_url,error:"invalid_megahouse_detail_url"};
+  }
+  try{
+    const page=await fetchOfficial(url.toString());
+    const parsed=parseOfficial(connector,page.url,page.html);
+    const saved=await saveOfficialProduct(env,connector,page.url,parsed,row.id);
+    return {connector:connector.slug,url:page.url,...saved,price_confirmed:parsed.msrp_jpy>0};
+  }catch(error){
+    return {connector:connector.slug,url:row.official_url,error:safeError(error)};
+  }
+}
+
 async function refreshOfficialBatch(env,limit=2,options={}){
   const timeMs=options.timeMs??Date.now();
   const slotOffset=options.scheduled?Math.floor(new Date(timeMs).getUTCMinutes()/10):0;
   const connectors=deterministicWindow(OFFICIAL_CONNECTORS,OFFICIAL_CONNECTORS.length,timeMs,3+slotOffset);
   const max=Math.max(1,Math.min(12,Number(limit)||4));
   const report=[];
-  let processed=0;
+  if(options.scheduled&&new Date(timeMs).getUTCMinutes()===20){
+    const backfill=await backfillMegaHousePrice(env,timeMs);
+    if(backfill)report.push(backfill);
+  }
+  let processed=report.length;
   for(const connector of connectors){
     if(processed>=max)break;
     for(const listUrl of connector.listUrls){
