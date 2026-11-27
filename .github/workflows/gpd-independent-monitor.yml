@@ -1,7 +1,8 @@
 name: GPD independent availability monitor
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '17 0-2,4-23 * * *'
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -14,6 +15,8 @@ jobs:
     steps:
       - name: Check independent DNS and GPD HTTP health
         shell: bash
+        env:
+          MONITOR_SCHEDULE: ${{ github.event.schedule }}
         run: |
           set -uo pipefail
           echo "UTC: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -44,7 +47,7 @@ jobs:
           gpd_fail=0
           check gpd_x402_status https://anime-intelligence.goodmy0312.workers.dev/x402/status || gpd_fail=1
           check gpd_worker_health https://anime-intelligence.goodmy0312.workers.dev/health || gpd_fail=1
-          if [[ "$(date -u +%H)" == 03 ]]; then
+          if [[ "$MONITOR_SCHEDULE" == "17 3 * * *" ]]; then
             check gpd_database_health https://anime-intelligence.goodmy0312.workers.dev/health/deep || gpd_fail=1
           fi
           if [ "$gpd_fail" -ne 0 ]; then
