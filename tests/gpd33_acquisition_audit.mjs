@@ -54,6 +54,12 @@ try{
       assert.ok(['initialize','notifications/initialized','tools/list','tools/call'].includes(message.method));
       if(options.rejectNotice&&message.method==='notifications/initialized')return new Response(null,{status:400});
       if(message.method==='tools/call'){
+        if(message.id===4){
+          assert.deepEqual(message.params,{name:'search_anime_product',arguments:{query:options.jan}});
+          return Response.json({jsonrpc:'2.0',id:4,result:{structuredContent:{
+            version:health.version,results:options.emptyCatalogue?[]:[{id:'fixture',jan_code:options.jan}]
+          }}});
+        }
         assert.deepEqual(message.params,{name:'product_resolve',arguments:{gtin:'4901234567894'}});
         if(options.badTrial)return Response.json({jsonrpc:'2.0',id:3,result:{isError:true}});
       }
@@ -79,6 +85,8 @@ try{
   });
   assert.equal((await auditPayment()).unsigned_x402_challenge,'verified');
   assert.equal((await auditPayment({jan:'4901234567894'})).unsigned_product_preview,'verified');
+  assert.equal((await auditPayment({jan:'4901234567894'})).catalogue_free_trial,'verified');
+  await assert.rejects(auditPayment({jan:'4901234567894',emptyCatalogue:true}),/free search did not return/);
   await assert.rejects(auditPayment({jan:'4901234567894',wrongJan:true}),/approved JAN/);
   await assert.rejects(auditPayment({wrongAmount:true}),/approved payment terms/);
   await assert.rejects(auditPayment({offlineChallenge:true}),/challenge unavailable/);

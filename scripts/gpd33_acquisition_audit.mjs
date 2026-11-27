@@ -5,7 +5,7 @@ import {observeMcpRegistryListing} from './gpd33_registry_observe.mjs';
 
 const MCP_PROTOCOL='2025-11-25';
 
-async function verifyMcpConnection(endpoint,version,onboarding,fetchImpl){
+async function verifyMcpConnection(endpoint,version,onboarding,fetchImpl,catalogueJan){
   const rpc=(id,method,params)=>readPublicRegistryMetadata(endpoint,(url,options)=>fetchImpl(url,{
     ...options,method:'POST',headers:{accept:'application/json, text/event-stream','content-type':'application/json',
       'mcp-protocol-version':MCP_PROTOCOL},body:JSON.stringify({jsonrpc:'2.0',id,method,params})
@@ -49,6 +49,14 @@ async function verifyMcpConnection(endpoint,version,onboarding,fetchImpl){
     ||resolved?.ok!==true||resolved.version!==version||resolved.identifiers?.gtin!==barcode
     ||resolved.identity_key!=='gtin:'+barcode.padStart(14,'0')){
     throw new Error('Public MCP free trial did not resolve the test identifier');
+  }
+  if(catalogueJan){
+    const found=await rpc(4,'tools/call',{name:'search_anime_product',arguments:{query:catalogueJan}});
+    const result=found.result?.structuredContent;
+    if(found.jsonrpc!=='2.0'||found.id!==4||found.result?.isError===true||result?.version!==version||
+      !Array.isArray(result.results)||!result.results.some(product=>product?.id&&product.jan_code===catalogueJan)){
+      throw new Error('Public MCP free search did not return the approved catalogue JAN');
+    }
   }
 }
 
@@ -119,13 +127,13 @@ export async function auditGpdMcpAcquisition(baseline,expectedVersion,expectedBu
     ||onboarding.mcp_transport!==draft.remotes[0].type){
     throw new Error('Public onboarding metadata disagrees with the registry draft');
   }
-  await verifyMcpConnection(draft.remotes[0].url,draft.version,onboarding,fetchImpl);
+  await verifyMcpConnection(draft.remotes[0].url,draft.version,onboarding,fetchImpl,expectedPayment?.jan);
   if(expectedPayment)await verifyUnsignedChallenge(surfaces.gpd.purchase_decision_url,expectedPayment,fetchImpl);
   return {schema:'gpd-mcp-acquisition-audit-v1',scope:'public_mcp_listing_and_read_only_connection',
     version:draft.version,build_id:expectedBuild,observed_at:listing.observed_at,registry_status:listing.status,
     mcp_connection:'verified',free_trial:'product_identity_verified',
     ...(expectedPayment?{unsigned_x402_challenge:'verified'}:{}),
-    ...(expectedPayment?.jan?{unsigned_product_preview:'verified'}:{}),channel_ready:listing.status==='listing_verified'};
+    ...(expectedPayment?.jan?{catalogue_free_trial:'verified',unsigned_product_preview:'verified'}:{}),channel_ready:listing.status==='listing_verified'};
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
