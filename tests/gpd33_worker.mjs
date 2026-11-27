@@ -6,7 +6,7 @@ import {testMerchantGtin} from './gpd33_merchant_gtin.mjs';
 
 const source=await readFile(new URL('../releases/GPD33_0_COMPLETE_WORKER.js',import.meta.url),'utf8');
 const api=await import('data:text/javascript;base64,'+Buffer.from(source+
-  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome};').toString('base64'));
+  '\nexport {UNIVERSAL_GENERIC_DOMAINS,gpd33SelectDomain,gpd33UsdaRows,gpd33MarketRows,checkpointedUniversalDemandRefresh,normalizeUniversalIdentifiers,normalizeEbayGeneric,normalizeYahooGeneric,universalCandidateCommerceEvidence,evaluateGenericOffer,genericCommerceSearch,buildUniversalPurchaseDecision,x402Gate,saveOfficialProduct,insertOfficialSeedBatch,loadProductsByJans,loadProductsBySourceKeys,refreshOfficialBatch,parseOfficial,OFFICIAL_CONNECTORS,refreshScheduledAnimeMarket,saveYahooObservations,normalizeRakutenLiveOffer,animeMarketRefreshOutcome,officialCatalogueCounts};').toString('base64'));
 const worker=api.default;
 await testMerchantGtin(worker,api.UNIVERSAL_GENERIC_DOMAINS);
 const origin='https://gpd.example';
@@ -126,6 +126,12 @@ assert.deepEqual(api.animeMarketRefreshOutcome('yahoo',[{matches:0,queries_tried
 assert.equal(api.animeMarketRefreshOutcome('yahoo',[{matches:0,queries_tried:[{returned:0}]}]).ok,true);
 assert.deepEqual(api.animeMarketRefreshOutcome('ebay',{products:[{matches:2,inserted:1}]}),
   {ok:true,configured:true,source:'ebay',selected:1,failed:0,matched:1,observations_written:1});
+assert.deepEqual(api.officialCatalogueCounts('official',{result:[
+  {url:'insert',status:'inserted'},{url:'update',status:'updated'},{url:'same',status:'unchanged'},
+  {url:'failed',error:'timeout'},{list_url:'failed-list',error:'timeout'}
+]}),{checked:4,inserted:1,updated:1,unchanged:1});
+assert.deepEqual(api.officialCatalogueCounts('mass',{result:{selected:2,inserted:1,already_in_database:4}}),
+  {selected:2,inserted:1,already_in_database:4});
 const marketHour=Date.UTC(2026,10,26);
 assert.deepEqual(await api.refreshScheduledAnimeMarket({},marketHour),{ok:true,configured:false,selected:0});
 try {

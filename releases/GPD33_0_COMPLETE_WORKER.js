@@ -13698,6 +13698,21 @@ async function embeddedCollectorFetch(request,env,ctx){
   return EMBEDDED_PARTS_COLLECTOR.fetch(req,env,ctx);
 }
 
+function officialCatalogueCounts(task,result){
+  if(task==="mass"&&result?.result){
+    const {selected,inserted,already_in_database}=result.result;
+    return {selected,inserted,already_in_database};
+  }
+  if(task!=="official"||!Array.isArray(result?.result))return {};
+  const rows=result.result;
+  return {
+    checked:rows.filter(row=>row.url).length,
+    inserted:rows.filter(row=>row.status==="inserted").length,
+    updated:rows.filter(row=>row.status==="updated").length,
+    unchanged:rows.filter(row=>row.status==="unchanged").length
+  };
+}
+
 function animeMarketRefreshOutcome(source,result){
   const report=source==="yahoo"?result:result.products;
   const selected=report.length;
@@ -14085,10 +14100,11 @@ export default{
       }catch(error){
         result={ok:false,error:safeError(error)};
       }
-      // Failures stay in the audit trail. Report successful activity once per hour.
+      const catalogueCounts=officialCatalogueCounts(task,result);
+      // Market checkpoints and failures reuse the operational event stream.
       if(!result.ok||task==="market"){
         await logEvent(env,"scheduled_growth_run",{endpoint:"scheduled",metadata:{
-          task,ok:result.ok,scheduled_time:dt.toISOString(),
+          task,ok:result.ok,scheduled_time:dt.toISOString(),...catalogueCounts,
           ...(task==="market"&&result.configured!==undefined?{
             configured:result.configured,source:result.source||null,selected:result.selected,
             candidate_cursor:result.candidate_cursor??null,
@@ -14098,14 +14114,14 @@ export default{
         }});
       }
       if(dt.getUTCMinutes()===50){
-        await logEvent(env,"gpd_cron_heartbeat",{endpoint:"scheduled",metadata:{task,scheduled_time:dt.toISOString(),build_id:BUILD_ID}});
+        await logEvent(env,"gpd_cron_heartbeat",{endpoint:"scheduled",metadata:{task,scheduled_time:dt.toISOString(),build_id:BUILD_ID,ok:result.ok,...catalogueCounts}});
         try{
           const storage=await sb(env,"/rpc/gpd33_storage_status",{method:"POST",body:"{}"});
           if(storage?.catalog_paused)console.warn("GPD storage pressure",JSON.stringify(storage));
           await sb(env,"/rpc/gpd33_prune_events",{method:"POST",body:"{}"});
         }catch(error){console.warn("GPD event retention",safeError(error));}
       }
-      console.log("Anime catalogue scheduled",JSON.stringify({task,ok:result.ok}));
+      console.log("Anime catalogue scheduled",JSON.stringify({task,ok:result.ok,...catalogueCounts}));
     })());
   }
 };
